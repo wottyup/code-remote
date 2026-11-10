@@ -1047,6 +1047,7 @@ function ComposerMenu({
   onChange,
   footer,
   temporary = false,
+  compact = false,
   mobileSettingsOwner,
   portalTheme,
   portalThemeStyle,
@@ -1061,6 +1062,7 @@ function ComposerMenu({
   onChange: (value: string) => void
   footer?: ReactNode
   temporary?: boolean
+  compact?: boolean
   mobileSettingsOwner?: string
   portalTheme: AppTheme
   portalThemeStyle: CSSProperties
@@ -1117,7 +1119,7 @@ function ComposerMenu({
         <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
           <div
             ref={popover}
-            className="composer-menu__popover composer-menu__popover--floating"
+            className={`composer-menu__popover composer-menu__popover--floating${compact ? ' composer-menu__popover--compact' : ''}`}
             data-mobile-settings-owner={mobileSettingsOwner}
             style={position ?? { visibility: 'hidden' }}
           >
@@ -2571,12 +2573,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   const preferenceMenus = showCodexPreferences ? <>
-    <ComposerMenu label={ui("模型")} value={composerSelectedModel} options={modelOptions} emptyLabel={ui("读取模型…")} disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label={ui("思考")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("模型")} value={composerSelectedModel} options={modelOptions} emptyLabel={ui("读取模型…")} disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
     <ComposerMenu label={approvalPolicyUpdating ? ui('授权更新中') : ui('授权')} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel={ui("请求批准")} disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </> : <>
-    <ComposerMenu label={ui("Claude 模型")} value={composerSelectedModel} options={claudeModelOptions} emptyLabel={ui("本机默认模型")} disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label={ui("思考等级")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("Claude 模型")} value={composerSelectedModel} options={claudeModelOptions} emptyLabel={ui("本机默认模型")} disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考等级")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
     <ComposerMenu label={ui("权限模式")} value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel={ui("本机默认权限")} disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </>
 
