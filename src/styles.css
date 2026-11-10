@@ -4257,6 +4257,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .native-config__group { display: grid; gap: 20px; padding-top: 24px; border-top: 1px solid var(--settings-inner-rule); }
 .native-config__group > h3 { margin: 0; font-size: calc(16px + var(--mobile-font-offset)); font-weight: 650; line-height: 1.4; }
 .native-config__columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.ssh-mcp-profile .native-config__columns { align-items: start; }
 .native-config__columns > :only-child { grid-column: 1 / -1; }
 .native-config__mappings { display: grid; gap: 12px; }
 .native-config__model-header, .native-config__model-row { display: grid; grid-template-columns: 86px minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; align-items: center; }
