@@ -221,7 +221,7 @@
   "仅此工具": "This tool only",
   "仅预览前": "Before preview only",
   "今天": "Today",
-  "代码助手远程工作台": "Coding assistant workspace",
+  "远程开发工作台": "Remote development workspace",
   "代码已复制": "code copied",
   "优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中": "Prioritizes starting a new round based on the model and thinking level saved by this message, and remaining messages remain in the queue.",
   "会把这套配置移到新协议；已保存的密钥无需重新输入。不同接口可能仍需修改模型或地址。": "will move this configuration to the new protocol; saved keys do not need to be re-entered. Different interfaces may still need to modify the model or address.",

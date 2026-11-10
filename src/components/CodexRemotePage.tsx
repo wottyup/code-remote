@@ -6750,7 +6750,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {paneNotice ? <div className="pane-limit-notice" role="status">{uiMessage(paneNotice)}</div> : null}
       <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label={ui("聊天记录")} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
-          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote-mark.png" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>{ui("代码助手远程工作台")}</small></span></div>
+          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote-mark.png" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>{ui("远程开发工作台")}</small></span></div>
           <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
