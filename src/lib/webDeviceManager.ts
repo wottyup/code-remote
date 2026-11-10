@@ -54,6 +54,7 @@ export interface CodeRemoteDesktopBridge {
   renameConnection: (input: { id: string; name: string }) => Promise<DesktopConnectionProfile[]>
   removeConnection: (input: { id: string }) => Promise<DesktopRemoveConnectionResult>
   activateConnection: (profileId: string) => Promise<boolean>
+  showConnectionManager: () => Promise<boolean>
   openConnectionWindow: (profileId: string) => Promise<boolean>
   onConnectionsChanged: (callback: (connections: DesktopConnectionProfile[]) => void) => () => void
 }

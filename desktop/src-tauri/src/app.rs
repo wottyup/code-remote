@@ -37,6 +37,7 @@ const BRIDGE_SCRIPT: &str = r#"(() => {
     renameConnection: (input) => invoke('connection_rename', { input }),
     removeConnection: (input) => invoke('connection_remove', { input }),
     activateConnection: (profileId) => invoke('connection_activate', { profileId }),
+    showConnectionManager: () => invoke('connection_activate', { profileId: null }),
     openConnectionWindow: (profileId) => invoke('connection_open_window', { profileId }),
     setOverlayOpen: async () => true,
     onConnectionsChanged: changed,
@@ -53,9 +54,49 @@ const BRIDGE_SCRIPT: &str = r#"(() => {
     renameConnection: shell.renameConnection,
     removeConnection: shell.removeConnection,
     activateConnection: shell.activateConnection,
+    showConnectionManager: shell.showConnectionManager,
     openConnectionWindow: shell.openConnectionWindow,
     onConnectionsChanged: changed,
   };
+  const installLegacyPairingCompatibility = () => {
+    if (location.protocol === 'tauri:' || location.hostname === 'tauri.localhost') return true;
+    if (document.querySelector('[data-desktop-device-management="integrated"]')) return true;
+    if (document.querySelector('.remote-shell')) return true;
+    const card = document.querySelector('.pair-card');
+    if (!card) return false;
+    if (card.querySelector('[data-code-remote-desktop-manager]')) return true;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.codeRemoteDesktopManager = 'true';
+    button.textContent = document.documentElement.lang.toLowerCase().startsWith('en')
+      ? 'Manage other devices' : '管理其他设备';
+    button.style.cssText = 'width:100%;min-height:36px;margin-top:14px;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;cursor:pointer;font:inherit;opacity:.82';
+    button.addEventListener('click', () => { void shell.showConnectionManager(); });
+    card.append(button);
+    void invoke('remote_get_token').then((token) => {
+      if (typeof token !== 'string' || !token) return;
+      try {
+        const syncKey = 'code-remote.desktop-legacy-token';
+        if (localStorage.getItem('codex-remote-token') === token || sessionStorage.getItem(syncKey) === token) return;
+        localStorage.setItem('codex-remote-token', token);
+        sessionStorage.setItem(syncKey, token);
+        location.reload();
+      } catch (_) {
+        // The manager button remains available when legacy storage is unavailable.
+      }
+    }).catch(() => undefined);
+    return true;
+  };
+  const startLegacyPairingCompatibility = () => {
+    if (installLegacyPairingCompatibility()) return;
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      if (installLegacyPairingCompatibility() || attempts >= 40) window.clearInterval(timer);
+    }, 250);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startLegacyPairingCompatibility, { once: true });
+  else startLegacyPairingCompatibility();
 })();"#;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
