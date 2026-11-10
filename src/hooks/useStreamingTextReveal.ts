@@ -2,8 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { nextStreamingRevealLength, streamingRevealDurationMs, streamingRevealFrameMs, streamingRevealSmallChunkLimit } from '../lib/streamingTextReveal.mjs'
 
 export function useStreamingTextReveal(text: string, streaming: boolean): string {
-  const [visibleText, setVisibleText] = useState('')
-  const visibleTextRef = useRef('')
+  // A cached in-progress reply can mount after the user returns to its thread.
+  // Treat text already present at mount as seen; only animate future deltas.
+  const [visibleText, setVisibleText] = useState(() => streaming ? text : '')
+  const visibleTextRef = useRef(streaming ? text : '')
   const targetTextRef = useRef('')
   const streamingRef = useRef(false)
   const deadlineRef = useRef(0)
@@ -46,9 +48,9 @@ export function useStreamingTextReveal(text: string, streaming: boolean): string
     streamingRef.current = streaming
     if (!streaming) {
       cancelFrame()
-      targetTextRef.current = ''
+      targetTextRef.current = text
       lastRevealAtRef.current = 0
-      show('')
+      show(text)
       return
     }
     targetTextRef.current = text
