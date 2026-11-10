@@ -4456,10 +4456,6 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-control-ink: #414b5b;
   border-top-color: var(--composer-glass-edge);
 }
-.remote-shell.remote-shell--theme-light .message-composer textarea {
-  background: rgba(78, 98, 145, .09);
-  border-radius: 13px;
-}
 .remote-shell.remote-shell--theme-warm .message-composer {
   --composer-glass-surface: linear-gradient(155deg, rgba(255, 251, 244, .94), rgba(247, 237, 224, .88));
   --composer-glass-edge: rgba(153, 119, 81, .27);
