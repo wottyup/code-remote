@@ -4469,16 +4469,6 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer::before {
   background: radial-gradient(ellipse 76% 65% at 46% -8%, var(--composer-glass-sheen), transparent 90%);
 }
-.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer::after {
-  position: absolute;
-  z-index: 0;
-  inset: 1px;
-  border: 1px solid transparent;
-  border-top-color: var(--composer-glass-glint);
-  border-radius: inherit;
-  content: '';
-  pointer-events: none;
-}
 .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer:focus-within {
   border-color: var(--composer-glass-focus);
   box-shadow: var(--composer-glass-shadow);
