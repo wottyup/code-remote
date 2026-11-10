@@ -1,23 +1,20 @@
 import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowRight, KeyRound, LoaderCircle, Settings2, ShieldCheck } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { codexRemoteClient, RemoteApiError } from '../lib/codexRemoteClient'
-import { normalizePairingCode, webDevicePairingLabel, type WebDeviceManagerState } from '../lib/webDeviceManager'
-import { WebDeviceSettingsCard } from './WebDeviceSettingsCard'
 
-export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: string) => void; deviceManager: WebDeviceManagerState }) {
+function normalizePairingCode(value: string): string {
+  return value.normalize('NFKC').toUpperCase().replace(/[\s_\-\u200b\ufeff]+/g, '').slice(0, 8)
+}
+
+export function PairingPage({ onPaired }: { onPaired: (token: string) => void }) {
   useUiLanguage()
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [blockedUntil, setBlockedUntil] = useState<number | null>(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
-  const [managingDevices, setManagingDevices] = useState(false)
-  const attemptedPairingCode = useRef<string | null>(null)
   const cooldownRemaining = blockedUntil === null ? 0 : Math.max(0, Math.ceil((blockedUntil - clockNow) / 1000))
-  const activeProfile = deviceManager.profiles.find((profile) => profile.id === deviceManager.activeProfileId)
-  const desktopMode = deviceManager.mode === 'desktop'
-  const activeDeviceName = activeProfile?.name ?? ui('设备')
 
   useEffect(() => {
     if (blockedUntil === null) return
@@ -35,70 +32,44 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
     setBlockedUntil(now + seconds * 1000)
   }
 
-  async function connectWithCode(value: string, completePendingPairing: boolean) {
+  async function connectWithCode(value: string) {
     if (busy || cooldownRemaining > 0) return
     const normalizedCode = normalizePairingCode(value)
     if (normalizedCode.length !== 8) {
       setError('请输入有效的 8 位匹配码。')
-      if (completePendingPairing) deviceManager.completePendingPairing(false, '请输入有效的 8 位匹配码。')
       return
     }
     setCode(normalizedCode)
     setBusy(true)
     setError(null)
-    let paired = false
-    let pairingError: string | undefined
     try {
       const result = await codexRemoteClient.pair(normalizedCode)
       onPaired(result.token)
-      paired = true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 429) {
         startCooldown(Math.max(1, reason.retryAfterSeconds ?? 60))
         setError(null)
-        pairingError = '配对尝试次数已达上限，配对已暂停'
       } else {
-        pairingError = reason instanceof Error ? reason.message : '配对失败，请确认配对码。'
-        setError(pairingError)
+        setError(reason instanceof Error ? reason.message : '配对失败，请确认配对码。')
       }
     } finally {
       setBusy(false)
-      if (completePendingPairing) deviceManager.completePendingPairing(paired, pairingError)
     }
   }
-
-  useEffect(() => {
-    const pairingCode = deviceManager.pendingPairingCode
-    if (!pairingCode) {
-      attemptedPairingCode.current = null
-      return
-    }
-    setCode(pairingCode)
-    if (attemptedPairingCode.current === pairingCode) return
-    attemptedPairingCode.current = pairingCode
-    void connectWithCode(pairingCode, true)
-  }, [deviceManager.pendingPairingCode])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy || cooldownRemaining > 0 || code.trim().length !== 8) return
-    void connectWithCode(code, false)
+    void connectWithCode(code)
   }
 
   return (
-    <main className="pair-page" data-desktop-device-management={desktopMode ? 'integrated' : undefined}>
-      <div className={`pair-page__layout${managingDevices ? ' pair-page__layout--managing' : ''}`}>
+    <main className="pair-page">
       <section className="pair-card">
-        {deviceManager.available && deviceManager.profiles.length > 0 ? <div className="pair-device-switcher">
-          <span className="pair-device-switcher__current"><small>{ui('当前设备')}</small><strong>{activeDeviceName}</strong>{activeProfile?.url ? <em title={activeProfile.url}>{activeProfile.url}</em> : null}</span>
-          {deviceManager.profiles.length > 1 ? <select aria-label={ui('切换设备')} value={deviceManager.activeProfileId} onChange={(event) => deviceManager.selectProfile(event.currentTarget.value)}>
-            {deviceManager.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {ui(webDevicePairingLabel(profile))}</option>)}
-          </select> : activeProfile ? <span className="pair-device-switcher__status">{ui(webDevicePairingLabel(activeProfile))}</span> : null}
-        </div> : null}
         <img className="pair-card__logo" src="/code-remote-mark.png" alt="Code Remote" />
         <p className="pair-eyebrow">CODE REMOTE</p>
-        <h1>{desktopMode ? uiFormat('连接“{0}”', activeDeviceName) : ui("连接你的 Code Remote")}</h1>
-        <p className="pair-description">{desktopMode ? uiFormat('输入“{0}”设备终端显示的 8 位匹配码。', activeDeviceName) : ui("在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。")}</p>
+        <h1>{ui("连接你的 Code Remote")}</h1>
+        <p className="pair-description">{ui("在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。")}</p>
         <form onSubmit={(event) => void submit(event)}>
           <label htmlFor="pair-code">{ui("8 位配对码")}</label>
           <div className="pair-input-wrap"><KeyRound size={17} /><input
@@ -129,14 +100,11 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
           <button className="pair-submit" type="submit" disabled={busy || cooldownRemaining > 0 || code.trim().length !== 8}>
             {busy
               ? <LoaderCircle className="spin" size={17} />
-              : cooldownRemaining > 0 ? uiFormat("请等待 {0} 秒", cooldownRemaining) : <>{ui(desktopMode ? "连接此设备" : "连接本机")} <ArrowRight size={16} /></>}
+              : cooldownRemaining > 0 ? uiFormat("请等待 {0} 秒", cooldownRemaining) : <>{ui("连接本机")} <ArrowRight size={16} /></>}
           </button>
         </form>
-        <div className="pair-security"><ShieldCheck size={15} /><span>{ui(desktopMode ? "配对后，即可在此应用中访问这台设备的聊天会话。" : "配对后，此浏览器即可访问电脑上的聊天会话。")}</span></div>
-        {deviceManager.available ? <button className="pair-device-management-toggle" type="button" aria-expanded={managingDevices} onClick={() => setManagingDevices((current) => !current)}><Settings2 size={15} />{ui(managingDevices ? '收起设备管理' : '添加或管理设备')}</button> : null}
+        <div className="pair-security"><ShieldCheck size={15} /><span>{ui("配对后，此浏览器即可访问电脑上的聊天会话。")}</span></div>
       </section>
-      {managingDevices ? <aside className="pair-device-settings" aria-label={ui('设备连接设置')}><WebDeviceSettingsCard manager={deviceManager} /></aside> : null}
-      </div>
     </main>
   )
 }

@@ -21,7 +21,6 @@ import {
   ClipboardPaste,
   Copy,
   Download,
-  ExternalLink,
   Eye,
   FilePlus2,
   FileText,
@@ -36,7 +35,6 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
-  MoreHorizontal,
   Monitor,
   MessageSquarePlus,
   MessagesSquare,
@@ -91,7 +89,6 @@ import { workspaceFileType } from '../lib/workspaceFileTypes'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
-import { DesktopUpdateCard } from './DesktopUpdateCard'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { PastedTablePreview } from './PastedTablePreview'
@@ -102,8 +99,6 @@ import { containsChinese, containsEnglish, readTranslationPreferences, readTrans
 import { TranslationSettingsCard } from './TranslationSettingsCard'
 import { TranslationSelect } from './TranslationSelect'
 import { NativeEngineConfigCard } from './NativeEngineConfigCard'
-import { WebDeviceSettingsCard } from './WebDeviceSettingsCard'
-import { webDevicePairingLabel, type WebDeviceManagerState } from '../lib/webDeviceManager'
 
 interface Props {
   token: string
@@ -111,7 +106,6 @@ interface Props {
   onUnpair: () => void | Promise<void>
   themePreferences: ThemePreferences
   onThemePreferencesChange: (next: ThemePreferences) => void
-  deviceManager: WebDeviceManagerState
 }
 
 declare global {
@@ -4998,7 +4992,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   )
 })
 
-export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences, deviceManager }: Props) {
+export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   useUiLanguage()
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout?.openPaneIndexes ?? [0])
@@ -5084,9 +5078,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [devicePickerOpen, setDevicePickerOpen] = useState(false)
-  const [deviceContextMenu, setDeviceContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
-  const devicePickerRef = useRef<HTMLDivElement>(null)
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [claudeModelOptions, setClaudeModelOptions] = useState<ComposerMenuOption[]>(defaultClaudeModelOptions)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -5122,34 +5113,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     saveTranslationPreferences(next)
     setTranslationPreferences(next)
   }, [])
-  useEffect(() => {
-    if (!deviceContextMenu) return
-    const closeMenu = () => setDeviceContextMenu(null)
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') closeMenu()
-    }
-    document.addEventListener('pointerdown', closeMenu)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', closeMenu)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [deviceContextMenu])
-  useEffect(() => {
-    if (!devicePickerOpen) return
-    const closeOutsidePicker = (event: PointerEvent) => {
-      if (event.target instanceof Node && !devicePickerRef.current?.contains(event.target)) setDevicePickerOpen(false)
-    }
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setDevicePickerOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOutsidePicker)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOutsidePicker)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [devicePickerOpen])
   useEffect(() => {
     const syncTranslationPreferences = () => {
       const stored = readTranslationPreferencesIfAvailable()
@@ -6750,9 +6713,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadDeleteProgress(0)
   }
 
-  const contextDevice = deviceContextMenu ? deviceManager.profiles.find((profile) => profile.id === deviceContextMenu.id) : null
-  const contextDeviceWindowHref = contextDevice ? deviceManager.windowHref(contextDevice.id) : null
-  const activeDeviceProfile = deviceManager.profiles.find((profile) => profile.id === deviceManager.activeProfileId) ?? deviceManager.profiles[0] ?? null
   const sidebarBackdropVisible = sidebarOpen || sidebarDragging
 
   return (
@@ -6877,65 +6837,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               </span>
             ))}
           </div>
-          {deviceManager.available && activeDeviceProfile ? <div className="sidebar-device-picker" ref={devicePickerRef}>
-            {devicePickerOpen ? <section className="sidebar-device-switcher sidebar-device-switcher--bottom" aria-label={ui('设备')}>
-              <div className="sidebar-device-switcher__heading">
-                <span>{ui('设备')}</span>
-                <button type="button" title={ui('设备连接设置')} aria-label={ui('设备连接设置')} onClick={() => { setDevicePickerOpen(false); openSettingsPanel('devices') }}><Plus size={15} /></button>
-              </div>
-              <div className="sidebar-device-switcher__list">
-                {deviceManager.profiles.map((profile) => <div className="sidebar-device-switcher__row" key={profile.id}>
-                  <button
-                    className={'sidebar-device-switcher__device' + (deviceManager.activeProfileId === profile.id ? ' sidebar-device-switcher__device--active' : '')}
-                    type="button"
-                    aria-current={deviceManager.activeProfileId === profile.id ? 'page' : undefined}
-                    title={`${profile.name} · ${profile.url}`}
-                    onClick={() => { deviceManager.selectProfile(profile.id); setDevicePickerOpen(false); setSidebarOpen(false) }}
-                    onContextMenu={(event) => {
-                      event.preventDefault()
-                      setDevicePickerOpen(false)
-                      setDeviceContextMenu({ id: profile.id, x: event.clientX, y: event.clientY })
-                    }}
-                  >
-                    <i className={'sidebar-device-switcher__dot' + (profile.verified === false ? ' sidebar-device-switcher__dot--unknown' : profile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
-                    <span className="sidebar-device-switcher__copy"><strong>{profile.name}</strong><small>{ui(webDevicePairingLabel(profile))}</small></span>
-                    {deviceManager.activeProfileId === profile.id ? <Check size={14} aria-hidden="true" /> : null}
-                  </button>
-                  <button className="sidebar-device-switcher__more" type="button" title={ui('更多设备操作')} aria-label={uiMessage(`更多设备操作：${profile.name}`)} onClick={(event) => {
-                    const bounds = event.currentTarget.getBoundingClientRect()
-                    setDevicePickerOpen(false)
-                    setDeviceContextMenu({ id: profile.id, x: Math.max(8, Math.min(bounds.right - 174, window.innerWidth - 190)), y: Math.min(bounds.bottom, window.innerHeight - 52) })
-                  }}><MoreHorizontal size={16} /></button>
-                </div>)}
-              </div>
-            </section> : null}
-            <button
-              className="sidebar-device-selector__button"
-              type="button"
-              aria-label={ui('切换设备')}
-              aria-haspopup="true"
-              aria-expanded={devicePickerOpen}
-              title={`${activeDeviceProfile.name} · ${ui(webDevicePairingLabel(activeDeviceProfile))}`}
-              onClick={() => setDevicePickerOpen((open) => !open)}
-            >
-              <i className={'sidebar-device-switcher__dot' + (activeDeviceProfile.verified === false ? ' sidebar-device-switcher__dot--unknown' : activeDeviceProfile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
-              <span className="sidebar-device-selector__copy"><strong>{activeDeviceProfile.name}</strong><small>{ui(webDevicePairingLabel(activeDeviceProfile))}</small></span>
-              <ChevronDown size={15} aria-hidden="true" />
-            </button>
-          </div> : null}
         </footer>
       </aside>
 
       <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label={ui("关闭侧栏")} aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
       {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label={ui("关闭文件树")} onClick={() => setWorkspaceOpen(false)} /> : null}
-      {deviceContextMenu && contextDevice && (contextDeviceWindowHref || deviceManager.openWindow) ? createPortal(
-        <div className={`thread-context-menu device-context-menu remote-shell--theme-${themePreferences.theme}`} style={{ ...themeStyle, left: deviceContextMenu.x, top: deviceContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
-          {deviceManager.openWindow ? <button type="button" role="menuitem" onClick={() => {
-            setDeviceContextMenu(null)
-            void Promise.resolve(deviceManager.openWindow?.(contextDevice.id)).catch(() => showPaneNotice('无法打开新窗口。'))
-          }}><ExternalLink size={14} />{ui('在新窗口打开')}</button> : <a href={contextDeviceWindowHref ?? undefined} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setDeviceContextMenu(null)}><ExternalLink size={14} />{ui('在新窗口打开')}</a>}
-        </div>, document.body,
-      ) : null}
       {threadContextMenu ? (
         <div ref={threadContextMenuElement} className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
           <ShortcutContextMenuButton shortcut={1} onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />{ui("并发打开")}</ShortcutContextMenuButton>
@@ -6983,7 +6889,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={updateTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} deviceManager={deviceManager} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={updateTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
       ) : usageStatsOpen ? (
         <CPAUsageStatsPanel settings={cpaUsageSettings} token={token} onSourceChange={(source) => updateCPAUsageSettings({ ...cpaUsageSettings, source })} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
@@ -7215,7 +7121,7 @@ function MCPApprovalsCard({ token }: { token: string }) {
   </section>
 }
 
-function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved, deviceManager }: {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved }: {
   token: string
   preferences: ThemePreferences
   onChange: (next: ThemePreferences) => void
@@ -7228,7 +7134,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
   translation: TranslationPreferences
   onTranslationChange: (next: TranslationPreferences) => void
   onTranslationConfigSaved: () => void
-  deviceManager: WebDeviceManagerState
 }) {
   const uiLanguage = useUiLanguage()
   const [imageError, setImageError] = useState<string | null>(null)
@@ -7271,7 +7176,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
       { id: 'chat-shortcuts', label: ui('切换快捷键'), icon: <Keyboard size={17} /> },
     ] },
     { label: ui('连接'), items: [
-      ...(deviceManager.available ? [{ id: 'devices' as const, label: ui('设备连接'), icon: <Monitor size={17} /> }] : []),
       { id: 'codex-config', label: 'Codex API', icon: <EngineBrandIcon engine="codex" size={17} /> },
       { id: 'claude-config', label: 'Claude Code API', icon: <EngineBrandIcon engine="claude-code" size={17} /> },
       { id: 'cpa-manager', label: ui('token使用量查询'), icon: <Link2 size={17} /> },
@@ -7295,12 +7199,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
     if (selectedBounds.top < navBounds.top) nav.scrollTop -= navBounds.top - selectedBounds.top + 12
     if (selectedBounds.bottom > navBounds.bottom) nav.scrollTop += selectedBounds.bottom - navBounds.bottom + 12
   }, [activeSection])
-
-  useEffect(() => {
-    if (deviceManager.available || activeSection !== 'devices') return
-    setActiveSection('theme')
-    saveActiveSettingsSection('theme')
-  }, [activeSection, deviceManager.available])
 
   function selectSection(sectionId: SettingsSectionId) {
     if (sectionId === activeSection) return
@@ -7499,9 +7397,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
           </div>
         </nav>
         <div className="theme-settings-panel__content" ref={settingsContentRef}>
-        <div id="settings-section-devices" className="theme-settings-panel__section" hidden={activeSection !== 'devices'}>
-          {activeSection === 'devices' && deviceManager.available ? <WebDeviceSettingsCard manager={deviceManager} /> : null}
-        </div>
         <div id="settings-section-codex-config" className="theme-settings-panel__section" hidden={activeSection !== 'codex-config'}>
           {activeSection === 'codex-config' ? <NativeEngineConfigCard token={token} engine="codex" onDirtyChange={setNativeConfigDirty} /> : null}
         </div>
@@ -7768,7 +7663,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
               <strong>{ui("GitHub 项目地址")}</strong>
               <span>https://github.com/wottyup/code-remote</span>
             </a>
-            <DesktopUpdateCard manager={deviceManager} />
           </div>
         </section>
         </div>

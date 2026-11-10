@@ -35,6 +35,8 @@ pnpm --filter code-remote start
 
 启动完成后，终端会显示首次授权新浏览器所需的配对码。手机浏览器打开 `http://电脑的局域网 IP:4173`。配对成功后，该浏览器会被记为受信任设备：即使本机服务重启也不用再次输入；新浏览器、无痕窗口或清除站点数据后才需要重新配对。电脑端本机也可以访问 `http://127.0.0.1:4173`。
 
+网页版只连接当前打开的网址对应的 Code Remote 服务。访问另一台电脑时，直接打开那台电脑的网页地址并单独配对。
+
 需要后台常驻时，可安装仓库中的 systemd unit：
 
 ```bash
@@ -61,22 +63,6 @@ $env:CODE_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.c
 $env:CODE_REMOTE_WORKSPACE = "C:\path\to\your\project"
 pnpm --filter code-remote start
 ```
-
-## Windows 桌面客户端
-
-桌面客户端用于连接多台已经运行 Code Remote 的电脑，不会在这台 Windows 电脑上启动 Code Remote 服务或 Codex。每台远端电脑需要运行可从当前网络访问的 Code Remote，并显示配对码供首次连接使用。
-
-网页版现在直接在原有设置和聊天侧栏管理多台设备：在“设置 → 设备连接”添加 Code Remote 地址，在侧栏切换；右键设备可在新窗口并行打开。每台设备首次连接时，会在它自己的配对页面输入匹配码，令牌仍由该设备的网页保存。
-
-从 workspace 根目录构建 Windows x64 安装程序：
-
-```bash
-pnpm --filter code-remote desktop:package:win
-```
-
-安装包会生成在 `code-remote/artifacts/desktop`，文件名带版本号。首次使用时选择“添加设备”，填写远端 Code Remote 网页地址和该电脑终端显示的 8 位匹配码。设备凭据使用 Windows 系统加密保存在本机。点击侧栏设备可切换连接；右键设备可重命名、移除或在新窗口打开。
-
-桌面开发模式可使用 `pnpm --filter code-remote desktop:dev`。
 
 Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `code-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
 

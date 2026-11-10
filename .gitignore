@@ -12,7 +12,5 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
-/desktop/src-tauri/target/
-/desktop/src-tauri/gen/
 /tests/
 /终端运行测试/

@@ -1,5 +1,4 @@
 export type SettingsSectionId =
-  | 'devices'
   | 'theme'
   | 'display'
   | 'translation'
@@ -13,7 +12,7 @@ export type SettingsSectionId =
 
 const storageKey = 'code-remote.settings-active-section.v1'
 const sections: readonly SettingsSectionId[] = [
-  'devices', 'theme', 'display', 'translation', 'codex-config', 'claude-config', 'chat-shortcuts',
+  'theme', 'display', 'translation', 'codex-config', 'claude-config', 'chat-shortcuts',
   'cpa-manager', 'mcp-approvals', 'system-notifications', 'about',
 ]
 
