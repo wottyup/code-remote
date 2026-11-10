@@ -11,6 +11,7 @@ const submitButton = document.getElementById('pair-device')
 const menu = document.getElementById('device-menu')
 const toast = document.getElementById('toast')
 const isBrowserMode = bridge?.mode === 'browser'
+const stayOnManager = new URLSearchParams(window.location.search).get('view') === 'devices'
 const languageStorageKey = 'code-remote.desktop-language'
 const translations = {
   'zh-CN': {
@@ -264,9 +265,9 @@ function updateDevices(nextDevices) {
   if (activeDeviceId && !devices.some((device) => device.id === activeDeviceId)) {
     activeDeviceId = null
   }
-  if (!activeDeviceId && devices.length > 0 && !isPairing) {
+  if (!stayOnManager && !activeDeviceId && devices.length > 0 && !isPairing) {
     void selectDevice(devices[0].id)
-  } else if (devices.length === 0) {
+  } else if (!stayOnManager && devices.length === 0) {
     void bridge.activateConnection(null)
   }
 }
@@ -382,7 +383,7 @@ async function initialize() {
     || bridge.initialProfileId
     || sessionStorage.getItem('code-remote.active-desktop-device')
   const selected = devices.find((device) => device.id === initialProfileId) ?? devices[0]
-  if (selected) await selectDevice(selected.id)
+  if (selected && !stayOnManager) await selectDevice(selected.id)
 }
 
 void initialize().catch((error) => {

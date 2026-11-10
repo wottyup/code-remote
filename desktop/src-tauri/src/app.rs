@@ -407,7 +407,9 @@ fn app_home_url() -> Result<Url, String> {
     let address = "http://tauri.localhost";
     #[cfg(not(windows))]
     let address = "tauri://localhost";
-    Url::parse(address).map_err(|_| "无法打开 Code Remote。".to_string())
+    let mut url = Url::parse(address).map_err(|_| "无法打开 Code Remote。".to_string())?;
+    url.query_pairs_mut().append_pair("view", "devices");
+    Ok(url)
 }
 
 fn open_external<R: Runtime>(app: &AppHandle<R>, url: &Url) {
