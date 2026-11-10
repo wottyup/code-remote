@@ -7658,7 +7658,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
           <div className="theme-about-card__body">
             <img className="theme-about-card__logo" src="/code-remote-mark.png" alt="Code Remote Logo" />
             <strong className="theme-about-card__name">Code Remote</strong>
-            <p className="theme-about-card__description">{ui("在浏览器中连接本机的代码助手，查看对话、文件和终端。")}</p>
+            <p className="theme-about-card__description">{ui("在浏览器里完成构建、部署你的伟大项目。")}</p>
             <a className="theme-about-card__link" href="https://github.com/wottyup/code-remote" target="_blank" rel="noopener noreferrer">
               <strong>{ui("GitHub 项目地址")}</strong>
               <span>https://github.com/wottyup/code-remote</span>
