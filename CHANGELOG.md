@@ -1,5 +1,13 @@
 # Changelog
 
+## Desktop [0.114.0-dev.2] - 完成 Windows 桌面客户端 Tauri 迁移
+
+## [0.115.0-dev.2] - 支持 Tauri 桌面连接桥接与设备管理
+
+## Desktop [0.114.0-dev.1] - 开始迁移 Windows 桌面客户端到 Tauri
+
+## [0.115.0-dev.1] - 新增 Tauri 桌面端设备连接桥接
+
 ## Desktop [0.113.0-dev.4] - 保持桌面配对接口兼容并完善设备侧栏
 
 ## Desktop [0.113.0-dev.3] - 整合设备切换侧栏并修复首连进入聊天流程

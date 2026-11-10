@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-src http: https:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>Code Remote</title>
     <link rel="stylesheet" href="./shell.css" />
     <script src="./shell.js" defer></script>
@@ -31,7 +31,6 @@
       </aside>
 
       <main class="empty-stage">
-        <iframe id="remote-frame" class="remote-frame" title="远端 Code Remote 页面" allow="clipboard-read; clipboard-write; microphone; camera" referrerpolicy="strict-origin" hidden></iframe>
         <div id="empty-state" class="empty-state">
           <div class="empty-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32"><rect x="4" y="5" width="24" height="22" rx="5" /><path d="M10 13h12M10 19h7" /></svg>

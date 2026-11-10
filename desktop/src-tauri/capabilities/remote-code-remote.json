@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-code-remote",
+  "description": "Allows the paired Code Remote page to call the desktop bridge.",
+  "windows": ["main", "remote-*"],
+  "remote": {
+    "urls": ["http://*", "https://*"]
+  },
+  "permissions": ["core:default", "core:event:allow-listen", "core:event:allow-unlisten"]
+}

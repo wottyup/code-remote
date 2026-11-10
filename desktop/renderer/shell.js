@@ -94,6 +94,11 @@ function localizeError(message) {
   return errors[message] ?? message
 }
 
+function errorText(error, fallback) {
+  const message = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
+  return message ? localizeError(message) : t(fallback)
+}
+
 function applyLanguage() {
   document.documentElement.lang = language
   document.querySelectorAll('[data-l10n]').forEach((element) => {
@@ -202,7 +207,7 @@ async function selectDevice(deviceId) {
   try {
     await bridge.activateConnection(deviceId)
   } catch (error) {
-    showToast(error instanceof Error ? localizeError(error.message) : t('activateError'))
+    showToast(errorText(error, 'activateError'))
   }
 }
 
@@ -259,7 +264,7 @@ function updateDevices(nextDevices) {
   if (activeDeviceId && !devices.some((device) => device.id === activeDeviceId)) {
     activeDeviceId = null
   }
-  if (!activeDeviceId && devices.length > 0) {
+  if (!activeDeviceId && devices.length > 0 && !isPairing) {
     void selectDevice(devices[0].id)
   } else if (devices.length === 0) {
     void bridge.activateConnection(null)
@@ -305,7 +310,7 @@ form.addEventListener('submit', async (event) => {
     await bridge.activateConnection(activeDeviceId)
     form.reset()
   } catch (error) {
-    showFormError(error instanceof Error ? localizeError(error.message) : t('pairError'))
+    showFormError(errorText(error, 'pairError'))
   } finally {
     setPairingState(false)
   }
@@ -328,7 +333,7 @@ menu.addEventListener('click', async (event) => {
     try {
       await bridge.openConnectionWindow(device.id)
     } catch (error) {
-      showToast(error instanceof Error ? localizeError(error.message) : t('openWindowError'))
+      showToast(errorText(error, 'openWindowError'))
     }
     return
   }
@@ -339,7 +344,7 @@ menu.addEventListener('click', async (event) => {
     try {
       updateDevices(await bridge.renameConnection({ id: device.id, name: nextName }))
     } catch (error) {
-      showToast(error instanceof Error ? localizeError(error.message) : t('renameError'))
+      showToast(errorText(error, 'renameError'))
     }
     return
   }
@@ -352,7 +357,7 @@ menu.addEventListener('click', async (event) => {
       updateDevices(result.profiles)
       if (!result.remoteRevoked) showToast(t('remoteRevokedWarning'))
     } catch (error) {
-      showToast(error instanceof Error ? localizeError(error.message) : t('removeError'))
+      showToast(errorText(error, 'removeError'))
     }
   }
 })
@@ -381,7 +386,7 @@ async function initialize() {
 }
 
 void initialize().catch((error) => {
-  showToast(error instanceof Error ? localizeError(error.message) : t('readListError'))
+  showToast(errorText(error, 'readListError'))
 })
 
 applyLanguage()
