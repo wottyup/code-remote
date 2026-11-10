@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { LoaderCircle, Plus, Save, Trash2 } from 'lucide-react'
+import { ChevronDown, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react'
 import { ui, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import {
   codexRemoteClient,
@@ -14,6 +14,8 @@ import { TranslationSelect } from './TranslationSelect'
 interface ProfileDraft {
   id: number
   value: SshMcpProfile
+  persisted: boolean
+  collapsed: boolean
 }
 
 let nextDraftId = 1
@@ -26,7 +28,7 @@ function newProfile(): SshMcpProfile {
 }
 
 function draftsFor(profiles: SshMcpProfile[]): ProfileDraft[] {
-  return profiles.map((value) => ({ id: nextDraftId++, value: { ...value } }))
+  return profiles.map((value) => ({ id: nextDraftId++, value: { ...value }, persisted: true, collapsed: true }))
 }
 
 function errorMessage(reason: unknown): string {
@@ -65,8 +67,14 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
   }
 
   function addProfile() {
-    setProfiles((current) => [...current, { id: nextDraftId++, value: newProfile() }])
+    setProfiles((current) => [...current, { id: nextDraftId++, value: newProfile(), persisted: false, collapsed: false }])
     setMessage(null)
+  }
+
+  function toggleProfile(id: number) {
+    setProfiles((current) => current.map((draft) => draft.id === id && draft.persisted
+      ? { ...draft, collapsed: !draft.collapsed }
+      : draft))
   }
 
   function removeProfile(id: number) {
@@ -112,13 +120,30 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
       <p className="native-config__hint">{ui('默认使用最严格设置：生产分组、viewer 角色、只读，并逐次询问每条命令。请只连接可信服务器。')}</p>
       {profiles.length === 0 && !loading ? <p className="native-config__message">{ui('尚未配置 SSH 服务器。')}</p> : null}
       <form className="native-config__form" onSubmit={(event) => { void save(event) }}>
-        {profiles.map(({ id, value }, index) => <section className="native-config__group ssh-mcp-profile" key={id} aria-label={ui('SSH MCP 服务器配置')}>
+        {profiles.map(({ id, value, persisted, collapsed }, index) => {
+          const fieldsId = `ssh-mcp-profile-fields-${id}`
+          const title = `${ui('服务器')} ${index + 1}${value.name ? ' · ' + value.name : ''}`
+          const summary = [value.host ? `${value.host}:${value.port}` : '', value.user].filter(Boolean).join(' · ')
+          return <section className="native-config__group ssh-mcp-profile" key={id} aria-label={ui('SSH MCP 服务器配置')}>
           <div className="ssh-mcp-profile__heading">
-            <h3>{ui('服务器')} {index + 1}{value.name ? ' · ' + value.name : ''}</h3>
+            <div className="ssh-mcp-profile__heading-info">
+              <h3>{persisted ? <button className="ssh-mcp-profile__toggle" type="button" aria-expanded={!collapsed} aria-controls={fieldsId} aria-label={collapsed ? ui('展开服务器配置') : ui('折叠服务器配置')} disabled={disabled} onClick={(event) => {
+                if (!collapsed) {
+                  const invalidField = event.currentTarget.closest('.ssh-mcp-profile')?.querySelector<HTMLInputElement>('input:invalid')
+                  if (invalidField) {
+                    invalidField.reportValidity()
+                    return
+                  }
+                }
+                toggleProfile(id)
+              }}><ChevronDown size={16} aria-hidden="true" />{title}</button> : title}</h3>
+              {collapsed && summary ? <small className="ssh-mcp-profile__summary">{summary}</small> : null}
+            </div>
             <button className="theme-notification-toggle ssh-mcp-profile__remove" type="button" disabled={disabled} onClick={() => removeProfile(id)}>
               <Trash2 size={15} />{ui('移除')}
             </button>
           </div>
+          <fieldset id={fieldsId} className="ssh-mcp-profile__fields" disabled={disabled || collapsed} hidden={collapsed}>
           <div className="native-config__columns">
             <label className="native-config__field"><span>{ui('服务器名称')}</span><input value={value.name} onChange={(event) => update(id, { name: event.target.value })} placeholder="prod-web" maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" required disabled={disabled} /></label>
             <label className="native-config__field"><span>{ui('主机地址')}</span><input value={value.host} onChange={(event) => update(id, { host: event.target.value })} placeholder="server.example.com" maxLength={255} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /></label>
@@ -148,7 +173,9 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
             <label className="native-config__field"><span>{ui('远程起始目录')} <em>{ui('可选')}</em></span><input value={value.workdir ?? ''} onChange={(event) => update(id, { workdir: event.target.value })} placeholder="/var/www/app" maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /></label>
           </div>
           <label className="ssh-mcp-readonly"><input type="checkbox" checked={value.readOnly} disabled={disabled} onChange={(event) => update(id, { readOnly: event.target.checked })} /><span><strong>{ui('只读限制')}</strong><small>{ui('开启后，即使角色允许写入，也不能执行修改类命令。')}</small></span></label>
-        </section>)}
+          </fieldset>
+        </section>
+        })}
         <div className="native-config__actions ssh-mcp-actions">
           <button className="theme-notification-toggle" type="button" disabled={disabled} onClick={addProfile}><Plus size={16} />{ui('添加服务器')}</button>
           <button className={`theme-notification-toggle${saveDisabled ? '' : ' theme-notification-toggle--enabled'}`} type="submit" disabled={saveDisabled}>

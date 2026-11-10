@@ -1301,6 +1301,8 @@
   "SSH MCP 配置已移除。": "SSH MCP settings removed.",
   "读取 SSH MCP 配置失败。": "Failed to load SSH MCP settings.",
   "SSH MCP 服务器配置": "SSH MCP server configuration",
+  "展开服务器配置": "Expand server configuration",
+  "折叠服务器配置": "Collapse server configuration",
   "服务器": "Server",
   "移除": "Remove",
   "服务器名称": "Server name",

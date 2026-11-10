@@ -4398,7 +4398,15 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .ssh-mcp-shield { display: inline-grid; width: 27px; height: 22px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--settings-nav-accent) 50%, transparent); border-radius: 6px; color: var(--settings-nav-accent); font-size: 9px; font-weight: 750; letter-spacing: .04em; }
 .ssh-mcp-profile { padding-top: 20px; }
 .ssh-mcp-profile__heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
+.ssh-mcp-profile__heading-info { display: grid; min-width: 0; gap: 4px; }
 .ssh-mcp-profile__heading h3 { min-width: 0; overflow-wrap: anywhere; }
+.ssh-mcp-profile__toggle { display: inline-flex; min-width: 0; align-items: center; gap: 7px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.ssh-mcp-profile__toggle > svg { flex: 0 0 auto; opacity: .68; transition: transform .16s ease; }
+.ssh-mcp-profile__toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.ssh-mcp-profile__toggle:disabled { cursor: wait; opacity: .65; }
+.ssh-mcp-profile__summary { overflow-wrap: anywhere; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.4; opacity: .7; }
+.ssh-mcp-profile__fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.ssh-mcp-profile__fields[hidden] { display: none; }
 .ssh-mcp-profile__remove { min-height: 36px; flex: 0 0 auto; }
 .ssh-mcp-readonly { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--settings-inner-border); border-radius: 9px; background: var(--settings-inner-surface); cursor: pointer; }
 .ssh-mcp-readonly > input { width: 17px; height: 17px; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--settings-nav-accent); }
