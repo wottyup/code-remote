@@ -4258,6 +4258,9 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .native-config__group > h3 { margin: 0; font-size: calc(16px + var(--mobile-font-offset)); font-weight: 650; line-height: 1.4; }
 .native-config__columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .ssh-mcp-profile .native-config__columns { align-items: start; }
+.ssh-mcp-profile input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.ssh-mcp-profile input[type="number"]::-webkit-inner-spin-button,
+.ssh-mcp-profile input[type="number"]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .native-config__columns > :only-child { grid-column: 1 / -1; }
 .native-config__mappings { display: grid; gap: 12px; }
 .native-config__model-header, .native-config__model-row { display: grid; grid-template-columns: 86px minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; align-items: center; }
