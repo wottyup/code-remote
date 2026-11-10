@@ -916,6 +916,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .file-change-card__more:hover { background: var(--file-change-control-hover); color: var(--file-change-control-hover-text); }
 .file-change-card__more svg { transition: transform .18s ease; }
 .file-change-card__more[aria-expanded='true'] svg { transform: rotate(180deg); }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .file-change-card { border-radius: 16px; }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) :is(.file-change-card--reviewing, .file-change-card--expanded) .file-change-card__heading { border-radius: 15px 15px 0 0; }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .file-change-card__files { clip-path: inset(0 round 0 0 15px 15px); }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .file-change-card__more { border-radius: 0 0 15px 15px; }
 @media (min-width: 701px) {
   .file-change-card__heading { min-height: 60px; padding-block: 10px; }
   .file-change-card__summary strong { font-size: calc(15px + var(--mobile-font-offset)); }
@@ -4413,6 +4417,9 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .ssh-mcp-readonly > span { display: grid; gap: 3px; }
 .ssh-mcp-readonly strong { font-size: calc(13px + var(--mobile-font-offset)); font-weight: 650; }
 .ssh-mcp-readonly small { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; opacity: .72; }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .theme-settings-panel .theme-settings-card:not(.theme-settings-card--page) { border-radius: 20px; }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .theme-settings-panel .theme-option { border-radius: 14px; }
+.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .theme-settings-panel :is(.theme-control-row, .theme-background-framing, .translation-settings__group, .translation-settings__config, .translation-settings__transfer, .mcp-approvals-grant, .native-config__file, .native-config__test-results, .native-config__message, .ssh-mcp-readonly) { border-radius: 16px; }
 .ssh-mcp-actions { justify-content: space-between; padding-top: 3px; }
 .ssh-mcp-actions button { min-height: 40px; }
 .ssh-mcp-spin { animation: ssh-mcp-spin .9s linear infinite; }
