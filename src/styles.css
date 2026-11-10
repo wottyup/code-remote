@@ -4454,6 +4454,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-control-hover: rgba(219, 226, 236, .94);
   --composer-control-edge: rgba(119, 132, 151, .18);
   --composer-control-ink: #414b5b;
+  border-top-color: var(--composer-glass-edge);
 }
 .remote-shell.remote-shell--theme-light .message-composer textarea {
   background: rgba(78, 98, 145, .09);
