@@ -5,19 +5,18 @@ const {
   app,
   BrowserWindow,
   WebContentsView,
+  Menu,
   ipcMain,
   safeStorage,
   session,
   shell,
 } = require('electron')
 
-const SIDEBAR_WIDTH = 252
 const STORE_VERSION = 1
 const shellPreload = path.join(__dirname, 'preload-shell.cjs')
 const remotePreload = path.join(__dirname, 'preload-remote.cjs')
 const shellHtml = path.join(__dirname, 'renderer', 'index.html')
 const shellWindows = new Map()
-const remoteProfilesByWebContents = new Map()
 let profiles = []
 
 if (!app.requestSingleInstanceLock()) {
@@ -32,6 +31,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     await loadProfiles()
+    Menu.setApplicationMenu(null)
     registerIpcHandlers()
     createShellWindow()
     app.on('activate', () => {
@@ -149,6 +149,11 @@ function notifyProfilesChanged() {
   for (const { window } of shellWindows.values()) {
     if (!window.isDestroyed()) window.webContents.send('connections:changed', nextProfiles)
   }
+  for (const state of shellWindows.values()) {
+    if (state.view && !state.view.webContents.isDestroyed()) {
+      state.view.webContents.send('connections:changed', nextProfiles)
+    }
+  }
 }
 
 function getShellState(sender) {
@@ -163,13 +168,13 @@ function setRemoteBounds(state) {
   if (!view || state.window.isDestroyed()) return
   const { width, height } = state.window.getContentBounds()
   if (state.overlayOpen || !state.activeProfileId) {
-    view.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: 0, height: 0 })
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
     return
   }
   view.setBounds({
-    x: SIDEBAR_WIDTH,
+    x: 0,
     y: 0,
-    width: Math.max(0, width - SIDEBAR_WIDTH),
+    width: Math.max(0, width),
     height: Math.max(0, height),
   })
 }
@@ -177,7 +182,6 @@ function setRemoteBounds(state) {
 function disposeRemoteView(state) {
   const view = state.view
   if (!view) return
-  remoteProfilesByWebContents.delete(view.webContents.id)
   try {
     state.window.contentView.removeChildView(view)
   } catch {
@@ -185,6 +189,32 @@ function disposeRemoteView(state) {
   }
   if (!view.webContents.isDestroyed()) view.webContents.destroy()
   state.view = null
+}
+
+function getRemoteState(sender) {
+  for (const state of shellWindows.values()) {
+    if (state.view?.webContents.id !== sender.id || !state.activeProfileId) continue
+    const profile = profiles.find((entry) => entry.id === state.activeProfileId)
+    if (!profile) continue
+    try {
+      if (new URL(sender.getURL()).origin === new URL(profile.endpoint).origin) return state
+    } catch {
+      // A remote page must finish loading at its paired origin before using the bridge.
+    }
+  }
+  return null
+}
+
+function requireRemoteState(sender) {
+  const state = getRemoteState(sender)
+  if (!state) throw new Error('当前网页没有有效的桌面连接。')
+  return state
+}
+
+function getRemoteProfile(sender) {
+  const state = getRemoteState(sender)
+  if (!state) return null
+  return profiles.find((profile) => profile.id === state.activeProfileId) ?? null
 }
 
 function openExternalUrl(value) {
@@ -217,7 +247,6 @@ function activateProfile(state, profileId) {
     },
   })
   state.view = view
-  remoteProfilesByWebContents.set(view.webContents.id, profile.id)
   state.window.contentView.addChildView(view)
   state.window.setTitle(`${profile.name} — Code Remote`)
   setRemoteBounds(state)
@@ -258,6 +287,7 @@ function createShellWindow(initialProfileId = null) {
     minHeight: 580,
     backgroundColor: '#101114',
     title: 'Code Remote',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: shellPreload,
       contextIsolation: true,
@@ -279,86 +309,9 @@ function createShellWindow(initialProfileId = null) {
 
 function registerIpcHandlers() {
   ipcMain.handle('connections:list', () => publicProfiles())
-  ipcMain.handle('connections:pair', async (_event, input) => {
-    const endpoint = normalizeEndpoint(input?.endpoint)
-    const code = normalizePairingCode(input?.code)
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('系统凭据加密不可用，无法安全保存配对信息。')
-    }
-
-    let response
-    try {
-      response = await fetch(apiUrl(endpoint, '/api/v1/pair'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-        signal: AbortSignal.timeout(10_000),
-      })
-    } catch (error) {
-      const message = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-        ? '连接超时，请确认 Code Remote 服务正在运行。'
-        : '连接失败，请检查网页地址和网络。'
-      throw new Error(message)
-    }
-
-    const result = await response.json().catch(() => ({}))
-    if (!response.ok || typeof result.token !== 'string') {
-      const detail = typeof result.detail === 'string' ? result.detail : '配对失败，请检查匹配码。'
-      throw new Error(detail)
-    }
-
-    const id = randomUUID()
-    const host = new URL(endpoint).hostname
-    const name = String(input?.name ?? '').trim().slice(0, 48) || host
-    const profile = { id, name, endpoint, encryptedToken: encryptToken(result.token) }
-    profiles = [profile, ...profiles]
-    await saveProfiles()
-    notifyProfilesChanged()
-    return { profiles: publicProfiles(), profileId: id }
-  })
-
-  ipcMain.handle('connections:rename', async (_event, input) => {
-    const profile = profiles.find((entry) => entry.id === input?.id)
-    if (!profile) throw new Error('找不到这台设备。')
-    const name = String(input?.name ?? '').trim().slice(0, 48)
-    if (!name) throw new Error('设备名称不能为空。')
-    profile.name = name
-    await saveProfiles()
-    for (const state of shellWindows.values()) {
-      if (state.activeProfileId === profile.id) state.window.setTitle(`${profile.name} — Code Remote`)
-    }
-    notifyProfilesChanged()
-    return publicProfiles()
-  })
-
-  ipcMain.handle('connections:remove', async (_event, input) => {
-    const profile = profiles.find((entry) => entry.id === input?.id)
-    if (!profile) return { profiles: publicProfiles(), remoteRevoked: true }
-
-    const token = decryptToken(profile)
-    let remoteRevoked = !token
-    if (token) {
-      try {
-        const response = await fetch(apiUrl(profile.endpoint, '/api/v1/unpair'), {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(5_000),
-        })
-        remoteRevoked = response.ok
-      } catch {
-        remoteRevoked = false
-      }
-    }
-
-    profiles = profiles.filter((entry) => entry.id !== profile.id)
-    await saveProfiles()
-    for (const state of shellWindows.values()) {
-      if (state.activeProfileId === profile.id) activateProfile(state, null)
-    }
-    await session.fromPartition(`persist:code-remote-${profile.id}`).clearStorageData().catch(() => undefined)
-    notifyProfilesChanged()
-    return { profiles: publicProfiles(), remoteRevoked }
-  })
+  ipcMain.handle('connections:pair', (_event, input) => pairConnection(input))
+  ipcMain.handle('connections:rename', (_event, input) => renameConnection(input))
+  ipcMain.handle('connections:remove', (_event, input) => removeConnection(input))
 
   ipcMain.handle('connections:activate', (event, profileId) => {
     const state = getShellState(event.sender)
@@ -382,14 +335,14 @@ function registerIpcHandlers() {
   })
 
   ipcMain.on('remote:read-token', (event) => {
-    const profileId = remoteProfilesByWebContents.get(event.sender.id)
-    const profile = profiles.find((entry) => entry.id === profileId)
-    event.returnValue = decryptToken(profile) ?? ''
+    event.returnValue = decryptToken(getRemoteProfile(event.sender)) ?? ''
+  })
+  ipcMain.handle('remote:read-token-async', (event) => {
+    return decryptToken(getRemoteProfile(event.sender))
   })
 
   ipcMain.handle('remote:save-token', async (event, token) => {
-    const profileId = remoteProfilesByWebContents.get(event.sender.id)
-    const profile = profiles.find((entry) => entry.id === profileId)
+    const profile = getRemoteProfile(event.sender)
     if (!profile || typeof token !== 'string' || token.length < 16) return false
     profile.encryptedToken = encryptToken(token)
     await saveProfiles()
@@ -398,12 +351,124 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('remote:clear-token', async (event) => {
-    const profileId = remoteProfilesByWebContents.get(event.sender.id)
-    const profile = profiles.find((entry) => entry.id === profileId)
+    const profile = getRemoteProfile(event.sender)
     if (!profile) return false
     profile.encryptedToken = ''
     await saveProfiles()
     notifyProfilesChanged()
     return true
   })
+
+  ipcMain.handle('remote:connections:current', (event) => {
+    return requireRemoteState(event.sender).activeProfileId
+  })
+  ipcMain.handle('remote:connections:list', (event) => {
+    requireRemoteState(event.sender)
+    return publicProfiles()
+  })
+  ipcMain.handle('remote:connections:pair', (event, input) => {
+    requireRemoteState(event.sender)
+    return pairConnection(input)
+  })
+  ipcMain.handle('remote:connections:rename', (event, input) => {
+    requireRemoteState(event.sender)
+    return renameConnection(input)
+  })
+  ipcMain.handle('remote:connections:remove', (event, input) => {
+    requireRemoteState(event.sender)
+    return removeConnection(input)
+  })
+  ipcMain.handle('remote:connections:activate', (event, profileId) => {
+    const state = requireRemoteState(event.sender)
+    if (!profiles.some((profile) => profile.id === profileId)) throw new Error('找不到这台设备。')
+    activateProfile(state, profileId)
+    return true
+  })
+  ipcMain.handle('remote:connections:open-window', (event, profileId) => {
+    requireRemoteState(event.sender)
+    if (!profiles.some((profile) => profile.id === profileId)) throw new Error('找不到这台设备。')
+    createShellWindow(profileId)
+    return true
+  })
+}
+
+async function pairConnection(input) {
+  const endpoint = normalizeEndpoint(input?.endpoint)
+  const code = normalizePairingCode(input?.code)
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('系统凭据加密不可用，无法安全保存配对信息。')
+  }
+
+  let response
+  try {
+    response = await fetch(apiUrl(endpoint, '/api/v1/pair'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(10_000),
+    })
+  } catch (error) {
+    const message = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+      ? '连接超时，请确认 Code Remote 服务正在运行。'
+      : '连接失败，请检查网页地址和网络。'
+    throw new Error(message)
+  }
+
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok || typeof result.token !== 'string') {
+    const detail = typeof result.detail === 'string' ? result.detail : '配对失败，请检查匹配码。'
+    throw new Error(detail)
+  }
+
+  const id = randomUUID()
+  const host = new URL(endpoint).hostname
+  const name = String(input?.name ?? '').trim().slice(0, 48) || host
+  const profile = { id, name, endpoint, encryptedToken: encryptToken(result.token) }
+  profiles = [profile, ...profiles]
+  await saveProfiles()
+  notifyProfilesChanged()
+  return { profiles: publicProfiles(), profileId: id }
+}
+
+async function renameConnection(input) {
+  const profile = profiles.find((entry) => entry.id === input?.id)
+  if (!profile) throw new Error('找不到这台设备。')
+  const name = String(input?.name ?? '').trim().slice(0, 48)
+  if (!name) throw new Error('设备名称不能为空。')
+  profile.name = name
+  await saveProfiles()
+  for (const state of shellWindows.values()) {
+    if (state.activeProfileId === profile.id) state.window.setTitle(`${profile.name} — Code Remote`)
+  }
+  notifyProfilesChanged()
+  return publicProfiles()
+}
+
+async function removeConnection(input) {
+  const profile = profiles.find((entry) => entry.id === input?.id)
+  if (!profile) return { profiles: publicProfiles(), remoteRevoked: true }
+
+  const token = decryptToken(profile)
+  let remoteRevoked = !token
+  if (token) {
+    try {
+      const response = await fetch(apiUrl(profile.endpoint, '/api/v1/unpair'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000),
+      })
+      remoteRevoked = response.ok
+    } catch {
+      remoteRevoked = false
+    }
+  }
+
+  profiles = profiles.filter((entry) => entry.id !== profile.id)
+  await saveProfiles()
+  for (const state of shellWindows.values()) {
+    if (state.activeProfileId === profile.id) activateProfile(state, null)
+  }
+  await session.fromPartition(`persist:code-remote-${profile.id}`).clearStorageData().catch(() => undefined)
+  notifyProfilesChanged()
+  return { profiles: publicProfiles(), remoteRevoked }
 }

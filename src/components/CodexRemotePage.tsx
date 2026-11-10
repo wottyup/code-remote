@@ -6927,9 +6927,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
       <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label={ui("关闭侧栏")} aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
       {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label={ui("关闭文件树")} onClick={() => setWorkspaceOpen(false)} /> : null}
-      {deviceContextMenu && contextDevice && contextDeviceWindowHref ? createPortal(
+      {deviceContextMenu && contextDevice && (contextDeviceWindowHref || deviceManager.openWindow) ? createPortal(
         <div className={`thread-context-menu device-context-menu remote-shell--theme-${themePreferences.theme}`} style={{ ...themeStyle, left: deviceContextMenu.x, top: deviceContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
-          <a href={contextDeviceWindowHref} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setDeviceContextMenu(null)}><ExternalLink size={14} />{ui('在新窗口打开')}</a>
+          {deviceManager.openWindow ? <button type="button" role="menuitem" onClick={() => {
+            setDeviceContextMenu(null)
+            void Promise.resolve(deviceManager.openWindow?.(contextDevice.id)).catch(() => showPaneNotice('无法打开新窗口。'))
+          }}><ExternalLink size={14} />{ui('在新窗口打开')}</button> : <a href={contextDeviceWindowHref ?? undefined} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setDeviceContextMenu(null)}><ExternalLink size={14} />{ui('在新窗口打开')}</a>}
         </div>, document.body,
       ) : null}
       {threadContextMenu ? (

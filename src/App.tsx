@@ -8,25 +8,27 @@ import { useWebDeviceManager } from './lib/webDeviceManager'
 
 const STORAGE_KEY = 'codex-remote-token'
 
-declare global {
-  interface Window {
-    CodeRemoteDesktop?: {
-      getToken: () => string | null
-      saveToken: (token: string) => Promise<boolean>
-      clearToken: () => Promise<boolean>
-    }
-  }
-}
-
-function readPairedToken() {
-  if (window.CodeRemoteDesktop) return window.CodeRemoteDesktop.getToken()
-  return window.localStorage.getItem(STORAGE_KEY)
-}
-
 function RemoteClientApp() {
   const deviceManager = useWebDeviceManager()
-  const [token, setToken] = useState(readPairedToken)
+  const [desktopBridge] = useState(() => window.CodeRemoteDesktop)
+  const [token, setToken] = useState<string | null>(() => desktopBridge ? null : window.localStorage.getItem(STORAGE_KEY))
+  const [tokenReady, setTokenReady] = useState(!desktopBridge)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
+
+  useEffect(() => {
+    if (!desktopBridge) return
+    let disposed = false
+    void desktopBridge.getTokenAsync().then((savedToken) => {
+      if (disposed) return
+      setToken(savedToken)
+      setTokenReady(true)
+    }).catch(() => {
+      if (disposed) return
+      setToken(null)
+      setTokenReady(true)
+    })
+    return () => { disposed = true }
+  }, [desktopBridge])
 
   useEffect(() => {
     saveThemePreferences(themePreferences)
@@ -52,14 +54,14 @@ function RemoteClientApp() {
   }, [themePreferences.letterSpacingPercent])
 
   const paired = useCallback((nextToken: string) => {
-    if (window.CodeRemoteDesktop) void window.CodeRemoteDesktop.saveToken(nextToken)
+    if (desktopBridge) void desktopBridge.saveToken(nextToken)
     else window.localStorage.setItem(STORAGE_KEY, nextToken)
     setToken(nextToken)
-  }, [])
+  }, [desktopBridge])
 
   const unpair = useCallback(async () => {
     const currentToken = token
-    if (window.CodeRemoteDesktop) await window.CodeRemoteDesktop.clearToken()
+    if (desktopBridge) await desktopBridge.clearToken()
     else window.localStorage.removeItem(STORAGE_KEY)
     setToken(null)
     if (!currentToken) return
@@ -68,7 +70,9 @@ function RemoteClientApp() {
     } catch {
       // The local token is already removed. A later server restart cannot restore it in this browser.
     }
-  }, [token])
+  }, [desktopBridge, token])
+
+  if (!tokenReady) return <div className="app-startup-loading" role="status"><span /></div>
 
   return (
     <div className={`app-root app-root--theme-${themePreferences.theme}`} style={themeRootStyle(themePreferences)}>
