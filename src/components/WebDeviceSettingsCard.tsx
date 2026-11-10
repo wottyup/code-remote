@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Check, ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { ui, uiMessage } from '../lib/uiLanguage'
 import { normalizePairingCode, normalizeWebDeviceUrl, webDevicePairingLabel, type WebDeviceManagerState } from '../lib/webDeviceManager'
@@ -12,6 +12,8 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null)
+  const latestPairingRequest = useRef<{ id: string; url: string } | null>(null)
+  const [manualPairingUrl, setManualPairingUrl] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const isBusy = Boolean(pendingRequestId) || isSubmitting
   let existingUrl: string | null = null
@@ -21,10 +23,13 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
     // The form displays URL errors when submitted.
   }
   const retrying = Boolean(pairingCode && existingUrl && manager.profiles.some((profile) => profile.url === existingUrl))
+  const manualProfile = manualPairingUrl ? manager.profiles.find((profile) => profile.url === manualPairingUrl && !profile.isCurrent) : null
 
   useEffect(() => {
     const result = manager.pairingResult
-    if (!pendingRequestId || result?.requestId !== pendingRequestId) return
+    if (!result || result.requestId !== latestPairingRequest.current?.id) return
+    const attemptedUrl = latestPairingRequest.current.url
+    latestPairingRequest.current = null
     setPendingRequestId(null)
     if (result.paired) {
       setName('')
@@ -32,17 +37,32 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
       setPairingCode('')
       setError(null)
       setMessage('设备已配对，可在侧栏切换。')
+      setManualPairingUrl(null)
     } else {
       setMessage(null)
       setError(result.error || '自动配对失败，请确认匹配码。')
+      setManualPairingUrl(attemptedUrl)
     }
-  }, [manager.pairingResult, pendingRequestId])
+  }, [manager.pairingResult])
+
+  useEffect(() => {
+    if (!pendingRequestId) return
+    const timer = window.setTimeout(() => {
+      if (latestPairingRequest.current?.id !== pendingRequestId) return
+      setPendingRequestId(null)
+      setMessage(null)
+      setError('自动配对等待超时。请检查目标设备地址，或打开其网页手动输入匹配码。')
+      setManualPairingUrl(latestPairingRequest.current.url)
+    }, 15_000)
+    return () => window.clearTimeout(timer)
+  }, [pendingRequestId])
 
   async function addDevice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (isBusy) return
     setError(null)
     setMessage(null)
+    setManualPairingUrl(null)
     setIsSubmitting(true)
     try {
       const requestId = await manager.addProfile(name, url, pairingCode)
@@ -55,9 +75,11 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
         return
       }
       if (requestId) {
+        latestPairingRequest.current = { id: requestId, url: normalizeWebDeviceUrl(url) }
         setPendingRequestId(requestId)
         setMessage('正在验证匹配码，当前页面会保持打开。')
       } else {
+        latestPairingRequest.current = null
         setName('')
         setUrl('')
         setPairingCode('')
@@ -152,6 +174,11 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
       </div>
 
       {error ? <p className="theme-settings-hint web-device-settings__feedback web-device-settings__feedback--error" role="alert">{uiMessage(error)}</p> : null}
+      {manualPairingUrl ? <div className="theme-settings-hint web-device-settings__manual-pairing">
+        {manualProfile ? <button type="button" onClick={() => void manager.selectProfile(manualProfile.id)}>{ui('切换到设备并手动配对')}</button> : null}
+        <a href={manualPairingUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />{ui('在新窗口打开设备网页')}</a>
+        <span>{ui('在设备网页的配对页输入匹配码。')}</span>
+      </div> : null}
       {message ? <p className="theme-settings-hint web-device-settings__feedback" role="status">{uiMessage(message)}</p> : null}
       <p className="theme-settings-hint web-device-settings__note">{ui(manager.mode === 'desktop' ? '设备信息和配对凭据加密保存在本机；匹配码不会保存在设置中。' : '设备名称和地址保存在此浏览器；匹配码仅临时传递，配对令牌保存在目标设备自己的网页存储中。')}</p>
     </section>

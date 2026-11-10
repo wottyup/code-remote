@@ -325,7 +325,7 @@ export function DeviceManagerShell() {
     if (!pendingPairing) return
     const timer = window.setTimeout(() => {
       finishPairing(pendingPairing.sessionId, false, '目标网页未回应自动配对。请检查地址，或在该设备页面手动输入匹配码。')
-    }, 20_000)
+    }, 12_000)
     return () => window.clearTimeout(timer)
   }, [finishPairing, pendingPairing])
 

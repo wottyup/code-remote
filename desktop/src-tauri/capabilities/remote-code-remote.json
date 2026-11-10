@@ -4,7 +4,7 @@
   "description": "Allows the paired Code Remote page to call the desktop bridge.",
   "windows": ["main", "remote-*"],
   "remote": {
-    "urls": ["http://*", "https://*"]
+    "urls": ["http://*:*", "https://*:*"]
   },
   "permissions": ["core:default", "core:event:allow-listen", "core:event:allow-unlisten"]
 }

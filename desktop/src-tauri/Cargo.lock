@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "code-remote-desktop"
-version = "0.114.0-dev.2"
+version = "0.114.1-dev.1"
 dependencies = [
  "base64 0.22.1",
  "reqwest",

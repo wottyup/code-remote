@@ -4555,6 +4555,9 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .web-device-settings__current { display: inline-flex; align-items: center; gap: 5px; color: color-mix(in srgb, currentColor 60%, transparent); font-size: calc(11px + var(--mobile-font-offset)); white-space: nowrap; }
 .web-device-settings__feedback { max-width: 780px; padding: 10px 0 0; }
 .web-device-settings__feedback--error { color: #c46b70; }
+.web-device-settings__manual-pairing { display: flex; max-width: 780px; flex-wrap: wrap; align-items: center; gap: 7px 14px; padding: 8px 0 0; }
+.web-device-settings__manual-pairing > a,
+.web-device-settings__manual-pairing > button { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: var(--settings-nav-accent, currentColor); cursor: pointer; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .web-device-settings__note { max-width: 780px; padding: 14px 0 0; }
 
 @media (max-width: 700px) {
