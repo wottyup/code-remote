@@ -1770,6 +1770,8 @@ class MainActivity : Activity() {
             val keyboardJustOpened = keyboardVisible && !imeInsetVisible
             val keyboardVisibilityChanged = keyboardVisible != imeInsetVisible
             val bottom = max(systemBars.bottom, ime.bottom)
+            // The IME consumes the first back gesture, so onBackPressed may not run.
+            if (keyboardVisibilityChanged && !keyboardVisible) dismissComposerPreferences()
             imeInsetVisible = keyboardVisible
             if (content == null) {
                 view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
@@ -2787,7 +2789,7 @@ class MainActivity : Activity() {
         sidebarNewThreadButton = ImageButton(this).apply {
             setImageResource(R.drawable.ic_new_chat)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(dp(9), dp(9), dp(9), dp(9))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
             isClickable = true
             isFocusable = true
             contentDescription = tr("新建对话")
@@ -2798,11 +2800,11 @@ class MainActivity : Activity() {
             setOnClickListener { createThread() }
         }
         searchRow.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(8) })
-        drawer.addView(searchRow, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 42)).apply { topMargin = dp(9) })
+        drawer.addView(searchRow, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 36 else 34)).apply { topMargin = dp(9) })
 
         val engineFilters = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
         }
         sidebarCodexFilterButton = sidebarEngineFilterButton("codex")
         sidebarClaudeFilterButton = sidebarEngineFilterButton("claude-code")
@@ -3522,6 +3524,19 @@ class MainActivity : Activity() {
         private var selectableTextGesture = false
         private var edgeSwipeOrigin = false
         private var velocityTracker: VelocityTracker? = null
+
+        override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && composerPreferenceMenu != null) {
+                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
+                    dismissComposerPreferences()
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                        ?.hideSoftInputFromWindow(windowToken, 0)
+                }
+                // Do not let this same back press also navigate away from the chat.
+                return true
+            }
+            return super.dispatchKeyEventPreIme(event)
+        }
 
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
@@ -9527,7 +9542,7 @@ class MainActivity : Activity() {
 
     private fun showComposerPreferences() {
         if (composerPreferenceMenu != null && preferencePopup?.isShowing == true) {
-            refreshComposerPreferenceMenu()
+            dismissComposerPreferences()
             return
         }
         val tabs = linkedMapOf<ComposerPreferenceSection, TextView>()
