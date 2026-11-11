@@ -1168,9 +1168,7 @@ class MainActivity : Activity() {
     private lateinit var attachmentScroll: HorizontalScrollView
     private lateinit var attachmentStrip: LinearLayout
     private lateinit var composerInputFrame: FrameLayout
-    private lateinit var sidebarNewThreadButton: LinearLayout
-    private lateinit var sidebarNewThreadIcon: ImageView
-    private lateinit var sidebarNewThreadLabel: TextView
+    private lateinit var sidebarNewThreadButton: ImageButton
     private lateinit var sidebarCodexFilterButton: ImageButton
     private lateinit var sidebarClaudeFilterButton: ImageButton
     private val sidebarActionAccentViews = mutableListOf<Pair<ImageView, TextView>>()
@@ -2722,37 +2720,36 @@ class MainActivity : Activity() {
         drawerSearch.addTextChangedListener(SimpleTextWatcher { value ->
             searchBox.findViewWithTag<View>("sidebar_search_clear")?.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
         })
-        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 42)).apply { topMargin = dp(9) })
-
-        sidebarNewThreadButton = LinearLayout(this).apply {
+        val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), 0, dp(12), 0)
+        }
+        searchRow.addView(searchBox, LinearLayout.LayoutParams(0, MATCH, 4f))
+        sidebarNewThreadButton = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_new_chat)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(9), dp(9), dp(9), dp(9))
             isClickable = true
             isFocusable = true
-            contentDescription = "新建对话"
+            contentDescription = tr("新建对话")
+            tooltipText = contentDescription
+            foreground = null
+            stateListAnimator = null
+            setDefaultFocusHighlightEnabled(false)
             setOnClickListener { createThread() }
         }
-        sidebarNewThreadIcon = ImageView(this).apply {
-            setPixelAwareImageResource(sidebarIconResource("add"))
-            val iconInset = if (pixelTheme) 0 else dp(4)
-            setPadding(iconInset, iconInset, iconInset, iconInset)
-        }
-        val newThreadIconSize = if (pixelTheme) 30 else 27
-        sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(newThreadIconSize), dp(newThreadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 10) })
-        sidebarNewThreadLabel = label("新建对话", if (pixelTheme) 14 else 13, TEXT, true)
-        sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
-        val newThreadControl = LinearLayout(this).apply {
+        searchRow.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(8) })
+        drawer.addView(searchRow, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 42)).apply { topMargin = dp(9) })
+
+        val engineFilters = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
         }
-        val controlHeight = dp(if (retroTheme) 44 else 43)
-        newThreadControl.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(0, controlHeight, 1f))
         sidebarCodexFilterButton = sidebarEngineFilterButton("codex")
         sidebarClaudeFilterButton = sidebarEngineFilterButton("claude-code")
-        newThreadControl.addView(sidebarCodexFilterButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(5) })
-        newThreadControl.addView(sidebarClaudeFilterButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(4) })
-        drawer.addView(newThreadControl, LinearLayout.LayoutParams(MATCH, controlHeight).apply { topMargin = dp(7) })
+        engineFilters.addView(sidebarCodexFilterButton, LinearLayout.LayoutParams(dp(36), dp(36)))
+        engineFilters.addView(sidebarClaudeFilterButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(4) })
+        drawer.addView(engineFilters, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(7) })
         updateSidebarModeAccent()
 
         val recentHeading = LinearLayout(this).apply {
@@ -3002,13 +2999,7 @@ class MainActivity : Activity() {
             retroTheme -> ANDROID1_TITLE_TEXT
             else -> foreground
         }
-        sidebarNewThreadIcon.imageTintList = retroIconTint(newThreadForeground)
-        sidebarNewThreadIcon.background = if (pixelTheme) ColorDrawable(Color.TRANSPARENT) else rounded(
-            if (retroTheme) Color.rgb(178, 181, 181)
-            else if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
-            dp(if (retroTheme) 2 else 7),
-        )
-        sidebarNewThreadLabel.setTextColor(newThreadForeground)
+        sidebarNewThreadButton.imageTintList = ColorStateList.valueOf(newThreadForeground)
         val actionColor = if (pixelTheme) PIXEL_TEXT else SUBTLE
         sidebarActionAccentViews.forEach { (icon, label) ->
             icon.imageTintList = retroIconTint(actionColor)
