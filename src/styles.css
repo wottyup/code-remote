@@ -135,7 +135,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-list { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; min-height: 0; overflow-y: auto; }
 .thread-list__section { padding: 10px 8px 4px; color: #858c9a; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 650; }
 .thread-list__section:first-child { padding-top: 5px; }
-.thread-row-item { position: relative; z-index: 0; width: 100%; min-width: 0; border-radius: 9px 0 0 9px; transition: background-color .16s ease; }
+.thread-row-item { position: relative; z-index: 0; width: 100%; min-width: 0; border-radius: 0 9px 9px 0; transition: background-color .16s ease; }
 .thread-row { position: relative; isolation: isolate; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 40px; padding: 7px 8px; border: 0; border-radius: 9px; background: transparent; color: #aeb2ba; cursor: pointer; text-align: left; transition: background .16s ease, color .16s ease, box-shadow .16s ease; }
 .thread-row > .engine-brand-icon { margin-top: 2px; color: #7d838d; }
 .thread-row:hover { border-color: rgba(146, 157, 184, .12); background: rgba(38, 41, 49, .72); color: #eceef1; }
@@ -4589,18 +4589,15 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 }
 .composer-portal-theme:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .composer-menu__option { border-radius: 9px; }
 
-/* Let the active chat row connect to the content panel, like the reference sidebar. */
-.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel):not(.remote-shell--theme-custom) .remote-sidebar {
-  border-right-color: var(--thread-row-panel-surface);
-}
+/* Attach the active chat row to the sidebar's left edge, like the mirrored reference variant. */
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list {
   width: calc(100% + var(--thread-row-panel-inset));
-  margin-right: calc(0px - var(--thread-row-panel-inset));
+  margin-left: calc(0px - var(--thread-row-panel-inset));
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active {
   --thread-row-surface: var(--thread-row-active-surface);
   z-index: 2;
-  border-radius: 9px 0 0 9px;
+  border-radius: 0 9px 9px 0;
   background: var(--thread-row-active-surface);
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active > .thread-row--active {
@@ -4617,7 +4614,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:is(.thread-row-item--active, :not(.thread-row-item--selected):hover)::before,
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:is(.thread-row-item--active, :not(.thread-row-item--selected):hover)::after {
   position: absolute;
-  right: 0;
+  left: 0;
   width: 14px;
   height: 14px;
   content: '';
@@ -4625,13 +4622,18 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:is(.thread-row-item--active, :not(.thread-row-item--selected):hover)::before {
   top: -14px;
-  background: radial-gradient(circle at top left, transparent 13.5px, var(--thread-row-surface) 14px);
+  background: radial-gradient(circle at top right, transparent 13.5px, var(--thread-row-surface) 14px);
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:is(.thread-row-item--active, :not(.thread-row-item--selected):hover)::after {
   bottom: -14px;
-  background: radial-gradient(circle at bottom left, transparent 13.5px, var(--thread-row-surface) 14px);
+  background: radial-gradient(circle at bottom right, transparent 13.5px, var(--thread-row-surface) 14px);
 }
-.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list .thread-row { padding-right: calc(8px + var(--thread-row-panel-inset)); }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list .thread-row {
+  padding-left: calc(8px + var(--thread-row-panel-inset));
+  padding-right: 8px;
+}
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list__section { padding-left: calc(8px + var(--thread-row-panel-inset)); }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list__empty { margin-left: calc(8px + var(--thread-row-panel-inset)); }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:is(.thread-row-item--active, :not(.thread-row-item--selected):hover) > .thread-row {
   background: transparent;
 }
