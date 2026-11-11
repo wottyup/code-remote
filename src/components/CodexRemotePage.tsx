@@ -2127,10 +2127,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       void confirmQueuedEdit()
       return
     }
-    if (sendDirectly && isReplying && !showCodexPreferences) {
-      setAttachmentError('Claude 回复中暂不支持插队，消息仍保留在输入框。')
-      return
-    }
     // A second submit can arrive before React commits the cleared draft.
     // Read the synchronously updated values so it cannot resend stale input.
     const prompt = draftRef.current.trim()
@@ -2695,7 +2691,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>{submittingQueuedMessageId ? ui('待处理') : ui('已排队')} {queuedMessages.length} {ui("条")}</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? ui('编辑期间暂停 · 结束后继续队列') : sendingQueuedId ? ui('正在发送排队消息') : queuedMessages[0]?.sendAttempt ? ui('有消息送达待核对') : submittingQueuedMessageId ? ui('正在确认送达') : uiMessage(queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? ui('回复结束后依次发送；点“插队”沿用当前轮次设置立即发送') : ui('Claude 当前不支持运行中插队，回复结束后依次发送') : ui('等待电脑端自动发送')))}</small> : null}
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? ui('编辑期间暂停 · 结束后继续队列') : sendingQueuedId ? ui('正在发送排队消息') : queuedMessages[0]?.sendAttempt ? ui('有消息送达待核对') : submittingQueuedMessageId ? ui('正在确认送达') : uiMessage(queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? ui('回复结束后依次发送；点“插队”沿用当前轮次设置立即发送') : ui('普通消息回复后发送；点“插队”提交到当前 Claude 会话，回复结束后处理') : ui('等待电脑端自动发送')))}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
@@ -2717,13 +2713,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
               const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? queuedEffort ?? ''
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
-              const sendMode: QueuedMessageSendMode = isRunning && showCodexPreferences ? 'steer' : 'start'
-              const waitingForClaude = isRunning && !showCodexPreferences
+              const sendMode: QueuedMessageSendMode = isRunning ? 'steer' : 'start'
               const sendTitle = translationPending ? '后台翻译完成后才能发送'
                 : translationFailed ? `翻译失败：${message.translationError ?? '请重试翻译。'}`
                   : isSubmitting ? '消息正在提交，请稍候'
                 : deliveryUnverified ? '请先核对这条消息是否已发送'
-                  : waitingForClaude ? 'Claude 当前不支持运行中插队，请等待回复结束，或暂停后发送'
+                  : sendMode === 'steer' && !showCodexPreferences ? '提交到当前 Claude 会话，当前回复结束后处理'
                     : sendMode === 'steer' ? '立即插入当前 Codex 回复，沿用当前轮次的模型和思考等级'
                       : index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中'
                         : '按消息保存的模型和思考等级开始新一轮'
@@ -2753,7 +2748,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? ui('消息正在提交，请稍候') : deliveryUnverified ? ui('请先核对这条消息是否已发送') : message.editing ? ui('解除其它设备的编辑暂停') : ui('在输入框中编辑排队消息')}>
                     <Pencil size={14} /><span>{isEditing ? ui('编辑中') : message.editing ? ui('解除编辑') : ui('编辑')}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending || (!translationFailed && waitingForClaude)} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={uiMessage(sendTitle)}>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={uiMessage(sendTitle)}>
                     {sendingNow ? <LoaderCircle className="spin" size={14} /> : translationFailed ? <RotateCcw size={14} /> : translationPending ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{translationPending ? ui('翻译中') : translationFailed ? ui('重试翻译') : sendMode === 'steer' ? ui('插队') : ui('发送')}</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label={ui("删除排队消息")} title={isSubmitting ? ui('消息正在提交，请稍候') : ui('删除这条排队消息')}><X size={13} /><span>{ui("删除")}</span></button>
@@ -2798,7 +2793,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             stableQueueHeight ? 'Control+ArrowLeft Control+ArrowRight' : '',
             editingQueuedMessageId ? '' : 'Control+Enter',
           ].filter(Boolean).join(' ') || undefined}
-          title={`${editingQueuedMessageId ? ui('Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter') : showCodexPreferences ? ui('Ctrl+Enter 立即发送；回复时插队') : ui('Ctrl+Enter 立即发送；Claude 回复中暂不支持插队')}${stableQueueHeight ? ui('；Ctrl+←/→ 切换并发窗口') : ''}`}
+          title={`${editingQueuedMessageId ? ui('Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter') : showCodexPreferences ? ui('Ctrl+Enter 立即发送；回复时插队') : ui('Ctrl+Enter 提交到当前 Claude 会话；当前回复结束后处理')}${stableQueueHeight ? ui('；Ctrl+←/→ 切换并发窗口') : ''}`}
           inputMode="text"
           enterKeyHint="send"
         />
@@ -2841,7 +2836,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
               disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
               aria-label={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? ui('将消息加入发送队列') : ui('发送消息')}
-              title={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务（新一轮）') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? showCodexPreferences ? ui('加入发送队列；Ctrl+Enter 插队') : ui('加入发送队列') : ui('发送消息；Ctrl+Enter 立即发送')}
+              title={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务（新一轮）') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? showCodexPreferences ? ui('加入发送队列；Ctrl+Enter 插队') : ui('加入发送队列；Ctrl+Enter 提交到当前 Claude 会话') : ui('发送消息；Ctrl+Enter 立即发送')}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />

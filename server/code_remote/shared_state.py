@@ -901,7 +901,9 @@ class SharedQueueService:
             await self.changed(thread_id)
             await self._send_claimed(thread_id, payload, new_turn=True)
 
-    async def _send_claimed(self, thread_id: str, payload: dict[str, Any], *, new_turn: bool) -> bool:
+    async def _send_claimed(
+        self, thread_id: str, payload: dict[str, Any], *, new_turn: bool, previous_turn_id: str | None = None,
+    ) -> bool:
         try:
             turn_id = await self.send(thread_id, payload, not new_turn)
             if not turn_id:
@@ -915,7 +917,10 @@ class SharedQueueService:
             self.store.unverified(payload["id"])
             await self.changed(thread_id)
             return False
-        self.store.delivered(thread_id, payload["id"], turn_id, new_turn=new_turn)
+        self.store.delivered(
+            thread_id, payload["id"], turn_id,
+            new_turn=new_turn or bool(previous_turn_id and turn_id != previous_turn_id),
+        )
         self.store.set_block(thread_id, None)
         await self.changed(thread_id)
         return True
@@ -1003,7 +1008,7 @@ class SharedQueueService:
                 ):
                     await self._block(thread_id, "等待确认 Codex 的回复状态，暂不自动发送")
                     return False
-        if (active_turn or busy) and (not allow_steer or is_claude):
+        if (active_turn or busy) and not allow_steer:
             return False
         if busy and not active_turn:
             await self._block(thread_id, "正在确认当前回复，暂时无法立即发送；确认后可重试")
@@ -1018,7 +1023,9 @@ class SharedQueueService:
         if not active_turn:
             self.store.clear_barrier(thread_id)
         self.store.set_block(thread_id, None)
-        return await self._send_claimed(thread_id, payload, new_turn=not bool(active_turn))
+        return await self._send_claimed(
+            thread_id, payload, new_turn=not bool(active_turn), previous_turn_id=active_turn,
+        )
 
     def _schedule_pending_translations(self, thread_id: str) -> None:
         if self.translate is None:

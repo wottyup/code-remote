@@ -1273,6 +1273,9 @@ export const codexRemoteClient = {
     direct?: boolean
     images: CodexImageAttachment[]
     documents?: CodexDocumentAttachment[]
+    claudeModel?: string
+    claudeEffort?: string
+    claudePermissionMode?: string
     requestId: string
   }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/steer`, {
@@ -1283,6 +1286,9 @@ export const codexRemoteClient = {
         translated_text: input.translatedText,
         direct: input.direct,
         request_id: input.requestId,
+        claude_model: input.claudeModel,
+        claude_effort: input.claudeEffort,
+        claude_permission_mode: input.claudePermissionMode,
         images: input.images.map((image) => ({
           name: image.name,
           media_type: image.mediaType,

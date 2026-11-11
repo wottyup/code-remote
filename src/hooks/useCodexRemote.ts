@@ -3313,7 +3313,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         void loadThread(threadId, ++historyRevision.current, true)
       }
       if (action === 'send-now' && !result.sent) {
-        setError('Codex 未确认这条消息已送达；请先核对聊天记录，不要重复发送。')
+        setError('电脑端未确认这条消息已送达；请先核对聊天记录，不要重复发送。')
       } else {
         setError(null)
       }
@@ -3452,7 +3452,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     // The clicked action determines whether to steer. Saved preferences apply
     // to new turns; steering explicitly uses the current turn's settings.
-    if (mode === 'steer' && !threadId.startsWith('claude:')) return sharedQueueAction(threadId, 'send-now', messageId)
+    if (mode === 'steer') return sharedQueueAction(threadId, 'send-now', messageId)
     // Keep an idle send from becoming a steer if another client starts a turn.
     try {
       const result = await codexRemoteClient.startQueuedIfIdle(token, threadId, messageId)
@@ -4652,10 +4652,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (input.sendDirectly) {
       const steering = !createdThread && thread.id === activeThreadId.current
         && (isRunningRef.current || activeTurnId.current !== null || messagesRef.current.at(-1)?.streaming === true)
-      if (steering && thread.id.startsWith('claude:')) {
-        setError('Claude 回复中暂不支持插队，消息仍保留在输入框。')
-        return false
-      }
       const previousMessageIds = new Set(messagesRef.current.flatMap((message) => message.sourceItemId
         ? [message.id, message.sourceItemId] : [message.id]))
       const previousTurnIds = new Set(messagesRef.current.flatMap((message) => message.turnId ? [message.turnId] : []))
@@ -4667,6 +4663,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           direct: true,
           images: payload.images,
           documents: payload.documents,
+          claudeModel: payload.claudeModel,
+          claudeEffort: payload.claudeEffort,
+          claudePermissionMode: payload.claudePermissionMode,
           requestId: payload.id,
         }), previousMessageIds)
         : requestTurnStart(thread.id, payload, previousMessageIds, true)

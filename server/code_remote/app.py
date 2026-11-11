@@ -440,6 +440,9 @@ class SteerRequest(BaseModel):
     direct: bool = False
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
+    claude_model: str | None = Field(default=None, max_length=200)
+    claude_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    claude_permission_mode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] = "default"
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
@@ -1461,13 +1464,12 @@ def prepare_claude_turn_files(
     attachment_ids: list[str],
     store: PdfAttachmentStore,
     temporary_root: Path,
-) -> tuple[Path | None, str, list[Path], list[Path]]:
+) -> tuple[Path, str, list[Path], list[Path]]:
     """Stage this turn's attachments in a private directory visible only to its CLI process."""
-    if not images and not attachment_ids:
-        return None, prompt, [], []
-
     turn_directory = Path(tempfile.mkdtemp(prefix="claude-turn-", dir=temporary_root))
     try:
+        if not images and not attachment_ids:
+            return turn_directory, prompt, [], []
         image_paths = save_turn_images(images, turn_directory)
         attachment_paths: list[Path] = []
         path_overrides: dict[str, Path] = {}
@@ -1785,6 +1787,12 @@ def create_app(
     app_server.enable_terminal_handoff(terminal_handoff)
     claude_code.enable_terminal_handoff(terminal_handoff)
 
+    def claude_attachment_root(thread_id: str) -> Path:
+        session_id = thread_id.removeprefix("claude:")
+        root = runtime_directory / "claude-attachments" / session_id
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return root
+
     async def reap_tmux_terminal_sessions() -> None:
         while True:
             try:
@@ -1819,10 +1827,11 @@ def create_app(
         pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
         if is_claude_thread_id(thread_id):
             turn_directory, prompt, image_paths, attachment_paths = prepare_claude_turn_files(
-                payload["requestText"], images, pdf_ids, pdf_attachments, runtime_directory,
+                payload["requestText"], images, pdf_ids, pdf_attachments, claude_attachment_root(thread_id),
             )
             try:
-                turn_id = await claude_code.start_turn(
+                send_claude = claude_code.steer_turn if steer else claude_code.start_turn
+                turn_id = await send_claude(
                     thread_id,
                     prompt,
                     display_prompt=payload["requestText"] or ("已附加图片" if images else "已附加文件"),
@@ -1928,7 +1937,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.120.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.121.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2799,7 +2808,7 @@ def create_app(
         if is_claude_thread_id(thread_id):
             async def start_claude_turn() -> dict[str, Any]:
                 turn_directory, turn_prompt, image_paths, attachment_paths = prepare_claude_turn_files(
-                    prompt, body.images, body.pdf_attachments, pdf_attachments, runtime_directory,
+                    prompt, body.images, body.pdf_attachments, pdf_attachments, claude_attachment_root(thread_id),
                 )
                 try:
                     turn_id = await claude_code.start_turn(
@@ -2919,6 +2928,31 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
 
         async def steer() -> dict[str, Any]:
+            if is_claude_thread_id(thread_id):
+                turn_directory, turn_prompt, image_paths, attachment_paths = prepare_claude_turn_files(
+                    prompt, body.images, body.pdf_attachments, pdf_attachments, claude_attachment_root(thread_id),
+                )
+                try:
+                    turn_id = await claude_code.steer_turn(
+                        thread_id,
+                        turn_prompt,
+                        display_prompt=prompt or ("已附加图片" if body.images else "已附加文件"),
+                        image_paths=image_paths,
+                        attachment_paths=attachment_paths,
+                        temporary_directory=turn_directory,
+                        request_id=body.request_id,
+                        model=body.claude_model,
+                        effort=body.claude_effort,
+                        permission_mode=body.claude_permission_mode,
+                    )
+                    remember_direct_translation(thread_id, body, turn_id)
+                    await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
+                    return {"turn_id": turn_id}
+                except Exception:
+                    if turn_directory is not None:
+                        shutil.rmtree(turn_directory, ignore_errors=True)
+                    raise
+
             image_paths = save_turn_images(
                 body.images, image_directory,
                 max_storage_bytes=MAX_STORED_IMAGE_BYTES,
@@ -2951,6 +2985,12 @@ def create_app(
         except CodexNoActiveTurnError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except ClaudeThreadBusyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except ClaudeThreadNotFoundError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ClaudeCodeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.websocket("/api/v1/codex/ws")

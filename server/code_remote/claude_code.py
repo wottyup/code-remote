@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -43,6 +44,19 @@ class ClaudeThreadBusyError(ClaudeCodeError):
 
 class ClaudeThreadNotFoundError(ClaudeCodeError):
     pass
+
+
+@dataclass
+class _ClaudeTurnInput:
+    turn_id: str
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    process: asyncio.subprocess.Process | None = None
+    accepting: bool = False
+    accepted_messages: int = 1
+    completed_messages: int = 0
+    request_ids: set[str] = field(default_factory=set)
+    temporary_directories: list[Path] = field(default_factory=list)
 
 
 def is_claude_thread_id(thread_id: str) -> bool:
@@ -98,6 +112,7 @@ class ClaudeCodeServer:
         self._native_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser().resolve()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self._turn_inputs: dict[str, _ClaudeTurnInput] = {}
         self._stdout_drain_tasks: set[asyncio.Task[None]] = set()
         self._interrupts: set[str] = set()
         self._live_replies: dict[str, dict[str, Any]] = {}
@@ -609,6 +624,12 @@ class ClaudeCodeServer:
                 "id": f"assistant-{turn_id}", "turnId": turn_id, "text": "", "createdAt": created_at,
             }
             self._live_terminal_items[thread_id] = {}
+            turn_input = _ClaudeTurnInput(
+                turn_id=turn_id,
+                request_ids={request_id} if request_id else set(),
+                temporary_directories=[temporary_directory] if temporary_directory is not None else [],
+            )
+            self._turn_inputs[thread_id] = turn_input
             await self.emit({
                 "type": "notification",
                 "method": "turn/started",
@@ -642,6 +663,142 @@ class ClaudeCodeServer:
             ))
             return turn_id
 
+    async def steer_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        display_prompt: str | None = None,
+        image_paths: list[Path] | None = None,
+        attachment_paths: list[Path] | None = None,
+        temporary_directory: Path | None = None,
+        request_id: str | None = None,
+        model: str | None = None,
+        effort: str | None = None,
+        permission_mode: str | None = None,
+    ) -> str:
+        """Send a message into the active CLI input stream, or start it as the next turn if it just ended."""
+        if not is_claude_thread_id(thread_id):
+            raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
+        if not prompt.strip() and not image_paths and not attachment_paths:
+            raise ClaudeCodeError("请填写消息或附加文件。")
+
+        turn_input = self._turn_inputs.get(thread_id)
+        row = self._row(thread_id)
+        active_turn_id = row["running_turn_id"]
+        if turn_input is not None and active_turn_id == turn_input.turn_id:
+            await turn_input.ready.wait()
+            async with turn_input.lock:
+                process = turn_input.process
+                row = self._row(thread_id)
+                if request_id and request_id in turn_input.request_ids:
+                    return turn_input.turn_id
+                if (row["running_turn_id"] == turn_input.turn_id and turn_input.accepting
+                        and process is not None and process.returncode is None
+                        and process.stdin is not None and not process.stdin.is_closing()):
+                    display_text = display_prompt if display_prompt is not None else prompt
+                    stream_prompt = self._prompt_with_image_paths(prompt, list(image_paths or []))
+                    try:
+                        self._write_stream_input(process, stream_prompt)
+                        await process.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError, OSError) as error:
+                        turn_input.accepting = False
+                        raise ClaudeCodeError("Claude Code 实时输入通道中断，消息送达状态未确认。") from error
+                    turn_input.accepted_messages += 1
+                    if request_id:
+                        turn_input.request_ids.add(request_id)
+                    if temporary_directory is not None and temporary_directory not in turn_input.temporary_directories:
+                        turn_input.temporary_directories.append(temporary_directory)
+
+                    try:
+                        messages = json.loads(row["messages_json"])
+                    except (TypeError, json.JSONDecodeError):
+                        messages = []
+                    if not isinstance(messages, list):
+                        messages = []
+                    current_user = next((
+                        message for message in reversed(messages)
+                        if isinstance(message, dict) and message.get("role") == "user"
+                        and message.get("turnId") == turn_input.turn_id
+                    ), {})
+                    user_message_id = f"user-{request_id}" if request_id else f"user-{uuid.uuid4()}"
+                    created_at = _now()
+                    messages.append({
+                        "id": user_message_id,
+                        "role": "user",
+                        "text": display_text,
+                        "createdAt": created_at,
+                        "turnId": turn_input.turn_id,
+                        "model": current_user.get("model", "default"),
+                        "effort": current_user.get("effort", "default"),
+                    })
+                    preview = " ".join(display_text.split())[:400] or row["preview"]
+                    with self._connection:
+                        self._connection.execute(
+                            "UPDATE claude_threads SET preview = ?, updated_at = ?, messages_json = ? WHERE thread_id = ?",
+                            (preview, created_at, json.dumps(messages, ensure_ascii=False), thread_id),
+                        )
+                    await self.emit({
+                        "type": "notification",
+                        "method": "item/started",
+                        "params": {"threadId": thread_id, "turnId": turn_input.turn_id, "item": {
+                            "id": user_message_id,
+                            "type": "userMessage",
+                            "status": "completed",
+                            "createdAt": created_at,
+                            "content": [{"type": "text", "text": display_text}],
+                        }},
+                    })
+                    return turn_input.turn_id
+
+        # The stream may finish between the UI check and the write. Preserve
+        # that message by waiting for cleanup and opening the next Claude turn.
+        task = self._tasks.get(thread_id)
+        if task is not None and task is not asyncio.current_task():
+            await asyncio.gather(task, return_exceptions=True)
+        return await self.start_turn(
+            thread_id,
+            prompt,
+            display_prompt=display_prompt,
+            image_paths=image_paths,
+            attachment_paths=attachment_paths,
+            temporary_directory=temporary_directory,
+            request_id=request_id,
+            model=model,
+            effort=effort,
+            permission_mode=permission_mode,
+        )
+
+    @staticmethod
+    def _write_stream_input(process: asyncio.subprocess.Process, prompt: str) -> None:
+        if process.stdin is None:
+            raise ClaudeCodeError("Claude Code 实时输入通道不可用。")
+        record = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            },
+        }
+        process.stdin.write((json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+
+    @staticmethod
+    def _prompt_with_image_paths(prompt: str, image_paths: list[Path]) -> str:
+        if not image_paths:
+            return prompt
+        image_list = "\n".join(f"- {path}" for path in image_paths)
+        return (
+            f"{prompt.rstrip()}\n\n用户附加了以下图片，请使用 Claude Code 的 Read 工具查看图片内容后再回答：\n{image_list}"
+        )
+
+    @staticmethod
+    async def _close_stream_input(process: asyncio.subprocess.Process) -> None:
+        if process.stdin is None or process.stdin.is_closing():
+            return
+        process.stdin.close()
+        with suppress(BrokenPipeError, ConnectionResetError, OSError):
+            await process.stdin.wait_closed()
+
     async def _run_turn(
         self,
         thread_id: str,
@@ -663,23 +820,22 @@ class ClaudeCodeServer:
         process: asyncio.subprocess.Process | None = None
         exit_task: asyncio.Task[int] | None = None
         line_task: asyncio.Task[bytes] | None = None
+        turn_input = self._turn_inputs.get(thread_id)
         try:
+            if turn_input is None or turn_input.turn_id != turn_id:
+                raise ClaudeCodeError("Claude Code 实时输入状态已失效。")
             row = self._row(thread_id)
             started = bool(row["started"])
             cwd = Path(row["cwd"])
             if not cwd.is_dir():
                 raise ClaudeCodeError("Claude Code 对话的工作目录已不可用。")
-            if image_paths:
-                image_list = "\n".join(f"- {path}" for path in image_paths)
-                prompt = (
-                    f"{prompt.rstrip()}\n\n用户附加了以下图片，请使用 Claude Code 的 Read 工具查看图片内容后再回答：\n{image_list}"
-                )
+            prompt = self._prompt_with_image_paths(prompt, image_paths)
             command = self._executable()
             if command is None:
                 raise ClaudeCodeError("找不到 Claude Code CLI。")
             args = [
                 str(command), "--print", "--output-format", "stream-json", "--include-partial-messages",
-                "--verbose",
+                "--input-format", "stream-json", "--verbose",
             ]
             if self._terminal_handoff and os.name != "nt" and self._terminal_handoff.is_enabled(thread_id):
                 context = uuid.uuid4().hex
@@ -703,7 +859,13 @@ class ClaudeCodeServer:
             if permission_mode and permission_mode != "default":
                 args.extend(["--permission-mode", permission_mode])
             args.extend(["--resume", row["session_id"]] if started else ["--session-id", row["session_id"]])
-            for directory in {path.parent.resolve() for path in [*image_paths, *attachment_paths] if path.exists()}:
+            allowed_attachment_directories = {
+                path.parent.resolve() for path in [*image_paths, *attachment_paths] if path.exists()
+            }
+            if temporary_directory is not None:
+                allowed_attachment_directories.add(temporary_directory.resolve())
+                allowed_attachment_directories.add(temporary_directory.parent.resolve())
+            for directory in allowed_attachment_directories:
                 args.extend(["--add-dir", str(directory)])
             kwargs: dict[str, Any] = {
                 "stdin": asyncio.subprocess.PIPE,
@@ -718,12 +880,12 @@ class ClaudeCodeServer:
                 kwargs["start_new_session"] = True
             process = await asyncio.create_subprocess_exec(*args, **kwargs)
             self._processes[thread_id] = process
-            if process.stdin:
-                process.stdin.write(prompt.encode("utf-8") + b"\n")
+            turn_input.process = process
+            async with turn_input.lock:
+                self._write_stream_input(process, prompt)
                 await process.stdin.drain()
-                process.stdin.close()
-                with suppress(BrokenPipeError, ConnectionResetError):
-                    await process.stdin.wait_closed()
+                turn_input.accepting = True
+                turn_input.ready.set()
             if thread_id in self._interrupts:
                 await self._terminate_process(process)
 
@@ -849,6 +1011,12 @@ class ClaudeCodeServer:
                         result_error = "Claude Code 请求未完成，可能与模型服务、登录状态、权限或网络连接有关。"
                     else:
                         result_error = None
+                    if not record.get("parent_tool_use_id"):
+                        async with turn_input.lock:
+                            turn_input.completed_messages += 1
+                            if turn_input.completed_messages >= turn_input.accepted_messages:
+                                turn_input.accepting = False
+                                await self._close_stream_input(process)
 
             return_code = await exit_task
             if thread_id in self._interrupts:
@@ -865,6 +1033,8 @@ class ClaudeCodeServer:
                     "Claude Code 请求未完成，可能与模型服务、登录状态、权限或网络连接有关。"
                     if received_init else "Claude Code CLI 启动失败，请检查本机 CLI 参数与配置。"
                 )
+            elif turn_input.completed_messages < turn_input.accepted_messages and result_error is None:
+                result_error = "Claude Code 未处理所有已送达的消息，回复可能不完整。"
             elif stream_parse_error and not received_result:
                 result_error = "Claude Code 回复流包含无法读取的数据，已保留已接收的部分内容。"
             elif not received_result and assistant_text and result_error is None:
@@ -888,11 +1058,20 @@ class ClaudeCodeServer:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
             completed_at = _now()
+            if turn_input is not None:
+                async with turn_input.lock:
+                    turn_input.accepting = False
+                    turn_input.ready.set()
+                    if process is not None:
+                        await self._close_stream_input(process)
             if process and process.returncode is None:
                 await self._terminate_process(process)
             self._processes.pop(thread_id, None)
-            if temporary_directory is not None:
-                shutil.rmtree(temporary_directory, ignore_errors=True)
+            temporary_directories = turn_input.temporary_directories if turn_input is not None else []
+            if temporary_directory is not None and temporary_directory not in temporary_directories:
+                temporary_directories.append(temporary_directory)
+            for directory in temporary_directories:
+                shutil.rmtree(directory, ignore_errors=True)
             status = "stopped" if thread_id in self._interrupts else "failed" if result_error else "completed"
             final_text = assistant_text
             if result_error and not final_text:
@@ -912,6 +1091,8 @@ class ClaudeCodeServer:
             current_task = asyncio.current_task()
             if self._tasks.get(thread_id) is current_task:
                 self._tasks.pop(thread_id, None)
+            if self._turn_inputs.get(thread_id) is turn_input:
+                self._turn_inputs.pop(thread_id, None)
 
     @staticmethod
     def _tool_item(tool_id: str, name: str, inputs: Any) -> dict[str, Any]:
