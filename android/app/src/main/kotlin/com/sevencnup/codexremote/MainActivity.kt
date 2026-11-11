@@ -946,6 +946,23 @@ class MainActivity : Activity() {
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
+    private enum class ComposerPreferenceSection(val title: String) {
+        MODEL("模型"), EFFORT("思考"), PERMISSION("权限"),
+    }
+    private data class ComposerPreferenceMenu(
+        val view: LinearLayout,
+        val tabs: Map<ComposerPreferenceSection, TextView>,
+        val options: LinearLayout,
+        val scroll: ScrollView,
+        val scope: String,
+        val queueItem: JSONObject?,
+        var section: ComposerPreferenceSection = ComposerPreferenceSection.MODEL,
+        var displayedSection: ComposerPreferenceSection? = null,
+        var displayedChoices: List<Pair<String, String>> = emptyList(),
+        var displayedSelection: String? = null,
+        var displayedLabels: Triple<String, String, String>? = null,
+    )
+    private var composerPreferenceMenu: ComposerPreferenceMenu? = null
     private var webPreviewPopup: PopupWindow? = null
     private var webPreviewView: WebView? = null
     private var webPreviewRelayout: (() -> Unit)? = null
@@ -1342,6 +1359,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        dismissComposerPreferences()
         handler.removeCallbacks(updateDownloadPoll)
         webPreviewView?.onPause()
         activityShimmerAnimator?.cancel()
@@ -1376,6 +1394,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        preferencePopup?.dismiss()
         clearLiveReply()
         closeWebPreview()
         activityShimmerAnimator?.cancel()
@@ -1546,6 +1565,7 @@ class MainActivity : Activity() {
         connectionChatSelections.restore(activeConnectionId, prefs.getString(KEY_LEGACY_CONNECTION_ID, null), fallbackMode)
 
     private fun showConnectionPage(message: String? = null) {
+        preferencePopup?.dismiss()
         closeWebPreview()
         root = FrameLayout(this)
         installThemeBackground(root)
@@ -1987,6 +2007,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderHome() {
+        preferencePopup?.dismiss()
         closeWebPreview()
         root = ChatRootLayout(this).apply { isFocusableInTouchMode = true }
         installThemeBackground(root)
@@ -2313,11 +2334,15 @@ class MainActivity : Activity() {
             setLineSpacing(dp(2).toFloat(), 1.25f)
             background = null
             setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus && !imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+                if (hasFocus) {
+                    dismissComposerPreferences()
+                    if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+                }
             }
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        dismissComposerPreferences()
                         view.parent?.requestDisallowInterceptTouchEvent(true)
                         if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
                     }
@@ -2605,6 +2630,40 @@ class MainActivity : Activity() {
             cornerRadius = dp(22).toFloat()
             setStroke(dp(1), edge)
         }
+    }
+
+    private fun composerMenuGlassBackground(area: Rect): Drawable {
+        val surface = when (themeName) {
+            "light" -> Color.rgb(239, 244, 252)
+            "warm" -> Color.rgb(250, 242, 232)
+            "custom" -> OPAQUE_PANEL
+            else -> Color.rgb(25, 29, 39)
+        }
+        val edge = when (themeName) {
+            "light" -> colorWithAlpha(Color.rgb(102, 121, 154), .3f)
+            "warm" -> colorWithAlpha(Color.rgb(145, 112, 76), .3f)
+            "custom" -> BORDER
+            else -> colorWithAlpha(Color.rgb(221, 230, 255), .24f)
+        }
+        val sheen = when (themeName) {
+            "light" -> .82f
+            "warm" -> .72f
+            "custom" -> .21f
+            else -> .19f
+        }
+        val glass = ComposerGlassDrawable(
+            intArrayOf(colorWithAlpha(surface, .76f), colorWithAlpha(surface, .84f)),
+            if (themeName == "custom") TEXT else Color.WHITE,
+            edge, dp(16).toFloat(), sheen,
+        )
+        val backdrop = captureFrostedBackdrop(root, area, dp(26).toFloat()) ?: return glass
+        return LayerDrawable(arrayOf(
+            BitmapDrawable(resources, backdrop).apply {
+                gravity = Gravity.FILL
+                setFilterBitmap(true)
+            },
+            glass,
+        ))
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
@@ -3419,6 +3478,7 @@ class MainActivity : Activity() {
     }
 
     private fun setSidebarVisible(visible: Boolean) {
+        if (visible) dismissComposerPreferences()
         if (!::drawer.isInitialized) return
         val host = sidebarHost ?: return
         if (visible && (imeInsetVisible || window.currentFocus is EditText)) {
@@ -3804,6 +3864,7 @@ class MainActivity : Activity() {
         if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
         val id = thread.optString("id")
         if (id.isBlank()) return
+        dismissComposerPreferences()
         if (terminalOverlay != null && terminalThreadId != id) closeTerminal()
         val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
         val memoryHistory = historyMemoryCache[id]
@@ -9230,6 +9291,7 @@ class MainActivity : Activity() {
             showToast(claudeStatusMessage)
             return
         }
+        dismissComposerPreferences()
         if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
         rememberCurrentConnectionSelection()
@@ -9414,6 +9476,7 @@ class MainActivity : Activity() {
         composerEffortLabel.text = tr(effort)
         composerPreferenceButton.contentDescription = "${tr("模型")}: ${tr(model)}, ${tr("思考等级")}: ${tr(effort)}, ${tr("权限")}: ${tr(permission)}"
         composerPreferenceButton.tooltipText = composerPreferenceButton.contentDescription
+        refreshComposerPreferenceMenu()
     }
 
     private fun composerPreferenceLabels(): Triple<String, String, String> {
@@ -9463,96 +9526,179 @@ class MainActivity : Activity() {
     }
 
     private fun showComposerPreferences() {
-        val (model, effort, permission) = composerPreferenceLabels()
-        val actions: List<Triple<String, String, () -> Unit>> = listOf(
-            Triple("模型", model, { showModelOptions() }),
-            Triple("思考等级", effort, { showEffortOptions() }),
-            Triple("权限", permission, { showPermissionOptions() }),
-        )
-        val options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        actions.forEach { (title, value, action) ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), 0, dp(8), 0)
-                isClickable = true
-                isFocusable = false
-                contentDescription = "${tr(title)}: ${tr(value)}"
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-                setOnClickListener {
-                    preferencePopup?.dismiss()
-                    action()
-                }
-            }
-            row.addView(label(title, 12, MUTED).apply {
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(WRAP, WRAP))
-            row.addView(label(value, 12, TEXT).apply {
-                gravity = Gravity.END or Gravity.CENTER_VERTICAL
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(0, WRAP, 1f).apply { leftMargin = dp(12) })
-            row.addView(ImageView(this).apply {
-                setPixelAwareImageResource(iconResource("chevron_right"))
-                imageTintList = retroIconTint(MUTED)
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(8) })
-            options.addView(row, LinearLayout.LayoutParams(MATCH, dp(44)))
+        if (composerPreferenceMenu != null && preferencePopup?.isShowing == true) {
+            refreshComposerPreferenceMenu()
+            return
         }
-        val menu = ScrollView(this).apply {
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            background = rounded(PANEL, dp(12), BORDER, dp(1))
+        val tabs = linkedMapOf<ComposerPreferenceSection, TextView>()
+        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
         }
-        showPreferencePopup(composerPreferenceButton, menu, dp(140))
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = rounded(PANEL, dp(12), BORDER, dp(1))
+            addView(tabRow, LinearLayout.LayoutParams(MATCH, dp(36)).apply { bottomMargin = dp(4) })
+            addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        }
+        ComposerPreferenceSection.values().forEach { section ->
+            val tab = label(section.title, 11, SUBTLE, true).apply {
+                gravity = Gravity.CENTER
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                isFocusable = false
+                setOnClickListener {
+                    val current = composerPreferenceMenu ?: return@setOnClickListener
+                    if (current.view !== menu || current.section == section) return@setOnClickListener
+                    current.section = section
+                    refreshComposerPreferenceMenu()
+                }
+            }
+            tabs[section] = tab
+            tabRow.addView(tab, LinearLayout.LayoutParams(0, MATCH, 1f))
+        }
+        showPreferencePopup(composerPreferenceButton, menu, dp(244), composerMenu = true)
+        composerPreferenceMenu = ComposerPreferenceMenu(menu, tabs, options, scroll, draftStorageKey(), queueEditItem)
+        refreshComposerPreferenceMenu()
     }
 
-    private fun showModelOptions() {
-        val values: List<Pair<String, String>> = if (currentMode == "codex") {
-            (0 until models.length()).mapNotNull { index ->
-                val model = models.optJSONObject(index) ?: return@mapNotNull null
-                val value = model.optString("model").ifBlank { model.optString("id") }
-                if (value.isBlank()) null else value to model.optString("displayName").ifBlank { value }
+    private fun dismissComposerPreferences() {
+        val menu = composerPreferenceMenu ?: return
+        if (preferencePopup?.contentView === menu.view) preferencePopup?.dismiss()
+        composerPreferenceMenu = null
+    }
+
+    private fun refreshComposerPreferenceMenu() {
+        val menu = composerPreferenceMenu ?: return
+        if (menu.scope != draftStorageKey() || menu.queueItem !== queueEditItem) {
+            dismissComposerPreferences()
+            return
+        }
+        val labels = composerPreferenceLabels()
+        val section = menu.section
+        val choices = composerPreferenceChoices(section)
+        val selected = selectedComposerPreference(section)
+        val sectionChanged = menu.displayedSection != section
+        if (!sectionChanged && menu.displayedChoices == choices && menu.displayedSelection == selected &&
+            menu.displayedLabels == labels) return
+        menu.displayedSelection = selected
+        menu.displayedLabels = labels
+        val (model, effort, permission) = labels
+        menu.tabs.forEach { (section, tab) ->
+            val active = section == menu.section
+            val value = when (section) {
+                ComposerPreferenceSection.MODEL -> model
+                ComposerPreferenceSection.EFFORT -> effort
+                ComposerPreferenceSection.PERMISSION -> permission
             }
-        } else listOf("default" to "本机默认模型", "opus" to "Claude Opus", "sonnet" to "Claude Sonnet", "fable" to "Claude Fable")
-        val choices = listOf("default" to "默认") + values
-        showChoicePopup(composerPreferenceButton, "模型", choices, preference(if (currentMode == "codex") "model" else "claudeModel") ?: "default") { selected ->
-            savePreference(if (currentMode == "codex") "model" else "claudeModel", selected.takeIf { it != "default" })
-            if (currentMode == "codex") savePreference("effort", modelDefaultEffort(selected))
+            tab.isSelected = active
+            tab.contentDescription = "${tr(section.title)}: ${tr(value)}"
+            tab.setTextColor(if (active) TEXT else SUBTLE)
+            tab.background = if (active) rounded(colorWithAlpha(ACCENT, .16f), dp(9))
+                else ColorDrawable(Color.TRANSPARENT)
+        }
+        if (sectionChanged || menu.displayedChoices != choices) {
+            menu.options.removeAllViews()
+            menu.displayedSection = section
+            menu.displayedChoices = choices
+            choices.forEach { (value, name) ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                    minimumHeight = dp(36)
+                    isFocusable = false
+                    tag = value
+                    setOnClickListener {
+                        refreshComposerPreferenceMenu()
+                        if (composerPreferenceMenu !== menu || menu.section != section ||
+                            menu.displayedChoices.none { it.first == value }) return@setOnClickListener
+                        if (selectedComposerPreference(section) != value) applyComposerPreference(section, value)
+                    }
+                }
+                row.addView(label(name, 12, SUBTLE).apply {
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                row.addView(ImageView(this).apply {
+                    setPixelAwareImageResource(iconResource("check"))
+                    imageTintList = retroIconTint(ACCENT)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { leftMargin = dp(8) })
+                menu.options.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
+            }
+            if (sectionChanged) menu.scroll.scrollTo(0, 0)
+        }
+        for (index in 0 until menu.options.childCount) {
+            val row = menu.options.getChildAt(index) as LinearLayout
+            val active = row.tag == selected
+            val text = row.getChildAt(0) as TextView
+            row.isSelected = active
+            row.background = if (active) rounded(colorWithAlpha(ACCENT, .12f), dp(9))
+                else ColorDrawable(Color.TRANSPARENT)
+            row.contentDescription = "${text.text}${if (active) ", ${tr("已选择")}" else ""}"
+            text.setTextColor(if (active) TEXT else SUBTLE)
+            text.typeface = themedTypeface(active)
+            row.getChildAt(1).visibility = if (active) View.VISIBLE else View.INVISIBLE
         }
     }
 
-    private fun showEffortOptions() {
-        val choices = if (currentMode == "codex") {
-            val selected = preference("model")
-            val model = (0 until models.length()).mapNotNull { models.optJSONObject(it) }.firstOrNull {
-                it.optString("model").ifBlank { it.optString("id") } == selected
-            }
-            val efforts = model?.optJSONArray("supportedReasoningEfforts")
-            if (efforts != null && efforts.length() > 0) (0 until efforts.length()).mapNotNull { index ->
-                val effort = efforts.optJSONObject(index)?.optString("reasoningEffort") ?: return@mapNotNull null
-                effort to effortLabel(effort)
-            } else listOf("minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High")
-        } else listOf("default" to "Default", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High", "max" to "Max")
-        val key = if (currentMode == "codex") "effort" else "claudeEffort"
-        showChoicePopup(composerPreferenceButton, "Reasoning Effort", listOf("default" to "Default") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
+    private fun selectedComposerPreference(section: ComposerPreferenceSection): String = when (section) {
+        ComposerPreferenceSection.MODEL -> preference(if (currentMode == "codex") "model" else "claudeModel") ?: "default"
+        ComposerPreferenceSection.EFFORT -> preference(if (currentMode == "codex") "effort" else "claudeEffort") ?: "default"
+        ComposerPreferenceSection.PERMISSION -> if (currentMode == "codex") preference("approvalPolicy") ?: "on-request"
+            else preference("claudePermissionMode") ?: "default"
     }
 
-    private fun showPermissionOptions() {
-        if (currentMode == "codex") {
-            showChoicePopup(composerPreferenceButton, "授权", listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问"), preference("approvalPolicy") ?: "on-request") {
-                savePreference("approvalPolicy", it)
-                val threadId = activeThreadId
-                if (threadId != null && queueEditItem == null) runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/settings", JSONObject().put("approval_policy", it)) })
+    private fun composerPreferenceChoices(section: ComposerPreferenceSection): List<Pair<String, String>> = when (section) {
+        ComposerPreferenceSection.MODEL -> if (currentMode == "codex") {
+            listOf("default" to "默认") + (0 until models.length()).mapNotNull { index ->
+                val model = models.optJSONObject(index) ?: return@mapNotNull null
+                val value = model.optString("model").ifBlank { model.optString("id") }
+                if (value.isBlank() || value == "default") null else value to model.optString("displayName").ifBlank { value }
             }
-        } else {
-            showChoicePopup(composerPreferenceButton, "权限模式", listOf(
-                "default" to "本机默认权限", "manual" to "手动确认", "acceptEdits" to "自动接受编辑",
-                "auto" to "自动模式", "dontAsk" to "不询问（拒绝需授权操作）", "plan" to "计划模式",
-            ), preference("claudePermissionMode") ?: "default") { savePreference("claudePermissionMode", it) }
+        } else listOf("default" to "本机默认模型", "opus" to "Claude Opus", "sonnet" to "Claude Sonnet", "fable" to "Claude Fable")
+        ComposerPreferenceSection.EFFORT -> {
+            val values = if (currentMode == "codex") {
+                val selected = preference("model")
+                val model = (0 until models.length()).mapNotNull { models.optJSONObject(it) }.firstOrNull {
+                    it.optString("model").ifBlank { it.optString("id") } == selected
+                }
+                val efforts = model?.optJSONArray("supportedReasoningEfforts")
+                if (efforts != null && efforts.length() > 0) (0 until efforts.length()).mapNotNull { index ->
+                    val effort = efforts.optJSONObject(index)?.optString("reasoningEffort") ?: return@mapNotNull null
+                    effort to effortLabel(effort)
+                } else listOf("minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High")
+            } else listOf("low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High", "max" to "Max")
+            (listOf("default" to "Default") + values).distinctBy { it.first }
+        }
+        ComposerPreferenceSection.PERMISSION -> if (currentMode == "codex") {
+            listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问")
+        } else listOf(
+            "default" to "本机默认权限", "manual" to "手动确认", "acceptEdits" to "自动接受编辑",
+            "auto" to "自动模式", "dontAsk" to "不询问（拒绝需授权操作）", "plan" to "计划模式",
+        )
+    }
+
+    private fun applyComposerPreference(section: ComposerPreferenceSection, value: String) {
+        when (section) {
+            ComposerPreferenceSection.MODEL -> {
+                savePreference(if (currentMode == "codex") "model" else "claudeModel", value.takeIf { it != "default" })
+                if (currentMode == "codex") savePreference("effort", modelDefaultEffort(value))
+            }
+            ComposerPreferenceSection.EFFORT -> savePreference(
+                if (currentMode == "codex") "effort" else "claudeEffort", value.takeIf { it != "default" },
+            )
+            ComposerPreferenceSection.PERMISSION -> if (currentMode == "codex") {
+                savePreference("approvalPolicy", value)
+                val threadId = activeThreadId
+                if (threadId != null && queueEditItem == null) runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/settings", JSONObject().put("approval_policy", value)) })
+            } else savePreference("claudePermissionMode", value)
         }
     }
 
@@ -9601,7 +9747,7 @@ class MainActivity : Activity() {
         showPreferencePopup(anchor, menu, dp(32) + choices.size * dp(32))
     }
 
-    private fun showPreferencePopup(anchor: View, menu: View, preferredHeight: Int) {
+    private fun showPreferencePopup(anchor: View, menu: View, preferredHeight: Int, composerMenu: Boolean = false) {
         preferencePopup?.dismiss()
         val anchorLocation = IntArray(2)
         val rootLocation = IntArray(2)
@@ -9611,23 +9757,40 @@ class MainActivity : Activity() {
         val maxHeight = min(dp(244), availableAbove.coerceAtLeast(dp(118)))
         val menuHeight = min(preferredHeight, maxHeight)
         val popupWidth = min(dp(224), (root.width - dp(28)).coerceAtLeast(dp(190)))
-        val popup = PopupWindow(menu, popupWidth, menuHeight, false).apply {
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            elevation = dp(12).toFloat()
-            isTouchable = true
-            isOutsideTouchable = true
-            isClippingEnabled = true
-            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
-            setOnDismissListener { if (preferencePopup === this) preferencePopup = null }
-        }
-        preferencePopup = popup
         val x = (anchorLocation[0] - rootLocation[0])
             .coerceIn(dp(10), (root.width - popupWidth - dp(10)).coerceAtLeast(dp(10)))
         val anchorTop = anchorLocation[1] - rootLocation[1]
         val above = anchorTop - menuHeight - dp(5)
-        val safeTop = systemInsetTop + dp(6)
-        val y = above.coerceAtLeast(safeTop)
+        val y = above.coerceAtLeast(systemInsetTop + dp(6))
+        val glass = composerMenu && !retroTheme
+        if (glass) {
+            menu.background = composerMenuGlassBackground(Rect(x, y, x + popupWidth, y + menuHeight))
+            menu.outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, dp(16).toFloat())
+                }
+            }
+            menu.clipToOutline = true
+        }
+        val popup = PopupWindow(menu, popupWidth, menuHeight, false).apply {
+            setBackgroundDrawable(if (glass) object : ColorDrawable(Color.TRANSPARENT) {
+                override fun getOutline(outline: Outline) {
+                    outline.setRoundRect(bounds, dp(16).toFloat())
+                    outline.alpha = .65f
+                }
+            } else ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+            isTouchable = true
+            isOutsideTouchable = !composerMenu
+            isClippingEnabled = true
+            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            setOnDismissListener {
+                if (preferencePopup === this) preferencePopup = null
+                if (composerPreferenceMenu?.view === menu) composerPreferenceMenu = null
+            }
+        }
+        preferencePopup = popup
         popup.showAtLocation(root, Gravity.TOP or Gravity.START, x, y)
     }
 
@@ -11607,6 +11770,7 @@ class MainActivity : Activity() {
     }
 
     private fun setWorkspaceVisible(visible: Boolean) {
+        if (visible) dismissComposerPreferences()
         val host = workspaceHost ?: if (visible) {
             ensureWorkspaceBrowser()
             workspaceHost ?: return
