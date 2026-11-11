@@ -4411,6 +4411,9 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .ssh-mcp-profile__summary { overflow-wrap: anywhere; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.4; opacity: .7; }
 .ssh-mcp-profile__fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .ssh-mcp-profile__fields[hidden] { display: none; }
+.ssh-mcp-advanced { display: grid; gap: 16px; padding-top: 2px; }
+.ssh-mcp-advanced > summary { width: fit-content; color: var(--settings-muted-text, inherit); cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); }
+.ssh-mcp-advanced:not([open]) > :not(summary) { display: none; }
 .ssh-mcp-profile__remove { min-height: 36px; flex: 0 0 auto; }
 .ssh-mcp-readonly { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--settings-inner-border); border-radius: 9px; background: var(--settings-inner-surface); cursor: pointer; }
 .ssh-mcp-readonly > input { width: 17px; height: 17px; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--settings-nav-accent); }

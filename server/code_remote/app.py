@@ -31,7 +31,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
 from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
@@ -366,8 +366,9 @@ class SshMcpProfileRequest(BaseModel):
     host: str = Field(min_length=1, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
     user: str = Field(min_length=1, max_length=128)
-    auth: Literal["agent", "key"] = "agent"
+    auth: Literal["agent", "key", "password"] = "agent"
     keyRef: str | None = Field(default=None, max_length=2_048)
+    password: SecretStr | None = Field(default=None, exclude=True)
     group: Literal["prod", "staging", "dev"] = "prod"
     role: Literal["viewer", "operator", "admin"] = "viewer"
     readOnly: bool = True
@@ -1927,7 +1928,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.118.2-dev.14", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.119.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2228,11 +2229,18 @@ def create_app(
 
     @app.put("/api/v1/ssh-mcp/settings")
     async def save_ssh_mcp_settings(body: SshMcpSettingsRequest) -> dict[str, Any]:
-        profiles = [profile.model_dump(exclude_none=True) for profile in body.profiles]
+        profiles = [profile.model_dump(exclude_none=True, exclude={"password"}) for profile in body.profiles]
+        passwords = {
+            profile.name: profile.password.get_secret_value()
+            for profile in body.profiles
+            if profile.password is not None and profile.password.get_secret_value()
+        }
+        if any("\x00" in password or len(password) > 4_096 for password in passwords.values()):
+            raise HTTPException(status_code=422, detail="SSH 密码格式无效。")
         if any(profile["auth"] == "key" and not profile.get("keyRef") for profile in profiles):
             raise HTTPException(status_code=422, detail="使用私钥认证时，请填写 Code Remote 主机上的私钥文件路径。")
         try:
-            return ssh_mcp_settings.save(profiles)
+            return ssh_mcp_settings.save(profiles, passwords)
         except SshMcpSettingsError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 

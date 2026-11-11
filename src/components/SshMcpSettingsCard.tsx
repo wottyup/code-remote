@@ -20,15 +20,20 @@ interface ProfileDraft {
 
 let nextDraftId = 1
 
-function newProfile(): SshMcpProfile {
+function newProfile(id: number, name: string): SshMcpProfile {
   return {
-    name: '', host: '', port: 22, user: '', auth: 'agent', group: 'prod', role: 'viewer',
+    name, host: '', port: 22, user: '', auth: 'password', group: 'prod', role: 'viewer',
     readOnly: true, approvalPolicy: 'ask-all',
   }
 }
 
 function draftsFor(profiles: SshMcpProfile[]): ProfileDraft[] {
   return profiles.map((value) => ({ id: nextDraftId++, value: { ...value }, persisted: true, collapsed: true }))
+}
+
+function emptyDraft(): ProfileDraft {
+  const id = nextDraftId++
+  return { id, value: newProfile(id, `ssh-server-${id}`), persisted: false, collapsed: false }
 }
 
 function errorMessage(reason: unknown): string {
@@ -52,7 +57,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
     void codexRemoteClient.sshMcpSettings(token).then((result) => {
       if (cancelled) return
       setSettings(result)
-      setProfiles(draftsFor(result.profiles))
+      setProfiles(result.profiles.length ? draftsFor(result.profiles) : [emptyDraft()])
     }).catch((reason: unknown) => {
       if (!cancelled) setMessage({ text: errorMessage(reason), error: true })
     }).finally(() => { if (!cancelled) setLoading(false) })
@@ -67,7 +72,14 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
   }
 
   function addProfile() {
-    setProfiles((current) => [...current, { id: nextDraftId++, value: newProfile(), persisted: false, collapsed: false }])
+    const id = nextDraftId++
+    setProfiles((current) => {
+      const names = new Set(current.map(({ value }) => value.name.toLowerCase()))
+      let name = `ssh-server-${id}`
+      let suffix = 1
+      while (names.has(name.toLowerCase())) name = `ssh-server-${id}-${suffix++}`
+      return [...current, { id, value: newProfile(id, name), persisted: false, collapsed: false }]
+    })
     setMessage(null)
   }
 
@@ -88,12 +100,16 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
     setSaving(true)
     setMessage(null)
     try {
-      const result = await codexRemoteClient.saveSshMcpSettings(token, profiles.map(({ value }) => ({
-        ...value,
-        keyRef: value.auth === 'key' ? value.keyRef?.trim() || undefined : undefined,
-        trustedHostKey: value.trustedHostKey?.trim() || undefined,
-        workdir: value.workdir?.trim() || undefined,
-      })))
+      const result = await codexRemoteClient.saveSshMcpSettings(token, profiles.map(({ value }) => {
+        const profile = { ...value }
+        delete profile.hasPassword
+        return {
+          ...profile,
+          keyRef: profile.auth === 'key' ? profile.keyRef?.trim() || undefined : undefined,
+          trustedHostKey: profile.trustedHostKey?.trim() || undefined,
+          workdir: profile.workdir?.trim() || undefined,
+        }
+      }))
       setSettings(result)
       setProfiles(draftsFor(result.profiles))
       setMessage({ text: result.profiles.length ? 'SSH MCP 配置已保存；新建或重新打开的 Codex 对话会使用这些服务器。' : 'SSH MCP 配置已移除。', error: false })
@@ -108,7 +124,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
     <div className="theme-settings-card__heading">
       <div>
         <h2><span className="ssh-mcp-shield" aria-hidden="true">SSH</span>{ui('SSH MCP 服务器')}</h2>
-        <p>{ui('配置 Codex 可使用的 SSH 服务器，并分别限制它能执行的命令。')}</p>
+        <p>{ui('填写 IP、端口、用户名和密码即可添加 SSH 服务器。')}</p>
       </div>
       <span className="theme-settings-card__badge">{ui('仅 Codex')}</span>
     </div>
@@ -117,12 +133,11 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
       {!loading && settings && !settings.available ? <p className="native-config__message native-config__message--error" role="status">
         {ui('SSH MCP 运行依赖不可用。请确认 Code Remote 工作区已安装 pnpm 依赖。')}
       </p> : null}
-      <p className="native-config__hint">{ui('默认使用最严格设置：生产分组、viewer 角色、只读，并逐次询问每条命令。请只连接可信服务器。')}</p>
       {profiles.length === 0 && !loading ? <p className="native-config__message">{ui('尚未配置 SSH 服务器。')}</p> : null}
       <form className="native-config__form" onSubmit={(event) => { void save(event) }}>
         {profiles.map(({ id, value, persisted, collapsed }, index) => {
           const fieldsId = `ssh-mcp-profile-fields-${id}`
-          const title = `${ui('服务器')} ${index + 1}${value.name ? ' · ' + value.name : ''}`
+          const title = `${ui('服务器')} ${index + 1}`
           const summary = [value.host ? `${value.host}:${value.port}` : '', value.user].filter(Boolean).join(' · ')
           return <section className="native-config__group ssh-mcp-profile" key={id} aria-label={ui('SSH MCP 服务器配置')}>
           <div className="ssh-mcp-profile__heading">
@@ -145,34 +160,40 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
           </div>
           <fieldset id={fieldsId} className="ssh-mcp-profile__fields" disabled={disabled || collapsed} hidden={collapsed}>
           <div className="native-config__columns">
-            <label className="native-config__field"><span>{ui('服务器名称')}</span><input value={value.name} onChange={(event) => update(id, { name: event.target.value })} placeholder="prod-web" maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" required disabled={disabled} /></label>
-            <label className="native-config__field"><span>{ui('主机地址')}</span><input value={value.host} onChange={(event) => update(id, { host: event.target.value })} placeholder="server.example.com" maxLength={255} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /></label>
-            <label className="native-config__field"><span>{ui('SSH 端口')}</span><input type="number" min={1} max={65535} value={value.port} onChange={(event) => update(id, { port: Number(event.target.value) })} required disabled={disabled} /></label>
+            <label className="native-config__field"><span>{ui('IP 地址 / 主机名')}</span><input value={value.host} onChange={(event) => update(id, { host: event.target.value })} placeholder="192.168.1.10" maxLength={255} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /></label>
+            <label className="native-config__field"><span>{ui('端口')}</span><input type="number" min={1} max={65535} value={value.port} onChange={(event) => update(id, { port: Number(event.target.value) })} required disabled={disabled} /></label>
             <label className="native-config__field"><span>{ui('用户名')}</span><input value={value.user} onChange={(event) => update(id, { user: event.target.value })} maxLength={128} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /></label>
-            <div className="native-config__field"><TranslationSelect label={ui('SSH 认证')} value={value.auth} disabled={disabled} onChange={(auth) => update(id, { auth: auth as SshMcpProfile['auth'] })} options={[
-              { value: 'agent', label: ui('SSH Agent') },
-              { value: 'key', label: ui('私钥文件路径') },
-            ]} /><small>{ui('认证在运行 Code Remote 的电脑上完成。网页不会上传密码或私钥内容。')}</small></div>
-            {value.auth === 'key' ? <label className="native-config__field"><span>{ui('私钥文件路径')}</span><input value={value.keyRef ?? ''} onChange={(event) => update(id, { keyRef: event.target.value })} placeholder="~/.ssh/id_ed25519" maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /><small>{ui('填写运行 Code Remote 的电脑上的路径；Windows 请使用完整路径。')}</small></label> : null}
-            <div className="native-config__field"><TranslationSelect label={ui('主机分组')} value={value.group} disabled={disabled} onChange={(group) => update(id, { group: group as SshMcpHostGroup })} options={[
-              { value: 'prod', label: ui('生产环境') },
-              { value: 'staging', label: ui('预发布环境') },
-              { value: 'dev', label: ui('开发环境') },
-            ]} /><small>{ui('生产环境使用更严格的内置命令权限。')}</small></div>
-            <div className="native-config__field"><TranslationSelect label={ui('命令角色')} value={value.role} disabled={disabled} onChange={(role) => update(id, { role: role as SshMcpRole })} options={[
-              { value: 'viewer', label: ui('viewer · 只读为主') },
-              { value: 'operator', label: ui('operator · 常规运维') },
-              { value: 'admin', label: ui('admin · 管理操作') },
-            ]} /><small>{ui('角色与主机分组共同决定可运行的命令类别。')}</small></div>
-            <div className="native-config__field"><TranslationSelect label={ui('命令确认')} value={value.approvalPolicy} disabled={disabled} onChange={(approvalPolicy) => update(id, { approvalPolicy: approvalPolicy as SshMcpApprovalPolicy })} options={[
-              { value: 'ask-all', label: ui('每条命令都询问') },
-              { value: 'ask-destructive', label: ui('仅高风险命令询问') },
-              { value: 'deny', label: ui('拒绝需确认的命令') },
-            ]} /><small>{ui('自动批准已关闭；逐次确认会在 Codex 聊天中显示命令内容。')}</small></div>
-            <label className="native-config__field"><span>{ui('服务器 SSH 主机指纹')} <em>{ui('可选')}</em></span><input value={value.trustedHostKey ?? ''} onChange={(event) => update(id, { trustedHostKey: event.target.value })} placeholder="SHA256:…" maxLength={512} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /><small>{ui('填写指纹后会固定校验该服务器身份。')}</small></label>
-            <label className="native-config__field"><span>{ui('远程起始目录')} <em>{ui('可选')}</em></span><input value={value.workdir ?? ''} onChange={(event) => update(id, { workdir: event.target.value })} placeholder="/var/www/app" maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /></label>
+            <label className="native-config__field"><span>{ui('密码')}</span><input type="password" autoComplete="new-password" maxLength={4096} value={value.password ?? ''} onChange={(event) => update(id, { password: event.target.value, ...(event.target.value ? { auth: 'password' } : {}) })} placeholder={value.hasPassword ? ui('已保存，留空则保持不变') : ui('输入 SSH 登录密码')} required={value.auth === 'password' && !value.hasPassword} disabled={disabled} /><small>{value.hasPassword ? ui('密码已保存；留空会继续使用。') : ui('密码保存在 Code Remote 主机，不会在设置中显示。')}</small></label>
           </div>
-          <label className="ssh-mcp-readonly"><input type="checkbox" checked={value.readOnly} disabled={disabled} onChange={(event) => update(id, { readOnly: event.target.checked })} /><span><strong>{ui('只读限制')}</strong><small>{ui('开启后，即使角色允许写入，也不能执行修改类命令。')}</small></span></label>
+          <details className="ssh-mcp-advanced">
+            <summary>{ui('高级设置')}</summary>
+            <div className="native-config__columns">
+              <div className="native-config__field"><TranslationSelect label={ui('SSH 认证')} value={value.auth} disabled={disabled} onChange={(auth) => update(id, { auth: auth as SshMcpProfile['auth'] })} options={[
+                { value: 'password', label: ui('密码') },
+                { value: 'agent', label: ui('SSH Agent') },
+                { value: 'key', label: ui('私钥文件路径') },
+              ]} /></div>
+              {value.auth === 'key' ? <label className="native-config__field"><span>{ui('私钥文件路径')}</span><input value={value.keyRef ?? ''} onChange={(event) => update(id, { keyRef: event.target.value })} placeholder="~/.ssh/id_ed25519" maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /><small>{ui('填写运行 Code Remote 的电脑上的路径；Windows 请使用完整路径。')}</small></label> : null}
+              <div className="native-config__field"><TranslationSelect label={ui('主机分组')} value={value.group} disabled={disabled} onChange={(group) => update(id, { group: group as SshMcpHostGroup })} options={[
+                { value: 'prod', label: ui('生产环境') },
+                { value: 'staging', label: ui('预发布环境') },
+                { value: 'dev', label: ui('开发环境') },
+              ]} /><small>{ui('生产环境使用更严格的内置命令权限。')}</small></div>
+              <div className="native-config__field"><TranslationSelect label={ui('命令角色')} value={value.role} disabled={disabled} onChange={(role) => update(id, { role: role as SshMcpRole })} options={[
+                { value: 'viewer', label: ui('viewer · 只读为主') },
+                { value: 'operator', label: ui('operator · 常规运维') },
+                { value: 'admin', label: ui('admin · 管理操作') },
+              ]} /><small>{ui('角色与主机分组共同决定可运行的命令类别。')}</small></div>
+              <div className="native-config__field"><TranslationSelect label={ui('命令确认')} value={value.approvalPolicy} disabled={disabled} onChange={(approvalPolicy) => update(id, { approvalPolicy: approvalPolicy as SshMcpApprovalPolicy })} options={[
+                { value: 'ask-all', label: ui('每条命令都询问') },
+                { value: 'ask-destructive', label: ui('仅高风险命令询问') },
+                { value: 'deny', label: ui('拒绝需确认的命令') },
+              ]} /><small>{ui('自动批准已关闭；逐次确认会在 Codex 聊天中显示命令内容。')}</small></div>
+              <label className="native-config__field"><span>{ui('服务器 SSH 主机指纹')} <em>{ui('可选')}</em></span><input value={value.trustedHostKey ?? ''} onChange={(event) => update(id, { trustedHostKey: event.target.value })} placeholder="SHA256:…" maxLength={512} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /><small>{ui('填写指纹后会固定校验该服务器身份。')}</small></label>
+              <label className="native-config__field"><span>{ui('远程起始目录')} <em>{ui('可选')}</em></span><input value={value.workdir ?? ''} onChange={(event) => update(id, { workdir: event.target.value })} placeholder="/var/www/app" maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /></label>
+            </div>
+            <label className="ssh-mcp-readonly"><input type="checkbox" checked={value.readOnly} disabled={disabled} onChange={(event) => update(id, { readOnly: event.target.checked })} /><span><strong>{ui('只读限制')}</strong><small>{ui('开启后，即使角色允许写入，也不能执行修改类命令。')}</small></span></label>
+          </details>
           </fieldset>
         </section>
         })}

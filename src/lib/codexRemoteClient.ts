@@ -27,7 +27,7 @@ export interface MCPApprovalGrant {
   toolName?: string
 }
 
-export type SshMcpAuthentication = 'agent' | 'key'
+export type SshMcpAuthentication = 'agent' | 'key' | 'password'
 export type SshMcpHostGroup = 'prod' | 'staging' | 'dev'
 export type SshMcpRole = 'viewer' | 'operator' | 'admin'
 export type SshMcpApprovalPolicy = 'ask-all' | 'ask-destructive' | 'deny'
@@ -38,6 +38,8 @@ export interface SshMcpProfile {
   user: string
   auth: SshMcpAuthentication
   keyRef?: string
+  password?: string
+  hasPassword?: boolean
   group: SshMcpHostGroup
   role: SshMcpRole
   readOnly: boolean
