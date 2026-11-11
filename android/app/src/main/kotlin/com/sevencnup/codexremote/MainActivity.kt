@@ -67,6 +67,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
+import android.view.ViewOutlineProvider
 import android.view.VelocityTracker
 import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
@@ -394,60 +395,67 @@ private class ComposerGlassDrawable(
     private val highlightColor: Int,
     private val borderColor: Int,
     private val cornerRadius: Float,
+    private val sheenStrength: Float,
 ) : Drawable() {
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val reflectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val rect = RectF()
+    private val borderRect = RectF()
+    private val clipPath = Path()
+    private var borderInset = 0f
     private var drawableAlpha = 255
     private var colorFilter: ColorFilter? = null
 
-    override fun draw(canvas: Canvas) {
-        val rect = RectF(bounds)
+    override fun onBoundsChange(bounds: Rect) {
+        rect.set(bounds)
+        clipPath.reset()
         if (rect.isEmpty) return
-
-        val clip = Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) }
-        fillPaint.alpha = drawableAlpha
-        fillPaint.colorFilter = colorFilter
+        clipPath.addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW)
         fillPaint.shader = LinearGradient(
             rect.left, rect.top, rect.right, rect.bottom,
             fillColors, null, Shader.TileMode.CLAMP,
         )
+        highlightPaint.shader = RadialGradient(
+            rect.left + rect.width() * .46f, rect.top - rect.height() * .08f,
+            max(rect.width() * .76f, rect.height() * .65f),
+            intArrayOf(withAlpha(highlightColor, sheenStrength), withAlpha(highlightColor, sheenStrength * .32f), Color.TRANSPARENT),
+            floatArrayOf(0f, .56f, 1f), Shader.TileMode.CLAMP,
+        )
+        reflectionPaint.shader = LinearGradient(
+            rect.left, rect.top, rect.right, rect.top + rect.height() * .34f,
+            intArrayOf(withAlpha(highlightColor, sheenStrength * .6f), withAlpha(highlightColor, sheenStrength * .15f), Color.TRANSPARENT),
+            floatArrayOf(0f, .35f, 1f), Shader.TileMode.CLAMP,
+        )
+        val strokeWidth = (cornerRadius / 27f).coerceAtLeast(1f)
+        borderInset = strokeWidth / 2f
+        borderRect.set(rect)
+        borderRect.inset(borderInset, borderInset)
+        borderPaint.strokeWidth = strokeWidth
+    }
+
+    override fun draw(canvas: Canvas) {
+        if (rect.isEmpty) return
+        fillPaint.alpha = drawableAlpha
+        fillPaint.colorFilter = colorFilter
         canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint)
 
         val checkpoint = canvas.save()
-        canvas.clipPath(clip)
+        canvas.clipPath(clipPath)
         highlightPaint.alpha = drawableAlpha
         highlightPaint.colorFilter = colorFilter
-        highlightPaint.shader = RadialGradient(
-            rect.left + rect.width() * .13f, rect.top + rect.height() * .06f,
-            rect.width() * .92f,
-            intArrayOf(withAlpha(highlightColor, .25f), withAlpha(highlightColor, .08f), Color.TRANSPARENT),
-            floatArrayOf(0f, .48f, 1f), Shader.TileMode.CLAMP,
-        )
         canvas.drawRect(rect, highlightPaint)
 
         reflectionPaint.alpha = drawableAlpha
         reflectionPaint.colorFilter = colorFilter
-        reflectionPaint.shader = LinearGradient(
-            rect.left, rect.top, rect.right, rect.top + rect.height() * .34f,
-            intArrayOf(Color.TRANSPARENT, withAlpha(highlightColor, .09f), Color.TRANSPARENT),
-            floatArrayOf(0f, .5f, 1f), Shader.TileMode.CLAMP,
-        )
         canvas.drawRoundRect(rect, cornerRadius, cornerRadius, reflectionPaint)
         canvas.restoreToCount(checkpoint)
 
-        val strokeWidth = (cornerRadius / 18f).coerceAtLeast(1f)
-        val inset = strokeWidth / 2f
         borderPaint.color = borderColor
         borderPaint.alpha = (Color.alpha(borderColor) * drawableAlpha / 255f).roundToInt()
-        borderPaint.strokeWidth = strokeWidth
         borderPaint.colorFilter = colorFilter
-        val borderRect = RectF(rect).apply { inset(inset, inset) }
-        canvas.drawRoundRect(borderRect, cornerRadius - inset, cornerRadius - inset, borderPaint)
-        fillPaint.shader = null
-        highlightPaint.shader = null
-        reflectionPaint.shader = null
+        canvas.drawRoundRect(borderRect, cornerRadius - borderInset, cornerRadius - borderInset, borderPaint)
     }
 
     override fun setAlpha(alpha: Int) {
@@ -1551,11 +1559,15 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(26), dp(24), dp(24))
         }
         scroll.addView(card, ViewGroup.LayoutParams(MATCH, MATCH))
-        val mark = label("C", 22, TEXT, true).apply {
-            gravity = Gravity.CENTER
-            background = rounded(PANEL_INSET, dp(12))
+        val mark = ImageView(this).apply {
+            setImageResource(R.drawable.code_remote)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "Code Remote"
         }
-        card.addView(mark, LinearLayout.LayoutParams(dp(48), dp(48)).apply { bottomMargin = dp(18) })
+        card.addView(mark, LinearLayout.LayoutParams(dp(76), dp(76)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(18)
+        })
         card.addView(label("CODE REMOTE · ANDROID", 10, MUTED, true), widthWrap())
         card.addView(label("连接 Code Remote", 25, TEXT, true).apply { setPadding(0, dp(8), 0, dp(4)) }, widthWrap())
         card.addView(label("输入电脑网页地址和终端显示的匹配码。配对信息保存在本机，之后会自动重连。", 13, MUTED).apply {
@@ -2264,13 +2276,20 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11) + systemInsetLeft, dp(8), dp(11) + systemInsetRight, dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (retroTheme) 10 else 18).toFloat(), composerGlowOpacity())
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (retroTheme) 10 else 27).toFloat(), composerGlowOpacity())
             if (retroTheme) {
                 background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_strip, PANEL)
                     else rounded(PANEL, dp(2), BORDER, dp(1))
                 elevation = 0f
             } else {
                 background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(27).toFloat())
+                        outline.alpha = if (lightTheme) .28f else .48f
+                    }
+                }
+                elevation = dp(8).toFloat()
             }
         }
         composerSurface = composer
@@ -2430,13 +2449,14 @@ class MainActivity : Activity() {
         permissionButton = preferenceButton("权限") { showPermissionOptions() }
         val footerHeight = if (retroTheme) 46 else 40
         preferenceRow.addView(modelButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)))
-        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
-        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
+        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(if (retroTheme) 4 else 6) })
+        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(if (retroTheme) 4 else 6) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
         val footerActionSize = if (retroTheme) dp(36) else dp(34)
         footer.addView(iconButton("schedule", "定时发送") { chooseScheduledSendTime() }.apply {
             setPadding(dp(7), dp(7), dp(7), dp(7))
+            if (!retroTheme) background = composerGlassControlBackground()
             tooltipText = "定时发送"
         }, LinearLayout.LayoutParams(footerActionSize, dp(34)).apply {
             rightMargin = dp(2)
@@ -2444,6 +2464,7 @@ class MainActivity : Activity() {
         })
         footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }.apply {
             setPadding(dp(6), dp(6), dp(6), dp(6))
+            if (!retroTheme) background = composerGlassControlBackground()
         }, LinearLayout.LayoutParams(footerActionSize, dp(34)).apply {
             rightMargin = dp(4)
             gravity = Gravity.CENTER_VERTICAL
@@ -2493,13 +2514,12 @@ class MainActivity : Activity() {
                 Color.rgb(28, 32, 33),
             )
             "light" -> intArrayOf(
-                Color.rgb(250, 251, 253),
-                Color.rgb(245, 247, 250),
-                Color.rgb(248, 249, 252),
+                colorWithAlpha(Color.rgb(249, 251, 255), .98f),
+                colorWithAlpha(Color.rgb(232, 238, 248), .97f),
             )
             "warm" -> intArrayOf(
-                colorWithAlpha(Color.rgb(255, 251, 245), .94f),
-                colorWithAlpha(Color.rgb(246, 235, 221), .95f),
+                colorWithAlpha(Color.rgb(255, 251, 244), .94f),
+                colorWithAlpha(Color.rgb(247, 237, 224), .88f),
             )
             "custom" -> intArrayOf(
                 colorWithAlpha(OPAQUE_PANEL, .58f),
@@ -2507,9 +2527,9 @@ class MainActivity : Activity() {
                 colorWithAlpha(OPAQUE_PANEL, .72f),
             )
             else -> intArrayOf(
-                colorWithAlpha(Color.rgb(40, 44, 54), .9f),
-                colorWithAlpha(Color.rgb(24, 26, 32), .94f),
-                colorWithAlpha(Color.rgb(18, 20, 25), .97f),
+                colorWithAlpha(Color.rgb(62, 63, 67), .78f),
+                colorWithAlpha(Color.rgb(44, 45, 49), .86f),
+                colorWithAlpha(Color.rgb(38, 39, 43), .92f),
             )
         }
         val highlight = when (themeName) {
@@ -2524,15 +2544,43 @@ class MainActivity : Activity() {
             "lollipop" -> Color.rgb(84, 98, 103)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
-            "light" -> Color.rgb(214, 216, 220)
-            else -> Color.rgb(43, 46, 52)
+            "light" -> Color.TRANSPARENT
+            else -> colorWithAlpha(Color.WHITE, .17f)
         }
         val cornerRadius = when {
             pixelTheme -> 0
             retroTheme -> 10
-            else -> 18
+            else -> 27
         }
-        return ComposerGlassDrawable(fills, highlight, border, dp(cornerRadius).toFloat())
+        val sheen = when (themeName) {
+            "light" -> .28f
+            "warm" -> .48f
+            "custom" -> .12f
+            else -> .13f
+        }
+        return ComposerGlassDrawable(fills, highlight, border, dp(cornerRadius).toFloat(), sheen)
+    }
+
+    private fun composerGlassControlBackground(): Drawable {
+        val colors = when (themeName) {
+            "light" -> intArrayOf(colorWithAlpha(Color.WHITE, .9f), colorWithAlpha(Color.rgb(231, 236, 243), .78f))
+            "warm" -> intArrayOf(colorWithAlpha(Color.rgb(255, 253, 249), .9f), colorWithAlpha(Color.rgb(236, 221, 202), .78f))
+            "custom" -> intArrayOf(
+                colorWithAlpha(blendColors(OPAQUE_PANEL, TEXT, .09f), .92f),
+                colorWithAlpha(OPAQUE_PANEL, .86f),
+            )
+            else -> intArrayOf(colorWithAlpha(Color.WHITE, .14f), colorWithAlpha(Color.WHITE, .075f))
+        }
+        val edge = when (themeName) {
+            "light" -> colorWithAlpha(Color.rgb(119, 132, 151), .18f)
+            "warm" -> colorWithAlpha(Color.rgb(153, 119, 81), .19f)
+            "custom" -> BORDER
+            else -> colorWithAlpha(Color.WHITE, .09f)
+        }
+        return GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
+            cornerRadius = dp(22).toFloat()
+            setStroke(dp(1), edge)
+        }
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
@@ -14252,10 +14300,21 @@ class MainActivity : Activity() {
 
     private fun preferenceButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
         gravity = Gravity.CENTER
-        setPadding(dp(4), 0, dp(4), 0)
+        setPadding(dp(if (retroTheme) 4 else 11), 0, dp(if (retroTheme) 4 else 11), 0)
         minWidth = dp(36)
         minHeight = dp(40)
-        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
+        if (!retroTheme) {
+            maxWidth = dp(145)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(when (themeName) {
+                "light" -> Color.rgb(65, 75, 91)
+                "warm" -> Color.rgb(98, 77, 59)
+                "custom" -> TEXT
+                else -> Color.rgb(232, 233, 237)
+            })
+        }
+        background = if (retroTheme) lollipopRipple() else composerGlassControlBackground()
         foreground = null
         stateListAnimator = null
         setDefaultFocusHighlightEnabled(false)
