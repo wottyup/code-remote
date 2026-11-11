@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#101114</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <color name="ic_package_background">#101114</color>
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
@@ -11,7 +12,13 @@
         <item name="android:colorAccent">#AABAFF</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
-    <style name="AppTheme.Starting" parent="@style/AppTheme" />
+    <style name="AppTheme.Starting" parent="@style/AppTheme">
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
     <style name="SidebarMenuAnimation">
         <item name="android:windowEnterAnimation">@anim/sidebar_menu_in</item>
         <item name="android:windowExitAnimation">@anim/sidebar_menu_out</item>
