@@ -136,7 +136,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-list__section { padding: 10px 8px 4px; color: #858c9a; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 650; }
 .thread-list__section:first-child { padding-top: 5px; }
 .thread-row-item { position: relative; z-index: 0; width: 100%; min-width: 0; border-radius: 0 9px 9px 0; transition: background-color .16s ease; }
-.thread-row { position: relative; isolation: isolate; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 40px; padding: 7px 8px; border: 0; border-radius: 9px; background: transparent; color: #aeb2ba; cursor: pointer; text-align: left; transition: background .16s ease, color .16s ease, box-shadow .16s ease; }
+.thread-row { position: relative; isolation: isolate; display: flex; width: 100%; align-items: center; gap: 8px; min-width: 0; min-height: 40px; padding: 7px 8px; border: 0; border-radius: 9px; background: transparent; color: #aeb2ba; cursor: pointer; text-align: left; transition: background .16s ease, color .16s ease, box-shadow .16s ease; }
 .thread-row > .engine-brand-icon { margin-top: 2px; color: #7d838d; }
 .thread-row:hover { border-color: rgba(146, 157, 184, .12); background: rgba(38, 41, 49, .72); color: #eceef1; }
 .thread-row--active { --thread-row-surface: rgba(83, 100, 153, .36); border: 0 !important; background: var(--thread-row-surface); box-shadow: inset 0 0 0 1px var(--sidebar-selection-border); color: #f0f1f3; }
