@@ -11285,7 +11285,9 @@ class MainActivity : Activity() {
         card.addView(form, LinearLayout.LayoutParams(MATCH, WRAP))
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
         actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
-        val connectButton = dialogTextButton("连接", ACCENT) { }
+        val connectButton = dialogTextButton("连接", ACCENT) { }.apply {
+            text = trConnectionAction("连接")
+        }
         actions.addView(connectButton, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(8) })
         card.addView(actions, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(8) })
         dialog.setContentView(card)
@@ -11297,7 +11299,7 @@ class MainActivity : Activity() {
                 val pairingCode = code.text.toString().trim()
                 if (pairingCode.isBlank()) { showToast("请输入电脑端匹配码"); return@setOnClickListener }
                 connectButton.isEnabled = false
-                connectButton.text = "正在连接…"
+                connectButton.text = trConnectionAction("正在连接…")
                 io.execute {
                     try {
                         val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
@@ -11310,7 +11312,7 @@ class MainActivity : Activity() {
                     } catch (error: Exception) {
                         handler.post {
                             connectButton.isEnabled = true
-                            connectButton.text = "连接"
+                            connectButton.text = trConnectionAction("连接")
                             showToast(error.message ?: "连接失败，请检查地址和匹配码")
                         }
                     }
@@ -14210,6 +14212,9 @@ class MainActivity : Activity() {
     private val appLanguage: String get() = prefs.getString(KEY_APP_LANGUAGE, "zh") ?: "zh"
 
     private fun tr(value: String): String = if (appLanguage == "en") UiEnglish.translate(value) else value
+
+    private fun trConnectionAction(value: String): String =
+        if (appLanguage == "en") UiEnglish.translateConnectionAction(value) else value
 
     private fun label(
         value: String,

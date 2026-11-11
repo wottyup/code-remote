@@ -2,6 +2,8 @@ package com.sevencnup.codexremote
 
 /** UI copy only. Chat messages, file contents, paths and model identifiers stay untouched. */
 internal object UiEnglish {
+    private val connectionActionStrings = mapOf("连接" to "Connect")
+
     private val strings = mapOf(
         "设置" to "Settings", "偏好保存在本机" to "Preferences are saved on this device",
         "主题" to "Theme", "选择工作区色彩；自定义主题支持背景图片与颜色。" to "Choose workspace colors. Custom themes support images and colors.",
@@ -213,6 +215,7 @@ internal object UiEnglish {
         "输入电脑终端显示的匹配码" to "Enter the pairing code shown on the computer",
         "电脑网页地址 · 只填 IP 时默认使用 4173 端口" to "Computer web address · IP alone uses port 4173",
         "连接失败，请检查地址和匹配码" to "Connection failed. Check the address and pairing code.",
+        "无法连接电脑网页服务，请检查手机网络或远程连接。" to "Could not connect to the computer web service. Check the phone's network or remote connection.",
         "连接失败，请确认电脑服务和匹配码。" to "Connection failed. Check the computer service and pairing code.",
         "电脑地址无效" to "Invalid computer address", "请输入连接名称" to "Enter a connection name",
         "请输入电脑端匹配码" to "Enter the computer pairing code",
@@ -345,4 +348,7 @@ internal object UiEnglish {
             else -> value
         }
     }
+
+    fun translateConnectionAction(value: String): String =
+        connectionActionStrings[value] ?: translate(value)
 }
