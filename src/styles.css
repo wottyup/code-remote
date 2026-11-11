@@ -4445,6 +4445,12 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   backdrop-filter: blur(24px) saturate(130%);
   -webkit-backdrop-filter: blur(24px) saturate(130%);
 }
+.remote-shell.remote-shell--theme-dark .message-composer {
+  --composer-glass-edge: rgba(255, 255, 255, .10);
+  --composer-glass-focus: rgba(255, 255, 255, .16);
+  --composer-glass-sheen: rgba(255, 255, 255, .07);
+  --composer-glass-shadow: 0 20px 52px rgba(0, 0, 0, .32);
+}
 .remote-shell.remote-shell--theme-light .message-composer {
   --composer-glass-surface: linear-gradient(155deg, rgba(249, 251, 255, .98), rgba(232, 238, 248, .97));
   --composer-glass-glint: rgba(255, 255, 255, .94);
@@ -4485,6 +4491,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 }
 .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer:focus-within {
   border-color: var(--composer-glass-focus);
+  border-top-color: transparent;
   box-shadow: var(--composer-glass-shadow);
 }
 .remote-shell.remote-shell--theme-light .message-composer:focus-within {
