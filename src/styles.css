@@ -4451,6 +4451,8 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-glass-sheen: rgba(255, 255, 255, .07);
   --composer-glass-shadow: 0 20px 52px rgba(0, 0, 0, .32);
 }
+.remote-shell.remote-shell--theme-dark .message-composer::before { background: none; }
+.remote-shell.remote-shell--theme-dark .message-composer > .message-composer__breath { inset: 0; }
 .remote-shell.remote-shell--theme-light .message-composer {
   --composer-glass-surface: linear-gradient(155deg, rgba(249, 251, 255, .98), rgba(232, 238, 248, .97));
   --composer-glass-glint: rgba(255, 255, 255, .94);
