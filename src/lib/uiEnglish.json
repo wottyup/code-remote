@@ -1320,7 +1320,6 @@
   "密码已保存；留空会继续使用。": "Password saved; leave blank to keep using it.",
   "密码保存在 Code Remote 主机，不会在设置中显示。": "The password is stored on the Code Remote host and is hidden in settings.",
   "请重新保存 SSH 密码配置。": "Save the SSH password settings again.",
-  "高级设置": "Advanced settings",
   "SSH 认证": "SSH authentication",
   "SSH Agent": "SSH agent",
   "私钥文件路径": "Private key file path",

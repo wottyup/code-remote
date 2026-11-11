@@ -30,7 +30,7 @@ export interface MCPApprovalGrant {
 export type SshMcpAuthentication = 'agent' | 'key' | 'password'
 export type SshMcpHostGroup = 'prod' | 'staging' | 'dev'
 export type SshMcpRole = 'viewer' | 'operator' | 'admin'
-export type SshMcpApprovalPolicy = 'ask-all' | 'ask-destructive' | 'deny'
+export type SshMcpApprovalPolicy = 'auto' | 'ask-all' | 'ask-destructive' | 'deny'
 export interface SshMcpProfile {
   name: string
   host: string

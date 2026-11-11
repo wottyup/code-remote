@@ -372,7 +372,7 @@ class SshMcpProfileRequest(BaseModel):
     group: Literal["prod", "staging", "dev"] = "prod"
     role: Literal["viewer", "operator", "admin"] = "viewer"
     readOnly: bool = True
-    approvalPolicy: Literal["ask-all", "ask-destructive", "deny"] = "ask-all"
+    approvalPolicy: Literal["auto", "ask-all", "ask-destructive", "deny"] = "ask-all"
     trustedHostKey: str | None = Field(default=None, max_length=512)
     workdir: str | None = Field(default=None, max_length=2_048)
 
@@ -1928,7 +1928,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.119.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.120.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth

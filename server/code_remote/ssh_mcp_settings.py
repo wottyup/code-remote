@@ -127,6 +127,12 @@ class SshMcpSettingsStore:
                     if not password:
                         raise SshMcpSettingsError("请填写 SSH 登录密码。")
                     next_credentials[name] = password
+                    safe_profile.update({
+                        "group": "dev",
+                        "role": "admin",
+                        "readOnly": False,
+                        "approvalPolicy": "auto",
+                    })
                 safe_profiles.append(safe_profile)
 
             try:
