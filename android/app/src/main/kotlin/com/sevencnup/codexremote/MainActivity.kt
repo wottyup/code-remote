@@ -3542,6 +3542,9 @@ class MainActivity : Activity() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     sidebarLongPressActive = false
+                    if (composerPreferenceMenu != null && touchesChatMessageArea(event.x, event.y)) {
+                        dismissComposerPreferences()
+                    }
                     startX = event.x
                     startY = event.y
                     velocityTracker?.recycle()
@@ -3696,6 +3699,18 @@ class MainActivity : Activity() {
                 target = target.parent as? View
             }
             return false
+        }
+
+        private fun touchesChatMessageArea(x: Float, y: Float): Boolean {
+            if (!::messageScroll.isInitialized || !messageScroll.isShown) return false
+            val rootLocation = IntArray(2)
+            val chatLocation = IntArray(2)
+            getLocationOnScreen(rootLocation)
+            messageScroll.getLocationOnScreen(chatLocation)
+            val screenX = rootLocation[0] + x
+            val screenY = rootLocation[1] + y
+            return screenX >= chatLocation[0] && screenX < chatLocation[0] + messageScroll.width &&
+                screenY >= chatLocation[1] && screenY < chatLocation[1] + messageScroll.height
         }
 
         private fun deepestTouchTarget(view: View, localX: Float, localY: Float): View? {
