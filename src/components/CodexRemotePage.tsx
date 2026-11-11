@@ -6794,22 +6794,24 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
-                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }} onClick={(event) => {
-                  const pending = threadLongPress.current
-                  if (pending?.threadId === thread.id && pending.triggered) {
-                    event.preventDefault()
+                <div className={'thread-row-item' + (isActive ? ' thread-row-item--active' : '') + (isSelected ? ' thread-row-item--selected' : '')} key={thread.id}>
+                  <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }} onClick={(event) => {
+                    const pending = threadLongPress.current
+                    if (pending?.threadId === thread.id && pending.triggered) {
+                      event.preventDefault()
+                      clearThreadLongPress()
+                      return
+                    }
                     clearThreadLongPress()
-                    return
-                  }
-                  clearThreadLongPress()
-                  if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
-                  else void selectThread(thread)
-                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? ui('正在回复') : undefined}>
-                  <span className="thread-row__breath" data-reply-breath-layer aria-hidden="true" />
-                  <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
-                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label={ui("已置顶")} /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label={ui("有定时发送")} /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label={ui("回复已完成")} title={ui("回复已完成")} /> : null}<small>{timeOf(thread)}</small></span></span>
-                  {paneIndex !== undefined ? <span className="thread-row__pane-dot" title={ui("已打开")} /> : null}
-                </button>
+                    if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
+                    else void selectThread(thread)
+                  }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? ui('正在回复') : undefined}>
+                    <span className="thread-row__breath" data-reply-breath-layer aria-hidden="true" />
+                    <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
+                    <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label={ui("已置顶")} /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label={ui("有定时发送")} /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label={ui("回复已完成")} title={ui("回复已完成")} /> : null}<small>{timeOf(thread)}</small></span></span>
+                    {paneIndex !== undefined ? <span className="thread-row__pane-dot" title={ui("已打开")} /> : null}
+                  </button>
+                </div>
               )
             })}
           </Fragment>)}
