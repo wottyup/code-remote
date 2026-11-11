@@ -1176,9 +1176,9 @@ class MainActivity : Activity() {
     private val sidebarActionAccentViews = mutableListOf<Pair<ImageView, TextView>>()
     private lateinit var sidebarBrandMark: ImageView
     private lateinit var sendButton: ImageView
-    private lateinit var modelButton: TextView
-    private lateinit var effortButton: TextView
-    private lateinit var permissionButton: TextView
+    private lateinit var composerPreferenceButton: LinearLayout
+    private lateinit var composerModelLabel: TextView
+    private lateinit var composerEffortLabel: TextView
     private lateinit var drawer: LinearLayout
     private lateinit var drawerSearch: EditText
     private lateinit var drawerThreads: LinearLayout
@@ -2442,17 +2442,43 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val preferenceScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
-        val preferenceRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        modelButton = preferenceButton("模型") { showModelOptions() }
-        effortButton = preferenceButton("思考") { showEffortOptions() }
-        permissionButton = preferenceButton("权限") { showPermissionOptions() }
         val footerHeight = if (retroTheme) 46 else 40
-        preferenceRow.addView(modelButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)))
-        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(if (retroTheme) 4 else 6) })
-        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(if (retroTheme) 4 else 6) })
-        preferenceScroll.addView(preferenceRow)
-        footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        val preferenceInk = when (themeName) {
+            "light" -> Color.rgb(65, 75, 91)
+            "warm" -> Color.rgb(98, 77, 59)
+            "custom" -> TEXT
+            else -> if (retroTheme) SUBTLE else Color.rgb(232, 233, 237)
+        }
+        composerModelLabel = label("模型", 12, preferenceInk, true).apply {
+            maxLines = 1
+            maxWidth = dp(200)
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        composerEffortLabel = label("Effort", 11, blendColors(preferenceInk, PANEL, .3f)).apply {
+            maxLines = 1
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        composerPreferenceButton = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(12), 0)
+            minimumWidth = dp(72)
+            background = if (retroTheme) lollipopRipple() else composerGlassControlBackground()
+            isClickable = true
+            isFocusable = true
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            setDefaultFocusHighlightEnabled(false)
+            setOnClickListener { showComposerPreferences() }
+            addView(composerModelLabel, LinearLayout.LayoutParams(0, MATCH, 1f))
+            addView(composerEffortLabel, LinearLayout.LayoutParams(WRAP, MATCH).apply { leftMargin = dp(6) })
+        }
+        // The slot bounds the single capsule while reserving space for every action.
+        // Its weighted model label can shrink without hiding the reasoning level.
+        val preferenceSlot = FrameLayout(this).apply {
+            addView(composerPreferenceButton, FrameLayout.LayoutParams(WRAP, dp(footerHeight), Gravity.START or Gravity.CENTER_VERTICAL))
+        }
+        footer.addView(preferenceSlot, LinearLayout.LayoutParams(0, dp(footerHeight), 1f).apply { rightMargin = dp(8) })
         val footerActionSize = if (retroTheme) dp(36) else dp(34)
         footer.addView(iconButton("schedule", "定时发送") { chooseScheduledSendTime() }.apply {
             setPadding(dp(7), dp(7), dp(7), dp(7))
@@ -9391,17 +9417,24 @@ class MainActivity : Activity() {
     }
 
     private fun updateComposerPreferences() {
-        if (!::modelButton.isInitialized) return
+        if (!::composerPreferenceButton.isInitialized) return
+        val (model, effort, permission) = composerPreferenceLabels()
+        composerModelLabel.text = tr(model)
+        composerEffortLabel.text = tr(effort)
+        composerPreferenceButton.contentDescription = "${tr("模型")}: ${tr(model)}, ${tr("思考等级")}: ${tr(effort)}, ${tr("权限")}: ${tr(permission)}"
+        composerPreferenceButton.tooltipText = composerPreferenceButton.contentDescription
+    }
+
+    private fun composerPreferenceLabels(): Triple<String, String, String> {
         val modelKey = if (currentMode == "codex") "model" else "claudeModel"
         val effortKey = if (currentMode == "codex") "effort" else "claudeEffort"
         val selectedModel = preference(modelKey)
-        val modelLabel = if (currentMode == "codex") modelLabel(selectedModel) else claudeModelLabel(selectedModel)
-        modelButton.text = tr(modelLabel)
-        effortButton.text = tr(effortLabel(preference(effortKey)))
-        permissionButton.text = tr(when (currentMode) {
+        val model = if (currentMode == "codex") modelLabel(selectedModel) else claudeModelLabel(selectedModel)
+        val permission = when (currentMode) {
             "codex" -> approvalLabel(preference("approvalPolicy"))
             else -> claudePermissionLabel(preference("claudePermissionMode"))
-        })
+        }
+        return Triple(model, effortLabel(preference(effortKey)), permission)
     }
 
     private fun preference(key: String): String? {
@@ -9438,6 +9471,54 @@ class MainActivity : Activity() {
         updateComposerPreferences()
     }
 
+    private fun showComposerPreferences() {
+        val (model, effort, permission) = composerPreferenceLabels()
+        val actions: List<Triple<String, String, () -> Unit>> = listOf(
+            Triple("模型", model, { showModelOptions() }),
+            Triple("思考等级", effort, { showEffortOptions() }),
+            Triple("权限", permission, { showPermissionOptions() }),
+        )
+        val options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        actions.forEach { (title, value, action) ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), 0, dp(8), 0)
+                isClickable = true
+                isFocusable = false
+                contentDescription = "${tr(title)}: ${tr(value)}"
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                setOnClickListener {
+                    preferencePopup?.dismiss()
+                    action()
+                }
+            }
+            row.addView(label(title, 12, MUTED).apply {
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(WRAP, WRAP))
+            row.addView(label(value, 12, TEXT).apply {
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(0, WRAP, 1f).apply { leftMargin = dp(12) })
+            row.addView(ImageView(this).apply {
+                setPixelAwareImageResource(iconResource("chevron_right"))
+                imageTintList = retroIconTint(MUTED)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(8) })
+            options.addView(row, LinearLayout.LayoutParams(MATCH, dp(44)))
+        }
+        val menu = ScrollView(this).apply {
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = rounded(PANEL, dp(12), BORDER, dp(1))
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
+        }
+        showPreferencePopup(composerPreferenceButton, menu, dp(140))
+    }
+
     private fun showModelOptions() {
         val values: List<Pair<String, String>> = if (currentMode == "codex") {
             (0 until models.length()).mapNotNull { index ->
@@ -9447,7 +9528,7 @@ class MainActivity : Activity() {
             }
         } else listOf("default" to "本机默认模型", "opus" to "Claude Opus", "sonnet" to "Claude Sonnet", "fable" to "Claude Fable")
         val choices = listOf("default" to "默认") + values
-        showChoicePopup(modelButton, "模型", choices, preference(if (currentMode == "codex") "model" else "claudeModel") ?: "default") { selected ->
+        showChoicePopup(composerPreferenceButton, "模型", choices, preference(if (currentMode == "codex") "model" else "claudeModel") ?: "default") { selected ->
             savePreference(if (currentMode == "codex") "model" else "claudeModel", selected.takeIf { it != "default" })
             if (currentMode == "codex") savePreference("effort", modelDefaultEffort(selected))
         }
@@ -9466,18 +9547,18 @@ class MainActivity : Activity() {
             } else listOf("minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High")
         } else listOf("default" to "Default", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High", "max" to "Max")
         val key = if (currentMode == "codex") "effort" else "claudeEffort"
-        showChoicePopup(effortButton, "Reasoning Effort", listOf("default" to "Default") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
+        showChoicePopup(composerPreferenceButton, "Reasoning Effort", listOf("default" to "Default") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
     }
 
     private fun showPermissionOptions() {
         if (currentMode == "codex") {
-            showChoicePopup(permissionButton, "授权", listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问"), preference("approvalPolicy") ?: "on-request") {
+            showChoicePopup(composerPreferenceButton, "授权", listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问"), preference("approvalPolicy") ?: "on-request") {
                 savePreference("approvalPolicy", it)
                 val threadId = activeThreadId
                 if (threadId != null && queueEditItem == null) runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/settings", JSONObject().put("approval_policy", it)) })
             }
         } else {
-            showChoicePopup(permissionButton, "权限模式", listOf(
+            showChoicePopup(composerPreferenceButton, "权限模式", listOf(
                 "default" to "本机默认权限", "manual" to "手动确认", "acceptEdits" to "自动接受编辑",
                 "auto" to "自动模式", "dontAsk" to "不询问（拒绝需授权操作）", "plan" to "计划模式",
             ), preference("claudePermissionMode") ?: "default") { savePreference("claudePermissionMode", it) }
@@ -9485,14 +9566,6 @@ class MainActivity : Activity() {
     }
 
     private fun showChoicePopup(anchor: View, title: String, choices: List<Pair<String, String>>, selected: String?, onChoice: (String) -> Unit) {
-        preferencePopup?.dismiss()
-        val anchorLocation = IntArray(2)
-        val rootLocation = IntArray(2)
-        anchor.getLocationOnScreen(anchorLocation)
-        root.getLocationOnScreen(rootLocation)
-        val availableAbove = anchorLocation[1] - rootLocation[1] - systemInsetTop - dp(11)
-        val maxHeight = min(dp(244), availableAbove.coerceAtLeast(dp(118)))
-        val menuHeight = min(dp(32) + choices.size * dp(32), maxHeight)
         val menu = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(5), dp(4), dp(5), dp(4))
@@ -9534,6 +9607,18 @@ class MainActivity : Activity() {
             addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
         }
         menu.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        showPreferencePopup(anchor, menu, dp(32) + choices.size * dp(32))
+    }
+
+    private fun showPreferencePopup(anchor: View, menu: View, preferredHeight: Int) {
+        preferencePopup?.dismiss()
+        val anchorLocation = IntArray(2)
+        val rootLocation = IntArray(2)
+        anchor.getLocationOnScreen(anchorLocation)
+        root.getLocationOnScreen(rootLocation)
+        val availableAbove = anchorLocation[1] - rootLocation[1] - systemInsetTop - dp(11)
+        val maxHeight = min(dp(244), availableAbove.coerceAtLeast(dp(118)))
+        val menuHeight = min(preferredHeight, maxHeight)
         val popupWidth = min(dp(224), (root.width - dp(28)).coerceAtLeast(dp(190)))
         val popup = PopupWindow(menu, popupWidth, menuHeight, false).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -14296,29 +14381,6 @@ class MainActivity : Activity() {
         "back" -> R.drawable.ic_back
         else -> R.drawable.ic_add
         }
-    }
-
-    private fun preferenceButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
-        gravity = Gravity.CENTER
-        setPadding(dp(if (retroTheme) 4 else 11), 0, dp(if (retroTheme) 4 else 11), 0)
-        minWidth = dp(36)
-        minHeight = dp(40)
-        if (!retroTheme) {
-            maxWidth = dp(145)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setTextColor(when (themeName) {
-                "light" -> Color.rgb(65, 75, 91)
-                "warm" -> Color.rgb(98, 77, 59)
-                "custom" -> TEXT
-                else -> Color.rgb(232, 233, 237)
-            })
-        }
-        background = if (retroTheme) lollipopRipple() else composerGlassControlBackground()
-        foreground = null
-        stateListAnimator = null
-        setDefaultFocusHighlightEnabled(false)
-        setOnClickListener { action() }
     }
 
     private fun smallButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
