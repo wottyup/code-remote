@@ -4570,7 +4570,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-menu-glass-shadow: 0 22px 50px rgba(0, 0, 0, .26), inset 0 1px 0 color-mix(in srgb, var(--custom-theme-text-color) 28%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--custom-theme-text-color) 12%, transparent);
   --composer-menu-glass-blur: var(--custom-theme-panel-blur);
 }
-.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .composer-menu__popover {
+.composer-portal-theme:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .composer-menu__popover {
   border-color: var(--composer-menu-glass-edge);
   border-radius: 16px;
   background: linear-gradient(145deg, var(--composer-menu-glass-highlight), transparent 48%), var(--composer-menu-glass-surface);
@@ -4578,4 +4578,4 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   backdrop-filter: blur(var(--composer-menu-glass-blur)) saturate(175%);
   -webkit-backdrop-filter: blur(var(--composer-menu-glass-blur)) saturate(175%);
 }
-.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .composer-menu__option { border-radius: 9px; }
+.composer-portal-theme:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .composer-menu__option { border-radius: 9px; }
