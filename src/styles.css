@@ -1154,7 +1154,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .send-button:disabled, .attach-button:disabled, .attach-button--disabled { background: transparent; color: #727883; cursor: not-allowed; }
 .send-button--queue:not(:disabled) { background: transparent; color: #9eafff; }
-.send-button--continue { font-size: calc(11px + var(--mobile-font-offset)); }
 .attach-button { border: 0; background: transparent; color: #c9cbd1; }
 .attach-button--native { position: relative; overflow: hidden; }
 .attach-button--native > svg { pointer-events: none; }
@@ -2767,6 +2766,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .attach-button svg,
   .remote-shell--theme-retro .send-button svg,
   .remote-shell--theme-retro .stop-button svg { display: none; }
+  .remote-shell--theme-retro .send-button--continue > svg { display: inline-block; }
   .remote-shell--theme-retro .composer-hint { margin-left: .5em; color: #000; font: .8125em/normal "Times New Roman", Times, serif; }
   .remote-shell--theme-retro .composer-actions { display: inline-flex; min-width: 0; gap: 8px; }
   .remote-shell--theme-retro .attach-button { position: relative; display: inline-block; width: auto; height: auto; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #00e; font: inherit; text-decoration: underline; }
@@ -2777,7 +2777,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .send-button--arrow::after { content: '发送'; }
   .remote-shell--theme-retro .send-button--queue::after { content: '排队'; }
   .remote-shell--theme-retro .send-button--interrupt::after { content: '暂停'; }
-  .remote-shell--theme-retro .send-button--continue::after { content: '继续'; }
   .remote-shell--theme-retro .send-button--confirm::after { content: '确定'; }
   .remote-shell--theme-retro .composer-queue { border: 0; border-radius: 0; background: #fff; color: #000; box-shadow: none; }
   .remote-shell--theme-retro .composer-queue__item--editing { background: #eee; }
@@ -4157,7 +4156,6 @@ html[lang="en"] .remote-shell--theme-retro .attach-button::after { content: 'Att
 html[lang="en"] .remote-shell--theme-retro .send-button--arrow::after { content: 'Send'; }
 html[lang="en"] .remote-shell--theme-retro .send-button--queue::after { content: 'Queue'; }
 html[lang="en"] .remote-shell--theme-retro .send-button--interrupt::after { content: 'Pause'; }
-html[lang="en"] .remote-shell--theme-retro .send-button--continue::after { content: 'Continue'; }
 html[lang="en"] .remote-shell--theme-retro .send-button--confirm::after { content: 'Confirm'; }
 html[lang="en"] .remote-shell--theme-retro .remote-sidebar__close::after { content: 'Back to chat'; }
 html[lang="en"] .remote-shell--theme-retro .thread-list-heading__actions .icon-button::after { content: 'Refresh'; }
@@ -4532,7 +4530,6 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   flex: 0 0 36px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .13);
 }
-.remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer__footer .send-button--continue { width: auto; min-width: 36px; flex-basis: auto; padding-inline: 11px; border-radius: 999px; }
 .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer__footer :is(.composer-new-thread-button, .attach-button--native, .send-button, .stop-button):disabled,
 .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer__footer .attach-button--disabled { opacity: .52; }
 
@@ -4541,7 +4538,6 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer__footer :is(.composer-new-thread-button, .send-button, .stop-button) { width: 40px; min-width: 40px; height: 40px; flex-basis: 40px; }
   .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom):not(.remote-shell--theme-retro) .message-composer__footer .attach-button.attach-button--native { width: 40px; min-width: 40px; height: 40px; flex-basis: 40px; border-radius: 50%; }
   .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer__footer .composer-menu__trigger { height: 40px; max-width: 145px; padding-inline: 11px; }
-  .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer__footer .send-button--continue { width: auto; flex-basis: auto; }
 }
 @media (pointer: coarse) {
   :root[data-keyboard-transition="true"] .remote-shell:is(.remote-shell--theme-dark, .remote-shell--theme-light, .remote-shell--theme-warm, .remote-shell--theme-custom) .message-composer { backdrop-filter: none; -webkit-backdrop-filter: none; }
