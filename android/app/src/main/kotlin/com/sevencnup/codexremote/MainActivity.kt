@@ -943,6 +943,7 @@ class MainActivity : Activity() {
     private val expandedSettingsSections = mutableSetOf("主题")
     private var settingsScroll: ScrollView? = null
     private var settingsDialog: Dialog? = null
+    private var updateCheckDialog: Dialog? = null
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
@@ -1395,6 +1396,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         preferencePopup?.dismiss()
+        updateCheckDialog?.let(::dismissUpdateCheckDialog)
         clearLiveReply()
         closeWebPreview()
         activityShimmerAnimator?.cancel()
@@ -10707,13 +10709,14 @@ class MainActivity : Activity() {
     }
 
     private fun checkForUpdates() {
+        if (updateCheckDialog?.isShowing == true) return
         val updateEndpoint = endpoint
         val updateToken = token
         if (updateEndpoint.isBlank() || updateToken.isBlank()) {
             showToast("请先连接电脑，再检查更新")
             return
         }
-        showToast(tr("正在检查更新…"))
+        val progressDialog = showUpdateCheckDialog()
         io.execute {
             try {
                 val client = socketClient.newBuilder().callTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build()
@@ -10725,7 +10728,10 @@ class MainActivity : Activity() {
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (response.code == 404) {
-                        handler.post { if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) showToast("本机尚无 Android 安装包") }
+                        handler.post {
+                            dismissUpdateCheckDialog(progressDialog)
+                            if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) showToast("本机尚无 Android 安装包")
+                        }
                         return@use
                     }
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
@@ -10738,6 +10744,7 @@ class MainActivity : Activity() {
                         !latest.sha256.matches(Regex("[0-9a-f]{64}")) || latest.sizeBytes <= 0L
                     ) throw IOException("Invalid Android update manifest")
                     handler.post {
+                        dismissUpdateCheckDialog(progressDialog)
                         if (isFinishing || isDestroyed || endpoint != updateEndpoint || token != updateToken) return@post
                         when {
                             compareAppVersions(latest.version, BuildConfig.VERSION_NAME) <= 0 -> showToast("当前已是最新版本")
@@ -10761,12 +10768,52 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 handler.post {
+                    dismissUpdateCheckDialog(progressDialog)
                     if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) {
                         showToast(if (error.message == "HTTP 401") "配对已失效，请重新连接电脑" else "检查更新失败，请稍后重试")
                     }
                 }
             }
         }
+    }
+
+    private fun showUpdateCheckDialog(): Dialog {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(17), dp(20), dp(17))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+            addView(ProgressBar(this@MainActivity).apply {
+                isIndeterminate = true
+                contentDescription = tr("正在检查更新…")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    indeterminateTintList = ColorStateList.valueOf(ACCENT)
+                }
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            addView(label("正在检查更新…", 13, TEXT, true), LinearLayout.LayoutParams(WRAP, WRAP).apply {
+                leftMargin = dp(12)
+            })
+        }
+        dialog.setContentView(content)
+        dialog.setCancelable(false)
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setOnDismissListener { if (updateCheckDialog === dialog) updateCheckDialog = null }
+        dialog.show()
+        updateCheckDialog = dialog
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(min(dp(330), resources.displayMetrics.widthPixels - dp(28)), WRAP)
+            setGravity(Gravity.CENTER)
+        }
+        return dialog
+    }
+
+    private fun dismissUpdateCheckDialog(dialog: Dialog) {
+        if (updateCheckDialog !== dialog) return
+        updateCheckDialog = null
+        if (dialog.isShowing) dialog.dismiss()
     }
 
     private fun startAndroidUpdateDownload(updateEndpoint: String, updateToken: String, update: LocalAndroidUpdate) {
