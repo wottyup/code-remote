@@ -1196,8 +1196,6 @@ interface ComposerHandle {
 
 interface MessageComposerProps {
   token: string
-  showScrollToBottom: boolean
-  onScrollToBottom: () => void
   translation: TranslationPreferences
   translationRevision: number
   portalTheme: AppTheme
@@ -1257,8 +1255,6 @@ interface MessageComposerProps {
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   token,
-  showScrollToBottom,
-  onScrollToBottom,
   translation,
   translationRevision,
   portalTheme,
@@ -2584,7 +2580,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   </>
 
   return (
-    <div className={`composer-dock${showScrollToBottom ? ' composer-dock--scroll-visible' : ''}`}>
+    <div className="composer-dock">
       {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
         <div className={`composer-file-change-summary${fileChangeSummaryExpanded ? ' composer-file-change-summary--expanded' : ''}`} aria-live="polite" aria-label={uiFormat("{0} 个文件已更改，新增 {1} 行，删除 {2} 行", fileChangeSummary.files.length, fileChangeSummary.additions, fileChangeSummary.deletions)}>
           {mobileLayout ? (
@@ -2630,15 +2626,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         onSubmit={(event) => void send(event)}
       >
       <span className="message-composer__breath" data-reply-breath-layer aria-hidden="true" />
-      {showScrollToBottom ? (
-        <div className="composer-scroll-bump">
-          <svg className="composer-scroll-bump__shape" viewBox="0 0 104 40" aria-hidden="true" focusable="false">
-            <path d="M0 40 C14 40 19 38 27 24 C34 8 43 0 52 0 C61 0 70 8 77 24 C85 38 90 40 104 40 Z" />
-            <path d="M0 40 C14 40 19 38 27 24 C34 8 43 0 52 0 C61 0 70 8 77 24 C85 38 90 40 104 40" />
-          </svg>
-          <button className="composer-scroll-bump__button" type="button" onClick={onScrollToBottom} aria-label={ui('回到底部')} title={ui('回到底部')}><ChevronDown size={17} aria-hidden="true" /></button>
-        </div>
-      ) : null}
       {editingQueuedMessageId ? (
         <div className="composer-edit-bar">
           <span>{ui("正在修改排队消息")}</span>
@@ -4271,8 +4258,6 @@ interface RemoteChatPaneProps {
   composerHandle: RefObject<ComposerHandle | null>
   copyFeedback: { id: string; label: string } | null
   onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
-  onScrollToBottomVisibilityChange: (paneIndex: number, visible: boolean) => void
-  onScrollToBottomActionChange: (paneIndex: number, action: (() => void) | null) => void
 }
 
 const emptyOperations: CodexOperation[] = []
@@ -4305,8 +4290,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
   composerHandle,
   copyFeedback,
   onCopy,
-  onScrollToBottomVisibilityChange,
-  onScrollToBottomActionChange,
 }: RemoteChatPaneProps) {
   useUiLanguage()
   const activeThreadId = remote.activeThread?.id ?? null
@@ -4654,19 +4637,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
     positionMessageStreamAtBottom()
   }, [activeThreadId, positionMessageStreamAtBottom, remote.messages])
 
-  useLayoutEffect(() => {
-    onScrollToBottomVisibilityChange(paneIndex, showScrollToBottom)
-  }, [onScrollToBottomVisibilityChange, paneIndex, showScrollToBottom])
-
-  useLayoutEffect(() => () => {
-    onScrollToBottomVisibilityChange(paneIndex, false)
-  }, [onScrollToBottomVisibilityChange, paneIndex])
-
-  useLayoutEffect(() => {
-    onScrollToBottomActionChange(paneIndex, scrollToBottom)
-    return () => onScrollToBottomActionChange(paneIndex, null)
-  }, [onScrollToBottomActionChange, paneIndex, scrollToBottom])
-
   const loadEarlierMessages = useCallback(() => {
     if (visibleStartIndex === 0) return
     const firstMessage = messageContent.current?.querySelector<HTMLElement>('[data-message-id]')
@@ -4981,6 +4951,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
           onRespond={remote.respondToApproval}
         />
       </div> : null}
+      {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label={ui("回到底部")} title={ui("回到底部")}><ChevronDown size={16} /><span>{ui("回到底部")}</span></button> : null}
       {remote.error ? (
         <div className="remote-error" role="alert">
           <AlertTriangle size={15} /><span>{uiMessage(remote.error)}</span>
@@ -5028,17 +4999,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout?.openPaneIndexes ?? [0])
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout?.selectedPaneIndex ?? 0)
-  const [scrollToBottomVisibleByPane, setScrollToBottomVisibleByPane] = useState<Record<number, boolean>>({})
-  const scrollToBottomActions = useRef<Record<number, (() => void) | null>>({})
-  const onScrollToBottomVisibilityChange = useCallback((paneIndex: number, visible: boolean) => {
-    setScrollToBottomVisibleByPane((current) => Boolean(current[paneIndex]) === visible ? current : { ...current, [paneIndex]: visible })
-  }, [])
-  const onScrollToBottomActionChange = useCallback((paneIndex: number, action: (() => void) | null) => {
-    scrollToBottomActions.current[paneIndex] = action
-  }, [])
-  const scrollSelectedPaneToBottom = useCallback(() => {
-    scrollToBottomActions.current[selectedPaneIndex]?.()
-  }, [selectedPaneIndex])
   const paneLayoutRef = useRef(initialPaneLayout)
   const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const workspaceTerminalRequestSequence = useRef(0)
@@ -6958,16 +6918,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     composerHandle={composerHandle}
                     copyFeedback={copyFeedback}
                     onCopy={copyMessage}
-                    onScrollToBottomVisibilityChange={onScrollToBottomVisibilityChange}
-                    onScrollToBottomActionChange={onScrollToBottomActionChange}
                   />
                 </div>
               ))}
             </div>
             <MessageComposer
               token={token}
-              showScrollToBottom={Boolean(scrollToBottomVisibleByPane[selectedPaneIndex])}
-              onScrollToBottom={scrollSelectedPaneToBottom}
               translation={translationPreferences}
               translationRevision={translationRevision}
               portalTheme={themePreferences.theme}
