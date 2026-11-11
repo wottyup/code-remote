@@ -64,7 +64,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell { --thread-row-panel-surface: #101114; --thread-row-active-surface: #303236; --thread-row-hover-surface: rgba(38, 41, 49, .72); --thread-row-reply-active-base: #303236; }
 .remote-shell--theme-light { --thread-row-panel-surface: #fff; --thread-row-active-surface: #dce6f7; --thread-row-hover-surface: #e9e9e9; --thread-row-reply-active-base: #dce6f7; }
 .remote-shell--theme-warm { --thread-row-panel-surface: #fbf6ef; --thread-row-active-surface: #ead2b4; --thread-row-hover-surface: #f2e7d8; --thread-row-reply-active-base: #ead2b4; }
-.remote-shell--theme-custom { --thread-row-panel-surface: var(--custom-theme-active); --thread-row-active-surface: var(--custom-theme-active); --thread-row-hover-surface: var(--custom-theme-active); --thread-row-reply-active-base: var(--custom-theme-active); }
+.remote-shell--theme-custom { --thread-row-panel-surface: var(--custom-theme-active); --thread-row-active-surface: var(--custom-theme-thread-selected); --thread-row-hover-surface: var(--custom-theme-active); --thread-row-reply-active-base: var(--custom-theme-thread-selected); }
 .remote-shell--theme-chinese-retro { --thread-row-panel-surface: #f1f9fb; --thread-row-active-surface: #dbe5d6; --thread-row-hover-surface: #dfe6e7; --thread-row-reply-active-base: #dbe5d6; }
 .sidebar-backdrop { display: none; }
 .remote-shell--android { padding-top: var(--native-status-bar-inset); }
@@ -1696,7 +1696,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .workspace-file-preview__line-content .hljs-link { color: #397b7c; }
 
 .remote-shell--theme-custom { --codex-brand-color: var(--custom-theme-text-color); --pane-marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background: transparent; }
-.remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .theme-settings-panel { --sidebar-selection-border: var(--custom-theme-border); --sidebar-selection-bg: var(--custom-theme-active); border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .theme-settings-panel { --sidebar-selection-border: var(--custom-theme-border); --sidebar-selection-bg: var(--custom-theme-thread-selected); border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .sidebar-search { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: color-mix(in srgb, var(--custom-theme-text-color) 65%, transparent); }
 .remote-shell--theme-custom .sidebar-search:focus-within { background: var(--custom-theme-surface); }
 .remote-shell--theme-custom .sidebar-search input { color: var(--custom-theme-text-color); }
@@ -1717,7 +1717,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .thread-row { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .thread-row__pin { color: var(--custom-theme-text-color); opacity: .78; }
 .remote-shell--theme-custom .thread-row:hover, .remote-shell--theme-custom .sidebar-settings:hover { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
-.remote-shell--theme-custom .thread-row--active { --thread-row-surface: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .thread-row--active { --thread-row-surface: var(--custom-theme-thread-selected); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .sidebar-selection-bar { border-color: var(--custom-theme-border); background: var(--custom-theme-control); }
 .remote-shell--theme-custom .sidebar-selection-bar__summary,
 .remote-shell--theme-custom .sidebar-selection-bar__summary button,
@@ -2198,10 +2198,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 20%, #303236); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 20%, #303236); }
 .remote-shell--theme-light.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 15%, #dce6f7); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 15%, #dce6f7); }
 .remote-shell--theme-warm.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, #ead2b4); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, #ead2b4); }
-.remote-shell--theme-custom.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); }
+.remote-shell--theme-custom.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-thread-selected)); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-thread-selected)); }
 .remote-shell--theme-light.remote-shell--claude-mode .thread-row--active { --thread-row-surface: rgba(238, 140, 109, .15); color: #202020; }
 .remote-shell--theme-warm.remote-shell--claude-mode .thread-row--active { --thread-row-surface: rgba(238, 140, 109, .18); color: #46382c; }
-.remote-shell--theme-custom.remote-shell--claude-mode .thread-row--active { --thread-row-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom.remote-shell--claude-mode .thread-row--active { --thread-row-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-thread-selected)); color: var(--custom-theme-text-color); }
 .remote-shell--claude-mode .thread-row--active > .thread-row__icon { background: rgba(238, 140, 109, .16); box-shadow: none; }
 .remote-shell--claude-mode .thread-row--active .thread-row__icon > .engine-brand-icon--claude-code,
 .remote-shell--claude-mode .thread-row .engine-brand-icon--claude-code { background-color: #ee8c6d; color: #ee8c6d; }

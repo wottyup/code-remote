@@ -151,6 +151,9 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
   const controlOpacity = Math.min(1, Math.round(moduleOpacity * (58 / 38) * 100) / 100)
   const activeOpacity = Math.round(moduleOpacity * (24 / 38) * 100) / 100
   const darkCustomTheme = isLightColor(preferences.customTextColor)
+  const selectionOpacity = Math.max(activeOpacity, 0.42)
+  const selectionContrast = darkCustomTheme ? '#ffffff' : '#000000'
+  const selectionColor = `color-mix(in srgb, ${moduleColor} 60%, ${selectionContrast} 40%)`
   return {
     '--custom-theme-background': preferences.customBackgroundColor,
     '--custom-theme-module-color': moduleColor,
@@ -169,6 +172,7 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
     '--custom-theme-surface': rgbaFromHex(moduleColor, moduleOpacity),
     '--custom-theme-control': rgbaFromHex(moduleColor, controlOpacity),
     '--custom-theme-active': rgbaFromHex(moduleColor, activeOpacity),
+    '--custom-theme-thread-selected': `color-mix(in srgb, ${selectionColor} ${Math.round(selectionOpacity * 100)}%, transparent)`,
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
     '--user-font-offset': `${normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)}px`,
