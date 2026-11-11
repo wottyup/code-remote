@@ -130,8 +130,11 @@ let replyBreathSyncFrame: number | null = null
 const pendingReplyBreathAnimations = new WeakSet<Animation>()
 
 function replyBreathAnimation(element: Element | null): Animation | null {
+  const matchesReplyBreath = (animation: Animation) => ['composer-fill-breathe', 'thread-row-reply-breathe'].includes((animation as CSSAnimation).animationName)
+  const elementAnimation = element?.getAnimations().find(matchesReplyBreath)
+  if (elementAnimation) return elementAnimation
   const layer = element?.querySelector<HTMLElement>(':scope > [data-reply-breath-layer]')
-  return layer?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'composer-fill-breathe') ?? null
+  return layer?.getAnimations().find(matchesReplyBreath) ?? null
 }
 
 function paneBorderBreathAnimation(): Animation | null {
@@ -6794,8 +6797,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
-                <div className={'thread-row-item' + (isActive ? ' thread-row-item--active' : '') + (isSelected ? ' thread-row-item--selected' : '')} key={thread.id}>
-                  <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }} onClick={(event) => {
+                <div className={'thread-row-item' + (isActive ? ' thread-row-item--active' : '') + (isSelected ? ' thread-row-item--selected' : '') + (isReplying ? ' thread-row-item--replying' : '')} key={thread.id}>
+                  <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe' || event.animationName === 'thread-row-reply-breathe') scheduleReplyBreatheSync() }} onClick={(event) => {
                     const pending = threadLongPress.current
                     if (pending?.threadId === thread.id && pending.triggered) {
                       event.preventDefault()

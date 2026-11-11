@@ -61,11 +61,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-recovery__actions button:first-child { border-color: rgba(159, 177, 255, .48); background: #586aa4; color: #fff; }
 .app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
 .remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; --codex-brand-color: #7188c2; --pane-marquee-color: #f5f5f1; position: relative; isolation: isolate; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); grid-template-rows: minmax(0, 1fr); overflow: hidden; overscroll-behavior: none; background: #101114; color: #e9ebef; }
-.remote-shell { --thread-row-panel-surface: #101114; --thread-row-active-surface: #303236; --thread-row-hover-surface: rgba(38, 41, 49, .72); }
-.remote-shell--theme-light { --thread-row-panel-surface: #fff; --thread-row-active-surface: #eff2f8; --thread-row-hover-surface: #e9e9e9; }
-.remote-shell--theme-warm { --thread-row-panel-surface: #fbf6ef; --thread-row-active-surface: #f1e3d1; --thread-row-hover-surface: #f2e7d8; }
-.remote-shell--theme-custom { --thread-row-panel-surface: var(--custom-theme-active); --thread-row-active-surface: var(--custom-theme-active); --thread-row-hover-surface: var(--custom-theme-active); }
-.remote-shell--theme-chinese-retro { --thread-row-panel-surface: #f1f9fb; --thread-row-active-surface: #dbe5d6; --thread-row-hover-surface: #dfe6e7; }
+.remote-shell { --thread-row-panel-surface: #101114; --thread-row-active-surface: #303236; --thread-row-hover-surface: rgba(38, 41, 49, .72); --thread-row-reply-active-base: #303236; }
+.remote-shell--theme-light { --thread-row-panel-surface: #fff; --thread-row-active-surface: #eff2f8; --thread-row-hover-surface: #e9e9e9; --thread-row-reply-active-base: #eff2f8; }
+.remote-shell--theme-warm { --thread-row-panel-surface: #fbf6ef; --thread-row-active-surface: #f1e3d1; --thread-row-hover-surface: #f2e7d8; --thread-row-reply-active-base: #f1e3d1; }
+.remote-shell--theme-custom { --thread-row-panel-surface: var(--custom-theme-active); --thread-row-active-surface: var(--custom-theme-active); --thread-row-hover-surface: var(--custom-theme-active); --thread-row-reply-active-base: var(--custom-theme-active); }
+.remote-shell--theme-chinese-retro { --thread-row-panel-surface: #f1f9fb; --thread-row-active-surface: #dbe5d6; --thread-row-hover-surface: #dfe6e7; --thread-row-reply-active-base: #dbe5d6; }
 .sidebar-backdrop { display: none; }
 .remote-shell--android { padding-top: var(--native-status-bar-inset); }
 .remote-sidebar { --sidebar-selection-border: #8296ce; --sidebar-selection-bg: rgba(107, 128, 185, .2); --thread-row-panel-inset: 12px; z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 12px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
@@ -150,6 +150,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row:disabled { cursor: default; opacity: .62; }
 .thread-row__copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
 .thread-row__copy strong { overflow: hidden; color: inherit; font-size: calc(13.5px + var(--mobile-font-offset)); font-weight: 520; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
+@property --thread-row-reply-strength { syntax: '<percentage>'; inherits: true; initial-value: 6.5%; }
 .thread-row > .thread-row__breath { position: absolute; z-index: 0; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; }
 .thread-row--replying > .thread-row__breath { background: radial-gradient(ellipse 125% 140% at 50% 50%, color-mix(in srgb, currentColor 36%, transparent) 0%, color-mix(in srgb, currentColor 24%, transparent) 80%, color-mix(in srgb, currentColor 18%, transparent) 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent); opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
 .thread-row--replying > :not(.thread-row__breath) { position: relative; z-index: 1; }
@@ -2194,10 +2195,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--claude-mode .new-thread-button__icon { background: rgba(238, 140, 109, .18); color: #ee8c6d; }
 .remote-shell--claude-mode .new-thread-button:hover:not(:disabled) { border-color: #ee8c6d; background: linear-gradient(135deg, rgba(238, 140, 109, .32), rgba(238, 140, 109, .18)); }
 .remote-shell--claude-mode .thread-row--active { --thread-row-surface: linear-gradient(100deg, rgba(238, 140, 109, .32), rgba(41, 44, 53, .6)); }
-.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 20%, #303236); }
-.remote-shell--theme-light.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 15%, #eff2f8); }
-.remote-shell--theme-warm.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, #f1e3d1); }
-.remote-shell--theme-custom.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); }
+.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 20%, #303236); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 20%, #303236); }
+.remote-shell--theme-light.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 15%, #eff2f8); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 15%, #eff2f8); }
+.remote-shell--theme-warm.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, #f1e3d1); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, #f1e3d1); }
+.remote-shell--theme-custom.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); }
 .remote-shell--theme-light.remote-shell--claude-mode .thread-row--active { --thread-row-surface: rgba(238, 140, 109, .15); color: #202020; }
 .remote-shell--theme-warm.remote-shell--claude-mode .thread-row--active { --thread-row-surface: rgba(238, 140, 109, .18); color: #46382c; }
 .remote-shell--theme-custom.remote-shell--claude-mode .thread-row--active { --thread-row-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); color: var(--custom-theme-text-color); }
@@ -4614,8 +4615,10 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active > .thread-row--active::before,
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::before,
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying::before,
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active > .thread-row--active::after,
-.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::after {
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::after,
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying::after {
   position: absolute;
   z-index: 1;
   left: 0;
@@ -4625,12 +4628,14 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   pointer-events: none;
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active > .thread-row--active::before,
-.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::before {
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::before,
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying::before {
   top: -14px;
   background: radial-gradient(circle at top right, transparent 13.5px, var(--thread-row-surface) 14px);
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active > .thread-row--active::after,
-.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::after {
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item:not(.thread-row-item--active):not(.thread-row-item--selected):hover > .thread-row::after,
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying::after {
   bottom: -14px;
   background: radial-gradient(circle at bottom right, transparent 13.5px, var(--thread-row-surface) 14px);
 }
@@ -4640,5 +4645,21 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list__section { padding-left: calc(8px + var(--thread-row-panel-inset)); }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-list__empty { margin-left: calc(8px + var(--thread-row-panel-inset)); }
-.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active > .thread-row--active > .thread-row__breath { display: none; }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying { z-index: 1; }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying {
+  --thread-row-reply-base: transparent;
+  --thread-row-reply-strength: 6.5%;
+  --thread-row-surface: color-mix(in srgb, currentColor var(--thread-row-reply-strength), var(--thread-row-reply-base));
+  border-radius: 0 9px 9px 0;
+  background: var(--thread-row-surface);
+  box-shadow: none;
+  animation: thread-row-reply-breathe 5.5s ease-in-out infinite;
+}
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--active.thread-row-item--replying > .thread-row--active.thread-row--replying { --thread-row-reply-base: var(--thread-row-reply-active-base); }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--selected.thread-row-item--replying > .thread-row--selected.thread-row--replying { --thread-row-reply-base: var(--sidebar-selection-bg); }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying > .thread-row__breath { display: none; }
+@keyframes thread-row-reply-breathe { 0%, 100% { --thread-row-reply-strength: 6.5%; } 50% { --thread-row-reply-strength: 26%; } }
+@media (prefers-reduced-motion: reduce) {
+  .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying { animation: none; --thread-row-reply-strength: 26%; }
+}
 .remote-shell.remote-shell--theme-dark .thread-row--active .thread-row__copy > strong { color: #fff; }
