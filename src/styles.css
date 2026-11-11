@@ -62,8 +62,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
 .remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; --codex-brand-color: #7188c2; --pane-marquee-color: #f5f5f1; position: relative; isolation: isolate; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); grid-template-rows: minmax(0, 1fr); overflow: hidden; overscroll-behavior: none; background: #101114; color: #e9ebef; }
 .remote-shell { --thread-row-panel-surface: #101114; --thread-row-active-surface: #303236; --thread-row-hover-surface: rgba(38, 41, 49, .72); --thread-row-reply-active-base: #303236; }
-.remote-shell--theme-light { --thread-row-panel-surface: #fff; --thread-row-active-surface: #eff2f8; --thread-row-hover-surface: #e9e9e9; --thread-row-reply-active-base: #eff2f8; }
-.remote-shell--theme-warm { --thread-row-panel-surface: #fbf6ef; --thread-row-active-surface: #f1e3d1; --thread-row-hover-surface: #f2e7d8; --thread-row-reply-active-base: #f1e3d1; }
+.remote-shell--theme-light { --thread-row-panel-surface: #fff; --thread-row-active-surface: #dce6f7; --thread-row-hover-surface: #e9e9e9; --thread-row-reply-active-base: #dce6f7; }
+.remote-shell--theme-warm { --thread-row-panel-surface: #fbf6ef; --thread-row-active-surface: #ead2b4; --thread-row-hover-surface: #f2e7d8; --thread-row-reply-active-base: #ead2b4; }
 .remote-shell--theme-custom { --thread-row-panel-surface: var(--custom-theme-active); --thread-row-active-surface: var(--custom-theme-active); --thread-row-hover-surface: var(--custom-theme-active); --thread-row-reply-active-base: var(--custom-theme-active); }
 .remote-shell--theme-chinese-retro { --thread-row-panel-surface: #f1f9fb; --thread-row-active-surface: #dbe5d6; --thread-row-hover-surface: #dfe6e7; --thread-row-reply-active-base: #dbe5d6; }
 .sidebar-backdrop { display: none; }
@@ -1417,7 +1417,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .thread-row { color: #666; }
 .remote-shell--theme-light .thread-row__pin { color: #a37b24; }
 .remote-shell--theme-light .thread-row:hover, .remote-shell--theme-light .sidebar-settings:hover, .remote-shell--theme-light .sidebar-settings--active { border-color: #e1e1e1; background: #e9e9e9; color: #202020; }
-.remote-shell--theme-light .thread-row--active { --thread-row-surface: #eff2f8; color: #202020; }
+.remote-shell--theme-light .thread-row--active { --thread-row-surface: #dce6f7; color: #202020; }
 .remote-shell--theme-light .sidebar-selection-bar { border-color: #d9deeb; background: #f5f6f9; }
 .remote-shell--theme-light .sidebar-selection-bar__actions button { border-color: #c8d2ea; background: #e7ecf8; }
 .remote-shell--theme-light .sidebar-selection-bar__actions button.sidebar-selection-bar__delete { border-color: #edc9cc; background: #fff1f1; }
@@ -1576,7 +1576,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .sidebar-engine-filter--claude-code[aria-pressed="true"] { border-color: #d9b9a7; background: #f2e0d5; }
 .remote-shell--theme-warm .thread-row { color: #806f5e; }
 .remote-shell--theme-warm .thread-row:hover, .remote-shell--theme-warm .sidebar-settings:hover, .remote-shell--theme-warm .sidebar-settings--active { border-color: #e8d9c7; background: #f2e7d8; color: #46382c; }
-.remote-shell--theme-warm .thread-row--active { --thread-row-surface: #f1e3d1; color: #46382c; }
+.remote-shell--theme-warm .thread-row--active { --thread-row-surface: #ead2b4; color: #46382c; }
 .remote-shell--theme-warm .sidebar-selection-bar { border-color: #e3d4c2; background: #f5ebdf; }
 .remote-shell--theme-warm .sidebar-selection-bar__actions button { border-color: #d9c1a8; background: #eee0d0; color: #6a4c35; }
 .remote-shell--theme-warm .sidebar-selection-bar__actions button.sidebar-selection-bar__delete { border-color: #dfb9af; background: #f9e8e5; color: #9b4d44; }
@@ -2196,8 +2196,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--claude-mode .new-thread-button:hover:not(:disabled) { border-color: #ee8c6d; background: linear-gradient(135deg, rgba(238, 140, 109, .32), rgba(238, 140, 109, .18)); }
 .remote-shell--claude-mode .thread-row--active { --thread-row-surface: linear-gradient(100deg, rgba(238, 140, 109, .32), rgba(41, 44, 53, .6)); }
 .remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 20%, #303236); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 20%, #303236); }
-.remote-shell--theme-light.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 15%, #eff2f8); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 15%, #eff2f8); }
-.remote-shell--theme-warm.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, #f1e3d1); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, #f1e3d1); }
+.remote-shell--theme-light.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 15%, #dce6f7); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 15%, #dce6f7); }
+.remote-shell--theme-warm.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, #ead2b4); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, #ead2b4); }
 .remote-shell--theme-custom.remote-shell--claude-mode { --thread-row-active-surface: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); --thread-row-reply-active-base: color-mix(in srgb, #ee8c6d 18%, var(--custom-theme-active)); }
 .remote-shell--theme-light.remote-shell--claude-mode .thread-row--active { --thread-row-surface: rgba(238, 140, 109, .15); color: #202020; }
 .remote-shell--theme-warm.remote-shell--claude-mode .thread-row--active { --thread-row-surface: rgba(238, 140, 109, .18); color: #46382c; }
