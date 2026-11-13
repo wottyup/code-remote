@@ -1,5 +1,7 @@
 # Code Remote（远程开发工作台）
 
+<p align="center"><img src="public/code-remote-robot.svg" alt="Code Remote 机器人标志" width="96"></p>
+
 <p align="center">
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.0--dev.1-orange?style=flat-square" alt="Web 版本 0.121.0-dev.1"></a>
   <a href="https://github.com/wottyup/code-remote/stargazers"><img src="https://img.shields.io/github/stars/wottyup/code-remote?style=flat-square" alt="GitHub 星标数"></a>
