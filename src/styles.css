@@ -724,6 +724,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .sidebar-chat-shortcut-actions { display: flex; justify-content: flex-end; padding-top: 14px; }
 .sidebar-chat-shortcut-reset { min-width: 0; }
 .sidebar-chat-shortcut-message { padding-top: 0; padding-bottom: 14px; color: #aabaff; }
+.sidebar-chat-shortcut-reference { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(146, 157, 184, .16); }
+.sidebar-chat-shortcut-reference > h3 { margin: 0 0 12px; color: inherit; font-size: calc(15px + var(--mobile-font-offset)); font-weight: 620; }
+.sidebar-chat-shortcut-reference__group + .sidebar-chat-shortcut-reference__group { margin-top: 14px; }
+.sidebar-chat-shortcut-reference__group > h4 { margin: 0; color: inherit; font-size: calc(12px + var(--mobile-font-offset)); font-weight: 620; opacity: .78; }
+.theme-settings-panel .sidebar-chat-shortcut-reference__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 0; padding: 11px 0; border-bottom: 1px solid rgba(146, 157, 184, .1); }
+.sidebar-chat-shortcut-reference__row > span:first-child { min-width: 0; }
+.sidebar-chat-shortcut-reference__keys { display: flex; min-width: 0; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.sidebar-chat-shortcut-reference__keys .sidebar-chat-shortcut-key { min-width: 0; }
 .message-stream { grid-column: 1; grid-row: 2; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: contain; padding: 0 25px 28px; }
 .message-stream--following { overflow-anchor: none; }
 .message-stream__content { display: flex; min-width: 0; min-height: 100%; flex-direction: column; gap: 16px; padding-top: 32px; }
@@ -4211,6 +4219,8 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   .theme-settings-panel .sidebar-chat-shortcut-row { grid-template-columns: minmax(0, 1fr) auto; }
   .theme-settings-panel .sidebar-chat-shortcut-row > span:first-child { grid-column: 1 / -1; }
   .theme-settings-panel .sidebar-chat-shortcut-key { justify-self: start; }
+  .theme-settings-panel .sidebar-chat-shortcut-reference__row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .sidebar-chat-shortcut-reference__keys { justify-content: flex-start; }
   .theme-settings-panel .theme-background-framing { padding: 14px; }
   .translation-settings { gap: 12px; padding: 16px; }
   .translation-settings__group, .translation-settings__config { gap: 14px; padding: 15px; }

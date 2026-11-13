@@ -7168,6 +7168,32 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
     { value: 'pixel', label: ui('像素风'), description: ui('8-bit 像素界面'), previewClass: 'theme-option__preview--pixel' },
     { value: 'custom', label: ui('自定义主题'), description: ui('颜色、图片与透明度'), previewClass: 'theme-option__preview--custom' },
   ]
+  const shortcutReferenceGroups = [
+    { title: '消息与导航', shortcuts: [
+      { label: '发送消息', description: '在消息输入框中按 Enter 发送，Shift+Enter 换行。', keys: ['Enter', 'Shift+Enter'] },
+      { label: '立即发送或插队', description: '排队消息编辑时请先结束编辑；Ctrl+Enter 在 Codex 模式立即发送或插队，Claude Code 模式提交到当前会话并在当前回复结束后处理。', keys: ['Ctrl+Enter'] },
+      { label: '展开或收起排队消息', description: '有排队消息且输入框为空时使用。', keys: ['Ctrl+↑', 'Ctrl+↓'] },
+      { label: '切换并发窗口', description: '打开多个并发窗口时，在窗口之间切换。', keys: ['Ctrl+←', 'Ctrl+→'] },
+      { label: '提交自定义回答', description: '在需要 AI 回答的文本框中提交；Shift+Enter 换行。', keys: ['Enter', 'Shift+Enter'] },
+      { label: '关闭或中断当前操作', description: '关闭菜单或浮层、取消编辑；审批弹窗中会拒绝请求，回复进行中时会暂停回复。', keys: ['Esc'] },
+    ] },
+    { title: '文件编辑', shortcuts: [
+      { label: '保存文件修改', description: '文件预览处于编辑状态时保存修改。', keys: ['Ctrl/⌘+S'] },
+      { label: '插入缩进', description: '在文件预览编辑器中插入两个空格。', keys: ['Tab'] },
+    ] },
+    { title: '上下文菜单', shortcuts: [
+      { label: '执行菜单项', description: '菜单打开且焦点不在输入框时，按项目旁显示的数字；Delete 执行删除。', keys: ['1–9', '0', 'Delete'] },
+      { label: '复制选中文本', description: '选中文本的操作菜单打开时，复制选中内容。', keys: ['Ctrl/⌘+C'] },
+    ] },
+    { title: '下拉菜单与取景', shortcuts: [
+      { label: '浏览下拉选项', description: '聚焦自定义下拉框后打开并浏览选项；Home/End 跳到首尾，Esc 关闭。', keys: ['↑/↓', 'Home/End', 'Enter/Space', 'Esc'] },
+      { label: '微调背景取景', description: '上传背景图片后，先聚焦预览图；方向键移动 2%，Shift+方向键移动 10%。', keys: ['方向键', 'Shift+方向键'] },
+    ] },
+    { title: '面板尺寸', shortcuts: [
+      { label: '调整文件区宽度', description: '先聚焦右侧文件区分隔条；Home/End 调到最窄或最宽。', keys: ['←/→', 'Home', 'End'] },
+      { label: '调整浮层高度', description: '先聚焦浮层底部手柄；Shift 加大步幅，Home/End 调到最小或最大。', keys: ['↑/↓', 'Shift+↑/↓', 'Home/End'] },
+    ] },
+  ] as const
   const navigationGroups: Array<{ label: string; items: Array<{ id: SettingsSectionId; label: string; icon: ReactNode }> }> = [
     { label: ui('外观'), items: [
       { id: 'theme', label: ui('主题'), icon: <Palette size={17} /> },
@@ -7175,7 +7201,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
     ] },
     { label: ui('聊天'), items: [
       { id: 'translation', label: ui('聊天翻译'), icon: <Languages size={17} /> },
-      { id: 'chat-shortcuts', label: ui('切换快捷键'), icon: <Keyboard size={17} /> },
+      { id: 'chat-shortcuts', label: ui('快捷键'), icon: <Keyboard size={17} /> },
     ] },
     { label: ui('连接'), items: [
       { id: 'codex-config', label: 'Codex API', icon: <EngineBrandIcon engine="codex" size={17} /> },
@@ -7606,9 +7632,9 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
         </div>
 
         <div id="settings-section-chat-shortcuts" className="theme-settings-panel__section" hidden={activeSection !== 'chat-shortcuts'}>
-        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("聊天切换快捷键")}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("快捷键")}>
           <div className="theme-settings-card__heading">
-            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />{ui("聊天切换快捷键")}</h2><p>{ui("录制键盘组合，自定义切换侧栏聊天的操作。")}</p></div>
+            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />{ui("快捷键")}</h2><p>{ui("查看应用内快捷键，并自定义聊天切换组合键。")}</p></div>
           </div>
           <div className="theme-display-controls sidebar-chat-shortcut-controls">
             <div className="sidebar-chat-shortcut-actions"><button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>{ui("恢复默认")}</button></div>
@@ -7628,6 +7654,20 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
                 </div>
               )
             })}
+            <div className="sidebar-chat-shortcut-reference">
+              <h3>{ui('其他快捷键')}</h3>
+              {shortcutReferenceGroups.map((group) => (
+                <section className="sidebar-chat-shortcut-reference__group" key={group.title}>
+                  <h4>{ui(group.title)}</h4>
+                  {group.shortcuts.map((shortcut) => (
+                    <div className="theme-control-row sidebar-chat-shortcut-reference__row" key={shortcut.label}>
+                      <span><strong>{ui(shortcut.label)}</strong><small>{ui(shortcut.description)}</small></span>
+                      <span className="sidebar-chat-shortcut-reference__keys">{shortcut.keys.map((key) => <kbd className="sidebar-chat-shortcut-key" key={key}>{key}</kbd>)}</span>
+                    </div>
+                  ))}
+                </section>
+              ))}
+            </div>
           </div>
           <p className="theme-settings-hint">{ui("设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。")}</p>
           {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{uiMessage(shortcutMessage)}</p> : null}
