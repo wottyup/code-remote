@@ -3164,7 +3164,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     }
   }, [browsingRoot, token])
 
-  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text', viewedByCodexThreadId?: string) => {
+  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text', viewedByCodexThreadId?: string, autoEdit = false) => {
     if (previewSaving) return
     if (previewDirty && !window.confirm(ui('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？'))) return
     if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
@@ -3201,6 +3201,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
         const file = await codexRemoteClient.workspaceFile(token, requestedCwd, path)
         if (generation !== previewRequestGeneration.current) return
         setPreviewFile(file)
+        if (autoEdit) setPreviewEditContent(file.content)
       }
     } catch (reason) {
       if (generation !== previewRequestGeneration.current) return
@@ -3812,7 +3813,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     }
     setSelectedPaths([entry.path])
     if (entry.kind === 'directory') toggleDirectory(entry.path)
-    else void loadPreview(entry.path, browsingRoot, undefined, workspaceFileType(entry.path).tone === 'image' ? 'image' : 'text')
+    else void loadPreview(entry.path, browsingRoot, undefined, workspaceFileType(entry.path).tone === 'image' ? 'image' : 'text', undefined, true)
   }
 
   async function copyPreview() {
