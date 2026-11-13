@@ -1,4 +1,21 @@
-# Code Remote
+# Code Remote（远程开发工作台）
+
+<p align="center"><img src="public/code-remote-robot.svg" alt="Code Remote 机器人标志" width="96"></p>
+
+<p align="center">
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.0--dev.1-orange?style=flat-square" alt="Web 版本 0.121.0-dev.1"></a>
+  <a href="https://github.com/wottyup/code-remote/stargazers"><img src="https://img.shields.io/github/stars/wottyup/code-remote?style=flat-square" alt="GitHub 星标数"></a>
+  <a href="https://github.com/wottyup/code-remote/forks"><img src="https://img.shields.io/github/forks/wottyup/code-remote?style=flat-square" alt="GitHub Fork 数"></a>
+  <a href="https://github.com/wottyup/code-remote/issues"><img src="https://img.shields.io/github/issues/wottyup/code-remote?style=flat-square" alt="未关闭的问题数"></a>
+  <a href="https://github.com/wottyup/code-remote/commits/main"><img src="https://img.shields.io/github/last-commit/wottyup/code-remote?style=flat-square" alt="最近提交"></a>
+</p>
+<p align="center">
+  <a href="android/app/build.gradle"><img src="https://img.shields.io/badge/Android-8.0%2B%20%28API%2026%29-3DDC84?logo=android&amp;logoColor=white&amp;style=flat-square" alt="Android 8.0 及以上"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/React-19-149ECA?logo=react&amp;logoColor=white&amp;style=flat-square" alt="React 19"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/Vite-7-646CFF?logo=vite&amp;logoColor=white&amp;style=flat-square" alt="Vite 7"></a>
+  <a href="server/requirements.txt"><img src="https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi&amp;logoColor=white&amp;style=flat-square" alt="FastAPI Python 后端"></a>
+  <a href="android/build.gradle"><img src="https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&amp;logoColor=white&amp;style=flat-square" alt="Kotlin 2.0.21"></a>
+</p>
 
 在手机浏览器和原生 Android APP 中远程查看并操作开发电脑上的 Codex 与 Claude Code。支持历史会话、实时收发消息、模型选择、附件、工作区文件和终端；代码助手运行在开发电脑上。
 
