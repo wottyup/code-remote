@@ -135,13 +135,29 @@ def _instruction(source: str, target: str, style: str) -> str:
 
 def _parse_chat_result(value: str, count: int) -> list[str]:
     text = value.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        raise TranslationError("AI 翻译结果格式无效，请重试。") from None
-    if not isinstance(parsed, list) or len(parsed) != count or any(not isinstance(item, str) for item in parsed):
+    # Drop Markdown fenced blocks no matter where they appear in the response.
+    fenced = re.search(r"```[^\n]*\n?(.*?)```", text, flags=re.S | re.I)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    def parse(raw: str) -> list[Any] | None:
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, list) else None
+
+    parsed = parse(text)
+    if parsed is None:
+        # Some models wrap the array in prose or an object. Fall back to the
+        # outermost JSON array embedded anywhere in the response.
+        start = text.find("[")
+        end = text.rfind("]")
+        if start != -1 and end > start:
+            parsed = parse(text[start:end + 1])
+    if parsed is None:
+        raise TranslationIncompleteError("AI 翻译结果格式无效，请重试。")
+    if len(parsed) != count or any(not isinstance(item, str) for item in parsed):
         raise TranslationIncompleteError("AI 翻译结果不完整，请重试。")
     return parsed
 

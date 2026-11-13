@@ -3,7 +3,7 @@
 <p align="center"><img src="public/code-remote-robot.svg" alt="Code Remote robot logo" width="96"></p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.4--dev.1-orange?style=flat-square" alt="Web version 0.121.4-dev.1"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.5--dev.1-orange?style=flat-square" alt="Web version 0.121.5-dev.1"></a>
   <a href="https://github.com/wottyup/code-remote/stargazers"><img src="https://img.shields.io/github/stars/wottyup/code-remote?style=flat-square" alt="GitHub stars"></a>
   <a href="https://github.com/wottyup/code-remote/forks"><img src="https://img.shields.io/github/forks/wottyup/code-remote?style=flat-square" alt="GitHub forks"></a>
   <a href="https://github.com/wottyup/code-remote/issues"><img src="https://img.shields.io/github/issues/wottyup/code-remote?style=flat-square" alt="Open issues"></a>

@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.121.5-dev.1] - Tolerate prose, fenced blocks, and object-wrapped text in AI translation results and retry malformed ones
+
 ## [0.121.4-dev.1] - Auto-retry incomplete AI reply translations by splitting them into smaller batches
 
 ## [0.121.3-dev.1] - Fix page text flickering when expanding "View English original"
