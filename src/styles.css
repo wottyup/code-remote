@@ -1253,7 +1253,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-pane-slot:not(:has(.conversation-pane--selected)) { display: none; }
   .workspace-explorer { position: fixed; z-index: 10; inset: 0 0 0 auto; display: grid; width: min(67vw, 256px); height: var(--app-viewport-height); min-height: 0; grid-column: auto; grid-row: auto; padding-top: max(14px, env(safe-area-inset-top)); transform: translate3d(105%, 0, 0); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: -14px 0 40px rgba(0, 0, 0, .4); backface-visibility: hidden; touch-action: pan-y; will-change: transform; }
   .remote-shell--android .workspace-explorer { padding-top: max(14px, calc(var(--native-status-bar-inset) + 14px)); }
-  .workspace-file-preview__code, .workspace-file-preview__editor { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
+  .workspace-file-preview__code, .workspace-file-preview__editor, .workspace-file-preview__editor-highlight { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
   .workspace-explorer--mobile-open { transform: translate3d(0, 0, 0); visibility: visible; transition: transform .2s ease; }
   .workspace-explorer--dragging { transform: translate3d(var(--workspace-drag-offset, 105%), 0, 0); transition: none; }
   .workspace-explorer--mobile-open .workspace-explorer__close { display: grid; }
@@ -4678,3 +4678,18 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .thread-row-item--replying > .thread-row--replying { animation: none; --thread-row-reply-strength: 26%; }
 }
 .remote-shell.remote-shell--theme-dark .thread-row--active .thread-row__copy > strong { color: #fff; }
+
+/* 编辑态语法着色：透明文本 textarea 覆盖高亮层，随滚动同步 */
+.workspace-file-preview__editor-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; }
+.workspace-file-preview__editor { display: block; width: 100%; height: 100%; min-width: 0; box-sizing: border-box; resize: none; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 9px 12px 15px; border: 0; border-radius: 0; outline: 0; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: #c9d4e4; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(14px + var(--mobile-font-offset)); tab-size: 2; white-space: pre; }
+.workspace-file-preview__editor-highlight { position: absolute; inset: 0; margin: 0; box-sizing: border-box; overflow: hidden; pointer-events: none; padding: 9px 12px 15px; min-height: 0; background: #111317; color: #d4d8e0; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(14px + var(--mobile-font-offset)); tab-size: 2; white-space: pre; }
+.remote-shell--theme-light .workspace-file-preview__editor { color: transparent; -webkit-text-fill-color: transparent; caret-color: #303030; }
+.remote-shell--theme-light .workspace-file-preview__editor-highlight { background: #fff; }
+.remote-shell--theme-warm .workspace-file-preview__editor { color: transparent; -webkit-text-fill-color: transparent; caret-color: #4a392b; }
+.remote-shell--theme-warm .workspace-file-preview__editor-highlight { background: #fbf6ef; }
+.remote-shell--theme-custom .workspace-file-preview__editor { color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .workspace-file-preview__editor-highlight { background: var(--custom-theme-control); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-retro .workspace-file-preview__editor { color: transparent; -webkit-text-fill-color: transparent; caret-color: #20252b; }
+.remote-shell--theme-retro .workspace-file-preview__editor-highlight { background: #fff; font-family: "Times New Roman", Times, serif; font-size: calc(1em - 1px); }
+.remote-shell--theme-pixel .workspace-file-preview__editor { color: transparent; -webkit-text-fill-color: transparent; caret-color: #d5deeb; }
+.remote-shell--theme-pixel .workspace-file-preview__editor-highlight { background: #0b1522; }

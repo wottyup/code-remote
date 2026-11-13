@@ -87,6 +87,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { workspaceFileType } from '../lib/workspaceFileTypes'
+import type { HighlightedCodeSegment } from '../lib/codeHighlight'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { SshMcpSettingsCard } from './SshMcpSettingsCard'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
@@ -3075,6 +3076,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const [previewCopied, setPreviewCopied] = useState(false)
   const previewCloseButton = useRef<HTMLButtonElement>(null)
   const previewEditor = useRef<HTMLTextAreaElement>(null)
+  const editorHighlightRef = useRef<HTMLPreElement>(null)
   const previewReturnFocus = useRef<HTMLElement | null>(null)
   const requestGeneration = useRef(0)
   const previewRequestGeneration = useRef(0)
@@ -3920,6 +3922,45 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     }
   }, [previewFile])
   const highlightedPreviewLines = highlightedPreview?.file === previewFile ? highlightedPreview.lines : []
+  const [editorHighlightedLines, setEditorHighlightedLines] = useState<HighlightedCodeSegment[][] | null>(null)
+  useEffect(() => {
+    if (previewEditContent === null || !previewFile) {
+      setEditorHighlightedLines(null)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void import('../lib/codeHighlight').then(async ({ highlightCodeLines }) => {
+        const lines = await highlightCodeLines(previewFile.path, previewEditContent)
+        if (!cancelled) setEditorHighlightedLines(lines)
+      }).catch(() => {
+        if (!cancelled) setEditorHighlightedLines(null)
+      })
+    }, 120)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [previewEditContent, previewFile])
+  useEffect(() => {
+    const editor = previewEditor.current
+    const highlight = editorHighlightRef.current
+    if (!editor || !highlight) return
+    const syncHighlightScroll = () => {
+      highlight.scrollTop = editor.scrollTop
+      highlight.scrollLeft = editor.scrollLeft
+      highlight.style.right = `${editor.offsetWidth - editor.clientWidth}px`
+      highlight.style.bottom = `${editor.offsetHeight - editor.clientHeight}px`
+    }
+    syncHighlightScroll()
+    editor.addEventListener('scroll', syncHighlightScroll)
+    const observer = new ResizeObserver(syncHighlightScroll)
+    observer.observe(editor)
+    return () => {
+      editor.removeEventListener('scroll', syncHighlightScroll)
+      observer.disconnect()
+    }
+  }, [previewEditContent, editorHighlightedLines])
   useEffect(() => {
     if (!previewPath) return
     const frame = window.requestAnimationFrame(() => previewCloseButton.current?.focus())
@@ -4082,20 +4123,30 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             {previewImage ? (
               <div className="workspace-image-preview"><img src={`data:${previewImage.mediaType};base64,${previewImage.data}`} alt={previewImage.path} /></div>
             ) : previewEditContent !== null && previewFile ? (
-              <textarea
-                ref={previewEditor}
-                className="workspace-file-preview__editor"
-                aria-label={uiFormat("编辑文件 {0}", previewFile.path)}
-                value={previewEditContent}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                wrap="off"
-                disabled={previewSaving}
-                onChange={(event) => setPreviewEditContent(event.currentTarget.value)}
-                onKeyDown={handlePreviewEditorKeyDown}
-                onContextMenu={openSelectionContextMenu}
-              />
+              <div className="workspace-file-preview__editor-wrap">
+                <pre ref={editorHighlightRef} className="workspace-file-preview__editor-highlight workspace-file-preview__line-content" aria-hidden="true"><code>{editorHighlightedLines
+                  ? editorHighlightedLines.flatMap((line, lineIndex) => [
+                    ...(lineIndex > 0 ? ['\n'] : []),
+                    ...line.map((segment, segmentIndex) => segment.className
+                      ? <span className={segment.className} key={`${lineIndex}-${segmentIndex}`}>{segment.text}</span>
+                      : segment.text),
+                  ])
+                  : previewEditContent}</code></pre>
+                <textarea
+                  ref={previewEditor}
+                  className="workspace-file-preview__editor"
+                  aria-label={uiFormat("编辑文件 {0}", previewFile.path)}
+                  value={previewEditContent}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  wrap="off"
+                  disabled={previewSaving}
+                  onChange={(event) => setPreviewEditContent(event.currentTarget.value)}
+                  onKeyDown={handlePreviewEditorKeyDown}
+                  onContextMenu={openSelectionContextMenu}
+                />
+              </div>
             ) : previewFile || previewDiffLines ? (
               <pre className="workspace-file-preview__code" data-diff-preview={previewDiffLines ? 'true' : undefined} onContextMenu={openSelectionContextMenu}><code>{previewDiffLines
                 ? previewDiffLines.map((diffLine, index) => {
