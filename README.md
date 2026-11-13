@@ -1,6 +1,6 @@
 # Code Remote
 
-在手机浏览器和 Android APP 中远程查看并继续本机 Codex 与 Claude Code 对话。网页提供对话记录侧栏、聊天页面、实时消息、模型选择和图片输入；代码助手运行在开发电脑上。
+在手机浏览器和原生 Android APP 中远程查看并操作开发电脑上的 Codex 与 Claude Code。支持历史会话、实时收发消息、模型选择、附件、工作区文件和终端；代码助手运行在开发电脑上。
 
 ## 需要准备
 
@@ -68,17 +68,7 @@ Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-
 
 ## SSH MCP 远程服务器
 
-在网页版“设置”→“SSH MCP 服务器”中添加一台或多台主机。连接认证支持运行 Code Remote 的电脑上的 SSH Agent，或该电脑上的私钥文件路径；私钥内容和 SSH 密码不会通过网页传输或保存。使用 Agent 时，启动 Code Remote 的服务进程需要继承 SSH Agent 环境。建议填写服务器提供的 SSH 主机指纹，以固定校验服务器身份。
-
-每台服务器可单独设置生产、预发布或开发分组，viewer、operator 或 admin 角色，以及只读限制和命令确认方式。默认采用生产分组、只读 viewer，并逐条询问命令；SSH MCP 的自动批准不会开放。需要批准的命令会在 Codex 聊天中显示供确认。当前 SSH MCP 仅接入 Codex，Claude Code 的网页审批桥接尚未支持。
-
-## 阿里云百炼语音输入（可选）
-
-首次使用时，在网页版左侧“设置”→“阿里云百炼语音”中填写 API Key、Workspace ID 和地域，保存后立即生效，无需重启。API Key 保存在服务端本机的配置文件中，不会返回给浏览器；Linux/macOS 下该文件仅允许服务用户读写。默认实时模型为 `qwen3.8-omni-flash-realtime`，默认转写模型为 `qwen3-asr-flash-realtime`；模型也可以在高级设置中调整。
-
-仍可通过 `DASHSCOPE_API_KEY`、`BAILIAN_WORKSPACE_ID`、`BAILIAN_REGION`、`BAILIAN_REALTIME_MODEL` 和 `BAILIAN_TRANSCRIPTION_MODEL` 环境变量配置。环境变量会作为项目设置的回退值；“恢复服务器环境变量”会清除项目内保存的配置。
-
-语音输入仅转写并插入输入框，不会自动发送。浏览器麦克风要求 HTTPS 安全连接；电脑本机的 `localhost` 可直接使用，但手机通过局域网 IP 访问 HTTP 页面时，浏览器会禁止麦克风，需要通过 HTTPS 访问。
+在网页版“设置”→“SSH MCP 服务器”中填写服务器 IP 或主机名、端口、用户名和密码，可以添加多台主机。SSH 密码保存在运行 Code Remote 的电脑上，设置页不会回显已保存的密码。保存后，新建或重新打开的 Codex 对话会使用最新设置，正在运行的对话不受影响。当前 SSH MCP 仅接入 Codex；Claude Code 的命令审批还不能转发到网页。
 
 后端必须和要使用的 Codex 安装在同一台主机上；Linux 后端不能直接识别另一台 Windows 主机里的 Codex 进程。
 
