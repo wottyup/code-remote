@@ -1,34 +1,34 @@
-# Code Remote（远程开发工作台）
+# Code Remote (Remote Development Workbench)
 
-<p align="center"><img src="public/code-remote-robot.svg" alt="Code Remote 机器人标志" width="96"></p>
+<p align="center"><img src="public/code-remote-robot.svg" alt="Code Remote robot logo" width="96"></p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.3--dev.1-orange?style=flat-square" alt="Web 版本 0.121.3-dev.1"></a>
-  <a href="https://github.com/wottyup/code-remote/stargazers"><img src="https://img.shields.io/github/stars/wottyup/code-remote?style=flat-square" alt="GitHub 星标数"></a>
-  <a href="https://github.com/wottyup/code-remote/forks"><img src="https://img.shields.io/github/forks/wottyup/code-remote?style=flat-square" alt="GitHub Fork 数"></a>
-  <a href="https://github.com/wottyup/code-remote/issues"><img src="https://img.shields.io/github/issues/wottyup/code-remote?style=flat-square" alt="未关闭的问题数"></a>
-  <a href="https://github.com/wottyup/code-remote/commits/main"><img src="https://img.shields.io/github/last-commit/wottyup/code-remote?style=flat-square" alt="最近提交"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.3--dev.1-orange?style=flat-square" alt="Web version 0.121.3-dev.1"></a>
+  <a href="https://github.com/wottyup/code-remote/stargazers"><img src="https://img.shields.io/github/stars/wottyup/code-remote?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/wottyup/code-remote/forks"><img src="https://img.shields.io/github/forks/wottyup/code-remote?style=flat-square" alt="GitHub forks"></a>
+  <a href="https://github.com/wottyup/code-remote/issues"><img src="https://img.shields.io/github/issues/wottyup/code-remote?style=flat-square" alt="Open issues"></a>
+  <a href="https://github.com/wottyup/code-remote/commits/main"><img src="https://img.shields.io/github/last-commit/wottyup/code-remote?style=flat-square" alt="Latest commit"></a>
 </p>
 <p align="center">
-  <a href="android/app/build.gradle"><img src="https://img.shields.io/badge/Android-8.0%2B%20%28API%2026%29-3DDC84?logo=android&amp;logoColor=white&amp;style=flat-square" alt="Android 8.0 及以上"></a>
+  <a href="android/app/build.gradle"><img src="https://img.shields.io/badge/Android-8.0%2B%20%28API%2026%29-3DDC84?logo=android&amp;logoColor=white&amp;style=flat-square" alt="Android 8.0 and up"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/React-19-149ECA?logo=react&amp;logoColor=white&amp;style=flat-square" alt="React 19"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/Vite-7-646CFF?logo=vite&amp;logoColor=white&amp;style=flat-square" alt="Vite 7"></a>
-  <a href="server/requirements.txt"><img src="https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi&amp;logoColor=white&amp;style=flat-square" alt="FastAPI Python 后端"></a>
+  <a href="server/requirements.txt"><img src="https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi&amp;logoColor=white&amp;style=flat-square" alt="FastAPI Python backend"></a>
   <a href="android/build.gradle"><img src="https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&amp;logoColor=white&amp;style=flat-square" alt="Kotlin 2.0.21"></a>
 </p>
 
-在手机浏览器和原生 Android APP 中远程查看并操作开发电脑上的 Codex 与 Claude Code。支持历史会话、实时收发消息、模型选择、附件、工作区文件和终端；代码助手运行在开发电脑上。
+Remotely view and control Codex and Claude Code running on your development computer from a mobile browser or native Android app. Supports session history, real-time message exchange, model selection, attachments, workspace files, and a terminal; the coding assistants run on the development computer.
 
-## 需要准备
+## Prerequisites
 
-- 已安装并完成登录的 Codex CLI，命令名为 `codex`
-- Node.js 20.19+ 和 pnpm
+- Codex CLI installed and logged in, invoked as `codex`
+- Node.js 20.19+ and pnpm
 - Python 3.10+
-- 手机和电脑连接同一个可信局域网
+- Phone and computer on the same trusted LAN
 
-## 首次配置
+## First-time Setup
 
-在项目目录创建 Python 虚拟环境并安装服务端依赖：
+Create a Python virtual environment in the project directory and install the server dependencies:
 
 ```bash
 cd /code/code-remote
@@ -37,24 +37,24 @@ python3 -m venv .venv
 pip install -r server/requirements.txt
 ```
 
-前端依赖由 `/code/pnpm-workspace.yaml` 管理。在 workspace 根目录执行过一次 `pnpm install` 后，使用下面的启动命令即可。
+Frontend dependencies are managed by `/code/pnpm-workspace.yaml`. After running `pnpm install` once from the workspace root, use the start command below.
 
-## 启动
+## Starting
 
-日常远程使用时，在电脑终端运行以下命令，先构建网页，再同时启动本机 Codex 引擎和局域网页面：
+For day-to-day remote use, run the following in a terminal on your computer: it builds the web frontend, then starts both the local Codex engine and the LAN page.
 
 ```bash
 cd /code
 pnpm --filter code-remote start
 ```
 
-构建后的网页资源支持压缩与缓存，适合手机长时间访问。仅在编辑前端、需要热更新时使用 `pnpm --filter code-remote dev`；开发服务器会加载较大的调试资源。
+The built assets support compression and caching, which is good for long sessions on a phone. Only use `pnpm --filter code-remote dev` when editing the frontend and you want hot reload; the dev server loads heavier debug assets.
 
-启动完成后，终端会显示首次授权新浏览器所需的配对码。手机浏览器打开 `http://电脑的局域网 IP:4173`。配对成功后，该浏览器会被记为受信任设备：即使本机服务重启也不用再次输入；新浏览器、无痕窗口或清除站点数据后才需要重新配对。电脑端本机也可以访问 `http://127.0.0.1:4173`。
+When startup finishes, the terminal prints a pairing code needed to authorize a new browser. Open `http://<computer's LAN IP>:4173` on the phone. After pairing succeeds, that browser is recorded as a trusted device: you won't need to enter the code again even if the local service restarts; only a new browser, an incognito window, or clearing site data requires re-pairing. You can also visit `http://127.0.0.1:4173` locally on the computer.
 
-网页版只连接当前打开的网址对应的 Code Remote 服务。访问另一台电脑时，直接打开那台电脑的网页地址并单独配对。
+The web version connects only to the Code Remote service at the URL currently open. To access another computer, just open that computer's web address and pair separately.
 
-需要后台常驻时，可安装仓库中的 systemd unit：
+To keep it running in the background, install the systemd units from the repo:
 
 ```bash
 sudo install -m 0644 /code/code-remote/deploy/code-remote.service /etc/systemd/system/code-remote.service
@@ -63,57 +63,57 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now code-remote-tmux.service code-remote.service
 ```
 
-此 unit 在启动时构建网页并使用构建资源。更新已安装的 unit 后需要执行 `systemctl daemon-reload`；已有服务需要在聊天任务结束后重启才能加载新版后端。该服务同时管理 Codex 子进程，重启会中断它仍在执行的任务。
+These units build the web frontend at startup and serve the built assets. After updating an installed unit, run `systemctl daemon-reload`; an already-running service must be restarted after its chat tasks finish to load the new backend. The service also manages Codex child processes, so restarting interrupts any tasks still in progress.
 
-常驻服务的配对码和运行日志通过下面的命令查看：
+View the resident service's pairing code and logs with:
 
 ```bash
 journalctl -u code-remote.service -f
 ```
 
-网页服务把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
+The web service forwards API and WebSocket requests to `127.0.0.1:18766` on the computer. The Codex App Server is reached only via local stdio; it opens no network port. The web connection between phone and computer uses LAN HTTP; use it only on trusted networks and allow the computer's firewall to accept connections on port 4173.
 
-Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后运行 `pnpm --filter code-remote start`，也可双击 `start-code-remote.bat`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
+Both Windows and Linux are supported. On native Windows, create `.venv` in a PowerShell session in the project directory, then run `pnpm --filter code-remote start`, or double-click `start-code-remote.bat`; the launcher automatically uses `.venv\Scripts\python.exe` and supports `codex.cmd`/`codex.exe`. If Codex is not on PATH, set it explicitly:
 
 ```powershell
-$env:CODE_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.cmd"
+$env:CODE_REMOTE_COMMAND = "C:\Users\<your username>\AppData\Roaming\npm\codex.cmd"
 $env:CODE_REMOTE_WORKSPACE = "C:\path\to\your\project"
 pnpm --filter code-remote start
 ```
 
-Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `code-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
+On Linux/macOS the chat terminal keeps sessions alive with tmux; on Linux run `sudo apt-get install tmux`, on macOS run `brew install tmux`. When using systemd, also install `code-remote-tmux.service` above so the tmux shell can reconnect after the Python service restarts. Sessions are cleaned up after a computer reboot, when the tmux service is stopped manually, when you type `exit`, when a session is idle for 30 minutes, or when there are more than 10 unattached sessions. Native Windows terminals keep temporary-shell behavior.
 
-## SSH MCP 远程服务器
+## SSH MCP Remote Servers
 
-在网页版“设置”→“SSH MCP 服务器”中填写服务器 IP 或主机名、端口、用户名和密码，可以添加多台主机。SSH 密码保存在运行 Code Remote 的电脑上，设置页不会回显已保存的密码。保存后，新建或重新打开的 Codex 对话会使用最新设置，正在运行的对话不受影响。当前 SSH MCP 仅接入 Codex；Claude Code 的命令审批还不能转发到网页。
+In the web UI, go to Settings → SSH MCP Servers and enter the server IP or hostname, port, username, and password; you can add multiple hosts. SSH passwords are stored on the computer running Code Remote, and the settings page never echoes saved passwords. After saving, new or reopened Codex conversations use the latest settings; running conversations are unaffected. SSH MCP currently connects only to Codex; Claude Code's command approval cannot yet be forwarded to the web UI.
 
-后端必须和要使用的 Codex 安装在同一台主机上；Linux 后端不能直接识别另一台 Windows 主机里的 Codex 进程。
+The backend must be installed on the same host as the Codex it drives; a Linux backend cannot directly see a Codex process on a separate Windows host.
 
-受信任设备的令牌摘要保存在用户数据目录中，原始令牌和配对码不会写入该文件。Windows 默认使用 `%LOCALAPPDATA%\CodexRemote`，避免把应用数据写入项目或受限的 Codex 运行目录；Linux/macOS 默认使用 `~/.codex/codex-remote`。网页中的“退出”会撤销当前设备；如果设备遗失，可停止服务后删除该目录中的授权文件，再启动服务使所有设备重新配对。可用 `CODE_REMOTE_HOME` 或 `CODE_REMOTE_AUTH_FILE` 设置位置。
+Trusted-device token digests are stored in the user data directory; raw tokens and pairing codes are never written to that file. Windows defaults to `%LOCALAPPDATA%\CodexRemote`, keeping app data out of the project or restricted Codex run directories; Linux/macOS default to `~/.codex/codex-remote`. Signing out in the web UI revokes the current device; if a device is lost, stop the service, delete the authorization files in that directory, and start it again to re-pair all devices. Locations can be overridden with `CODE_REMOTE_HOME` or `CODE_REMOTE_AUTH_FILE`.
 
-## 工作目录和历史会话
+## Working Directory and Session History
 
-新建对话默认使用应用仓库的上一级目录作为工作目录（例如应用位于 `/code/code-remote` 时，默认工作目录为 `/code`），因此新拉取的项目会与 `code-remote` 并列，而不是放进应用仓库内部。可以通过环境变量或启动参数更改：
+New conversations default to the directory above the app repo as the working directory (for example, if the app lives at `/code/code-remote`, the default working directory is `/code`), so newly cloned projects sit alongside `code-remote` rather than inside the app repo. You can override this with an environment variable or a start argument:
 
 ```bash
 CODE_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter code-remote engine:dev
 ```
 
-历史列表读取本机 Codex 最近 100 条未归档会话，包含其他工作目录创建的会话；打开会话后，标题下方会显示该会话的工作目录。后端监听 Codex 会话文件变化，并通过 WebSocket 通知侧栏更新，无需刷新网页。
+The history list reads the 100 most recent non-archived Codex sessions on the machine, including ones created in other working directories; after opening a session, its working directory is shown below the title. The backend watches the Codex session files and pushes updates to the sidebar over WebSocket, so no page refresh is needed.
 
-本地 Codex App Server 默认直接使用用户级 `CODEX_HOME`，因此网页端与桌面 Codex 读取并写入同一套配置、模型和会话历史。Windows 与 Hapi 一样，优先使用 PATH 中实际解析到的 Codex CLI，并直接启动 app-server，通过仅监听 `127.0.0.1` 的随机端口和 capability token 连接；不再依赖需要额外权限的共享 daemon/control socket。npm 安装的 Codex 会从 `.cmd` shim 解析到同一安装下的 `codex.js`，再由 Node 启动。网页新建、恢复的会话由 Codex app-server 写入用户原有历史。可显式设置 `CODE_REMOTE_APP_SERVER_HOME` 固定使用独立运行目录。
+The local Codex App Server uses the user-level `CODEX_HOME` directly by default, so the web UI and desktop Codex read and write the same configuration, models, and session history. Like Hapi, on Windows it prefers the Codex CLI actually resolved from PATH and starts the app-server directly, connecting through a random port that listens only on `127.0.0.1` plus a capability token; it no longer depends on a shared daemon/control socket requiring extra privileges. A code-installed Codex resolves from the `.cmd` shim to the `codex.js` in the same installation and is started by Node. Conversations created or resumed in the web UI are written to the user's existing history by the Codex app-server. You can set `CODE_REMOTE_APP_SERVER_HOME` explicitly to pin a separate data directory.
 
-## 在网页与本机 Codex 间交还会话
+## Handing Sessions Back and Forth Between the Web UI and Local Codex
 
-网页端发送过消息的会话会由网页专用 App Server 持有写入权；如果要回到本机 Codex 继续该会话，先等网页端回复结束，再点击聊天页右上角的“交还本机”并确认。该操作只关闭网页专用的 Codex 子进程，不会重启开发服务、SSH 会话或浏览器配对；网页也不会自动重新占回会话。
+A session to which the web UI has sent messages is held for writing by the web-specific App Server. To continue that session in the local Codex, first wait for the web reply to finish, then click "Return to machine" at the top-right of the chat page and confirm. This only closes the web-specific Codex child process; it does not restart the dev service, SSH sessions, or browser pairing, and the web UI will not automatically reclaim the session.
 
-要再次在网页继续时，确认本机 Codex 已结束该会话的任务，再点击右上角“重新接管”。若本机仍持有会话，网页会明确提示该会话正被其他 Codex 实例使用。
+To continue in the web UI again, make sure the local Codex has finished the session's tasks, then click "Take over" at the top-right. If the machine still holds the session, the web UI clearly warns that the session is being used by another Codex instance.
 
-## 构建
+## Building
 
 ```bash
 cd /code
 pnpm --filter code-remote build
 ```
 
-构建产物位于 `code-remote/dist`。`pnpm start` 自动构建并通过 Vite preview 提供网页，由 `scripts/dev.mjs --production` 同时启动 Python 引擎；使用 systemd 时由 `code-remote.service` 在后台持续管理。
+Build output goes to `code-remote/dist`. `pnpm start` builds automatically and serves the page via Vite preview, with `scripts/dev.mjs --production` starting the Python engine at the same time; under systemd, `code-remote.service` manages it continuously in the background.
