@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.121.4-dev.1] - Auto-retry incomplete AI reply translations by splitting them into smaller batches
+
 ## [0.121.3-dev.1] - Fix page text flickering when expanding "View English original"
 
 ## [0.121.2-dev.1] - Show syntax highlighting when editing files

@@ -35,6 +35,11 @@ class TranslationError(ValueError):
     pass
 
 
+class TranslationIncompleteError(TranslationError):
+    """Raised when a provider returns a partial or malformed result that may
+    succeed when retried over a smaller batch."""
+
+
 class TranslationHTTPError(TranslationError):
     def __init__(self, provider: str, status_code: int) -> None:
         self.status_code = status_code
@@ -137,7 +142,7 @@ def _parse_chat_result(value: str, count: int) -> list[str]:
     except ValueError:
         raise TranslationError("AI 翻译结果格式无效，请重试。") from None
     if not isinstance(parsed, list) or len(parsed) != count or any(not isinstance(item, str) for item in parsed):
-        raise TranslationError("AI 翻译结果不完整，请重试。")
+        raise TranslationIncompleteError("AI 翻译结果不完整，请重试。")
     return parsed
 
 
@@ -447,10 +452,7 @@ class TranslationService:
                 else:
                     batches = [missing_values[offset:offset + 40] for offset in range(0, len(missing_values), 40)]
                 for batch in batches:
-                    if provider in {"codex", "claude"}:
-                        missing_results.extend(await self._translate_cli(provider, config, batch, source, target, style))
-                    else:
-                        missing_results.extend(await asyncio.to_thread(self._translate_api, provider, config, batch, source, target, style))
+                    missing_results.extend(await self._translate_batch(provider, config, batch, source, target, style))
             with self._lock:
                 for segment_key, result in zip(missing_keys, missing_results):
                     result_by_key[segment_key] = result
@@ -519,7 +521,7 @@ class TranslationService:
             else:
                 endpoint = base_url.rstrip("/") + "/chat/completions"
                 fallback_endpoint = None
-            payload = {"model": model, "messages": [
+            payload = {"model": model, "max_tokens": 8_192, "messages": [
                 {"role": "system", "content": _instruction(source, target, style)},
                 {"role": "user", "content": json.dumps(values, ensure_ascii=False)},
             ]}
@@ -556,7 +558,7 @@ class TranslationService:
             if not isinstance(response, dict):
                 raise TranslationError("Anthropic 接口返回了无效内容。")
             if response.get("stop_reason") == "max_tokens":
-                raise TranslationError("Anthropic 译文被截断，请缩短文本后重试。")
+                raise TranslationIncompleteError("Anthropic 译文被截断，请缩短文本后重试。")
             blocks = response.get("content")
             if not isinstance(blocks, list):
                 raise TranslationError("Anthropic 接口没有返回文本内容。")
@@ -587,7 +589,7 @@ class TranslationService:
             if not isinstance(response, dict):
                 raise TranslationError("OpenAI Responses 接口返回了无效内容。")
             if response.get("status") not in (None, "completed"):
-                raise TranslationError("OpenAI Responses 译文未完成，请缩短文本后重试。")
+                raise TranslationIncompleteError("OpenAI Responses 译文未完成，请缩短文本后重试。")
             output = response.get("output")
             if not isinstance(output, list):
                 raise TranslationError("OpenAI Responses 接口没有返回文本内容。")
@@ -596,7 +598,7 @@ class TranslationService:
                 if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") not in (None, "assistant"):
                     continue
                 if item.get("status") not in (None, "completed"):
-                    raise TranslationError("OpenAI Responses 译文未完成，请缩短文本后重试。")
+                    raise TranslationIncompleteError("OpenAI Responses 译文未完成，请缩短文本后重试。")
                 blocks = item.get("content")
                 if isinstance(blocks, list):
                     content += "".join(block["text"] for block in blocks if isinstance(block, dict) and block.get("type") == "output_text" and isinstance(block.get("text"), str))
@@ -606,8 +608,34 @@ class TranslationService:
         else:
             raise TranslationError("不支持这个翻译引擎。")
         if len(result) != len(values) or any(not isinstance(value, str) for value in result):
-            raise TranslationError("翻译结果不完整，请重试。")
+            raise TranslationIncompleteError("翻译结果不完整，请重试。")
         return result
+
+    async def _translate_batch(self, provider: str, config: dict[str, Any], values: list[str], source: str, target: str, style: str) -> list[str]:
+        """Translate a list of segments, retrying by splitting into smaller batches
+        whenever a provider returns an incomplete or truncated result."""
+        results: list[str | None] = [None] * len(values)
+        pending: list[list[int]] = [list(range(len(values)))]
+        while pending:
+            indexes = pending.pop()
+            if len(indexes) == 1:
+                results[indexes[0]] = (await self._translate_one(provider, config, [values[indexes[0]]], source, target, style))[0]
+                continue
+            try:
+                batch = [values[index] for index in indexes]
+                translated = await self._translate_one(provider, config, batch, source, target, style)
+                for index, text in zip(indexes, translated):
+                    results[index] = text
+            except TranslationIncompleteError:
+                middle = len(indexes) // 2
+                pending.append(indexes[middle:])
+                pending.append(indexes[:middle])
+        return results  # type: ignore[return-value]
+
+    async def _translate_one(self, provider: str, config: dict[str, Any], values: list[str], source: str, target: str, style: str) -> list[str]:
+        if provider in {"codex", "claude"}:
+            return await self._translate_cli(provider, config, values, source, target, style)
+        return await asyncio.to_thread(self._translate_api, provider, config, values, source, target, style)
 
     async def _translate_cli(self, provider: str, config: dict[str, Any], values: list[str], source: str, target: str, style: str) -> list[str]:
         executable = shutil.which(self._commands[provider])
