@@ -1,1670 +1,1671 @@
 # Changelog
 
-## [0.121.3-dev.1] - 修复展开“查看英文原文”时页面文字闪烁
+## [0.121.3-dev.1] - Fix page text flickering when expanding "View English original"
 
-## [0.121.2-dev.1] - 编辑文件时显示语法高亮
+## [0.121.2-dev.1] - Show syntax highlighting when editing files
 
-## [0.121.1-dev.1] - 文件树打开的文本文件默认进入可编辑状态
+## [0.121.1-dev.1] - Text files opened from the file tree enter editable state by default
 
-## [0.121.0-dev.1] - Claude Code 回复中支持发送消息
+## [0.121.0-dev.1] - Support sending messages in Claude Code replies
 
-## Android [0.118.11-dev.1] - 将桌面图标与启动页背景改为白色
+## Android [0.118.11-dev.1] - Change desktop icon and splash screen background to white
 
-## Android [0.118.10-dev.1] - 检查更新期间持续显示加载状态
+## Android [0.118.10-dev.1] - Keep showing loading state while checking for updates
 
-## Android [0.118.9-dev.1] - 支持点击聊天区域关闭模型浮窗
+## Android [0.118.9-dev.1] - Support tapping the chat area to close the model popup
 
-## Android [0.118.8-dev.1] - 修复添加连接弹窗按钮未跟随语言切换
+## Android [0.118.8-dev.1] - Fix add-connection dialog buttons not following language switch
 
-## [0.120.0-dev.1] - 移除 SSH MCP 高级设置并简化连接表单
+## [0.120.0-dev.1] - Remove SSH MCP advanced settings and simplify the connection form
 
-## [0.119.0-dev.1] - 简化 SSH MCP 连接并支持密码登录
+## [0.119.0-dev.1] - Simplify SSH MCP connection and support password login
 
-## Android [0.118.7-dev.1] - 优化侧栏紧凑布局并修复模型浮窗关闭操作
+## Android [0.118.7-dev.1] - Optimize compact sidebar layout and fix model popup close action
 
-## Android [0.118.6-dev.1] - 优化统一设置浮窗的连续选择与液态玻璃外观
+## Android [0.118.6-dev.1] - Optimize continuous selection and liquid-glass look of the unified settings popup
 
-## Android [0.118.5-dev.1] - 精简侧边栏新建对话入口并与搜索框并排显示
+## Android [0.118.5-dev.1] - Slim down the sidebar new-chat entry and place it beside the search box
 
-## Android [0.118.4-dev.1] - 合并聊天输入框的模型、思考与权限入口
+## Android [0.118.4-dev.1] - Merge model, thinking, and permission entries in the chat input box
 
-## Android [0.118.3-dev.1] - 更新机器人图标和聊天输入框外观
+## Android [0.118.3-dev.1] - Update robot icon and chat input box appearance
 
-## [0.118.2-dev.1] - 明确显示 SSH MCP 配置保存按钮的可用状态
+## [0.118.2-dev.1] - Clearly show enabled state of the SSH MCP config save button
 
-## [0.118.1-dev.1] - 优化网页聊天输入框的液态玻璃外观
+## [0.118.1-dev.1] - Optimize liquid-glass appearance of the web chat input box
 
-## [0.118.0-dev.1] - 设置页支持管理 SSH MCP 服务器与命令权限
+## [0.118.0-dev.1] - Settings page supports managing SSH MCP servers and command permissions
 
-## [0.117.0-dev.1] - 移除 Windows EXE 客户端与网页版多设备连接
+## [0.117.0-dev.1] - Remove Windows EXE client and multi-device web connection
 
-## Desktop [0.115.1-dev.3] - 修复返回设备管理页后自动跳回设备
+## Desktop [0.115.1-dev.3] - Fix auto-returning to device after going back to device management page
 
-## Desktop [0.115.1-dev.2] - 升级安装不再要求手动选择卸载
+## Desktop [0.115.1-dev.2] - Upgrade install no longer requires manually choosing to uninstall
 
-## [0.116.0-dev.1] - Windows 桌面端支持从当前设备检查、下载并安装更新
+## [0.116.0-dev.1] - Windows desktop supports checking, downloading, and installing updates from current device
 
-## Desktop [0.115.0-dev.1] - 支持校验安装包并通过覆盖升级替换旧版
+## Desktop [0.115.0-dev.1] - Support verifying install packages and replacing old version via overwrite upgrade
 
-## [0.115.2-dev.1] - 修复未配对页面无法管理其他设备
+## [0.115.2-dev.1] - Fix unpaired page unable to manage other devices
 
-## Desktop [0.114.1-dev.3] - 恢复旧版目标网页的配对与设备管理入口
+## Desktop [0.114.1-dev.3] - Restore pairing and device management entry for old-target web pages
 
-## Desktop [0.114.1-dev.2] - 修复 Windows 启动时出现多余控制台窗口
+## Desktop [0.114.1-dev.2] - Fix extra console window appearing at Windows startup
 
-## [0.115.1-dev.1] - 修复旧版设备网页导致自动配对持续等待
+## [0.115.1-dev.1] - Fix old-version device web page causing auto-pairing to keep waiting
 
-## Desktop [0.114.1-dev.1] - 修复自定义端口设备的桌面桥接权限
+## Desktop [0.114.1-dev.1] - Fix desktop bridge permission for custom-port devices
 
-## Desktop [0.114.0-dev.2] - 完成 Windows 桌面客户端 Tauri 迁移
+## Desktop [0.114.0-dev.2] - Complete Tauri migration of Windows desktop client
 
-## [0.115.0-dev.2] - 支持 Tauri 桌面连接桥接与设备管理
+## [0.115.0-dev.2] - Support Tauri desktop connection bridging and device management
 
-## Desktop [0.114.0-dev.1] - 开始迁移 Windows 桌面客户端到 Tauri
+## Desktop [0.114.0-dev.1] - Begin migrating Windows desktop client to Tauri
 
-## [0.115.0-dev.1] - 新增 Tauri 桌面端设备连接桥接
+## [0.115.0-dev.1] - Add Tauri desktop device connection bridge
 
-## Desktop [0.113.0-dev.4] - 保持桌面配对接口兼容并完善设备侧栏
+## Desktop [0.113.0-dev.4] - Keep desktop pairing interface compatible and improve device sidebar
 
-## Desktop [0.113.0-dev.3] - 整合设备切换侧栏并修复首连进入聊天流程
+## Desktop [0.113.0-dev.3] - Integrate device switch sidebar and fix first-connect entry into chat flow
 
-## Desktop [0.113.0-dev.2] - 重新打包 Windows 桌面客户端
+## Desktop [0.113.0-dev.2] - Repackage Windows desktop client
 
-## [0.114.4-dev.1] - 将桌面设备管理整合到聊天侧栏
+## [0.114.4-dev.1] - Integrate desktop device management into the chat sidebar
 
-## [0.114.3-dev.3] - 进一步收窄模型与思考等级菜单
+## [0.114.3-dev.3] - Further narrow model and thinking-level menus
 
-## [0.114.3-dev.2] - 优化模型与思考等级下拉菜单宽度
+## [0.114.3-dev.2] - Optimize width of model and thinking-level dropdown menus
 
-## [0.114.3-dev.1] - 修复切换对话后已显示的 AI 回复文字重新加载
+## [0.114.3-dev.1] - Fix reloading of already displayed AI reply text after switching conversations
 
-## [0.114.2-dev.1] - 添加设备时留在设置页并反馈真实配对结果
+## [0.114.2-dev.1] - Stay on settings page when adding a device and reflect real pairing result
 
-## [0.114.1-dev.1] - 保持侧栏与设置页的配对状态同步
+## [0.114.1-dev.1] - Keep pairing state in sync between sidebar and settings page
 
-## [0.114.0-dev.1] - 添加设备时可直接使用匹配码配对
+## [0.114.0-dev.1] - Allow using match code to pair when adding a device
 
-## [0.113.0-dev.1] - 网页端支持多设备配置、切换与独立窗口
+## [0.113.0-dev.1] - Web end supports multi-device config, switching, and independent windows
 
-## [0.112.0-dev.1] - 新增支持多设备连接的 Windows 桌面客户端
+## [0.112.0-dev.1] - Add Windows desktop client supporting multi-device connection
 
-## [0.111.3-dev.3] - 更新网页 Logo 并统一思考等级名称
+## [0.111.3-dev.3] - Update web logo and unify thinking-level names
 
-## [0.111.3-dev.2] - 修复 AI 回复中粗体和行内代码标记的显示
+## [0.111.3-dev.2] - Fix display of bold and inline code markers in AI replies
 
-## Android [0.108.14-dev.1] - 修复切换连接后未返回原聊天
+## Android [0.108.14-dev.1] - Fix not returning to original chat after switching connection
 
-## Android [0.108.13-dev.1] - 修复实时回复中出现大块空白间距
+## Android [0.108.13-dev.1] - Fix large blank gaps in real-time replies
 
-## [0.111.2-dev.1] - 优化语言选择器样式
+## [0.111.2-dev.1] - Optimize language selector styling
 
-## [0.111.1-dev.1] - 清理网页控件的选中外框
+## [0.111.1-dev.1] - Clean up focus outline of web controls
 
-## [0.111.0-dev.1] - 网页界面支持简体中文和英文切换
+## [0.111.0-dev.1] - Web UI supports switching between Simplified Chinese and English
 
-## [0.110.0-dev.1] - 支持查看各 Codex Proxy Client Key 的累计用量
+## [0.110.0-dev.1] - Support viewing cumulative usage of each Codex Proxy Client Key
 
-## [0.109.2-dev.1] - 修复服务启动时命令参数读取错误
+## [0.109.2-dev.1] - Fix error reading command arguments at service startup
 
-## [0.109.1-dev.6] - 修复旧版 New API 用量统计的连接
+## [0.109.1-dev.6] - Fix connection of legacy New API usage statistics
 
-## Android [0.108.12-dev.1] - 修复新消息开始时上一轮已编辑文件短暂闪现
+## Android [0.108.12-dev.1] - Fix brief flash of previously edited file when new message starts
 
-## Android [0.108.11-dev.2] - 改善 AI 回复的实时逐字显示
+## Android [0.108.11-dev.2] - Improve real-time word-by-word display of AI replies
 
-## [0.104.7-dev.1] - 修复对当前对话执行并发打开时没有反馈
+## [0.104.7-dev.1] - Fix no feedback when concurrently opening current conversation
 
-## [0.104.6-dev.1] - 修复移动端并发打开后侧栏遮挡新窗口
+## [0.104.6-dev.1] - Fix sidebar covering new window after concurrent open on mobile
 
-## [0.109.1-dev.5] - 改善 AI 回复分段出字的显示流畅度
+## [0.109.1-dev.5] - Improve smoothness of segmented text display in AI replies
 
-## [0.109.1-dev.4] - 快速选择的其他答案支持回车发送
+## [0.109.1-dev.4] - Support pressing Enter to send quickly selected alternate answers
 
-## [0.109.1-dev.3] - 改善 AI 回复流式显示的流畅度
+## [0.109.1-dev.3] - Improve smoothness of streaming AI reply display
 
-## [0.109.1-dev.2] - 修复自定义主题下拉选中项颜色
+## [0.109.1-dev.2] - Fix selected-item color of custom theme dropdown
 
-## [0.109.1-dev.1] - 修复 Claude 回复中断后被误认为正常完成
+## [0.109.1-dev.1] - Fix interrupted Claude replies being mistaken for normal completion
 
-## [0.109.0-dev.1] - 排队消息先入队并在后台翻译
+## [0.109.0-dev.1] - Queue messages are enqueued first and translated in the background
 
-## Android [0.108.0-dev.2] - 支持拖动调整聊天输入框高度
+## Android [0.108.0-dev.2] - Support drag-resizing chat input box height
 
-## [0.108.0-dev.1] - 自定义主题支持独立设置模块颜色和透明度
+## [0.108.0-dev.1] - Custom theme supports independently setting module color and transparency
 
-## [0.107.2-dev.7] - 支持快捷插队发送，并改善发送失败时的草稿恢复
+## [0.107.2-dev.7] - Support quick queue-jump sending and improve draft recovery on send failure
 
-## [0.107.2-dev.5] - 修复 Claude 后台任务占用输出时对话无法继续
+## [0.107.2-dev.5] - Fix conversation unable to continue when Claude background task holds output
 
-## [0.107.2-dev.4] - 清除系统可见的 codex 名称残留，统一为 code-remote（保留引擎/Android/存储兼容标识）
+## [0.107.2-dev.4] - Clear system-visible codex name residue, unify to code-remote (keep engine/Android/storage compat identifiers)
 
-## [0.107.2-dev.3] - 修复 Claude 对话回复后永久卡住：进程退出未关 stdout 时自动收尾
+## [0.107.2-dev.3] - Fix conversation permanently stuck after Claude reply: auto-wrap-up when process exits without closing stdout
 
-## [0.107.2-dev.2] - 修复对话意外断线：后端崩溃自动重建、放宽前端心跳超时
+## [0.107.2-dev.2] - Fix unexpected conversation disconnection: auto-rebuild on backend crash, relax frontend heartbeat timeout
 
-## [0.107.1-dev.1] - 保存 Codex API 配置时保留原提供方名称，避免旧对话无法继续
+## [0.107.1-dev.1] - Preserve original provider name when saving Codex API config so old conversations continue
 
-## Android [0.106.1-dev.1] - 修复切换电脑连接后聊天未回到最新消息底部
+## Android [0.106.1-dev.1] - Fix chat not returning to latest message bottom after switching computer connection
 
-## Android [0.106.0-dev.1] - 回复显示模型与思考等级，并改进翻译配置、排队展示和安装图标
+## Android [0.106.0-dev.1] - Show model and thinking level in replies; improve translation config, queue display, and install icon
 
-## [0.107.0-dev.1] - Token 用量查询新增 New API 数据源
+## [0.107.0-dev.1] - Token usage query adds New API data source
 
-## [0.106.0-dev.1] - Token 用量查询新增 Codex Proxy 数据源
+## [0.106.0-dev.1] - Token usage query adds Codex Proxy data source
 
-## [0.105.0-dev.1] - Android 聊天复用电脑端翻译配置，支持中英互译对话
+## [0.105.0-dev.1] - Android chat reuses desktop translation config, supports Chinese-English bidirectional dialog
 
-## [0.104.6-dev.1] - 修复网页聊天翻译设置在多页面间不同步
+## [0.104.6-dev.1] - Fix web chat translation settings out of sync across pages
 
-## [0.104.5-dev.1] - 改善 Claude 回复的段落、列表与行内代码排版
+## [0.104.5-dev.1] - Improve paragraph, list, and inline-code layout of Claude replies
 
-## [0.104.4-dev.1] - 并发窗口边框跟随对应输入框的回复呼吸节奏
+## [0.104.4-dev.1] - Concurrent window border follows breathing rhythm of corresponding input box replies
 
-## [0.104.3-dev.1] - 修复切换并发窗口后聊天输入框未自动获得焦点
+## [0.104.3-dev.1] - Fix chat input box not auto-focusing after switching concurrent windows
 
-## [0.104.2-dev.1] - 修复终端接管时误判用户输入导致 AI 无法操作
+## [0.104.2-dev.1] - Fix terminal takeover misjudging user input and blocking AI operation
 
-## [0.104.1-dev.1] - 缩短长对话的排队发送等待并默认收起旧消息
+## [0.104.1-dev.1] - Shorten queued-send wait for long conversations and collapse old messages by default
 
-## [0.104.0-dev.2] - Android 支持从当前电脑检查、下载并安装本机更新
+## [0.104.0-dev.2] - Android supports checking, downloading, and installing local updates from current computer
 
-## [0.103.13-dev.7] - 保存 Android 未确认送达的消息以便重启后重试
+## [0.103.13-dev.7] - Save Android undelivered messages to retry after restart
 
-## [0.103.13-dev.6] - Android 滑动聊天时延后繁重的消息刷新
+## [0.103.13-dev.6] - Defer heavy message refresh while swiping chat on Android
 
-## [0.103.13-dev.5] - 缩短 Android 长对话首次渲染时间
+## [0.103.13-dev.5] - Shorten first render time of long Android conversations
 
-## [0.103.13-dev.4] - 修复 Android 请求失败时的连接资源占用
+## [0.103.13-dev.4] - Fix connection resource usage when Android requests fail
 
-## [0.103.13-dev.3] - 复用 Android 网络连接以改善聊天刷新与发送响应
+## [0.103.13-dev.3] - Reuse Android network connections to improve chat refresh and send response
 
-## [0.103.13-dev.2] - 减少 Android 输入框光晕动画的逐帧开销
+## [0.103.13-dev.2] - Reduce per-frame cost of Android input box glow animation
 
-## [0.103.13-dev.1] - 修复 Android 发送草稿残留并减轻长聊天刷新卡顿
+## [0.103.13-dev.1] - Fix Android send draft residue and ease long-chat refresh lag
 
-## [0.103.12-dev.5] - 修复当前话题的侧边栏呼吸同步并提供演示页
+## [0.103.12-dev.5] - Fix sidebar breathing sync of current topic and provide demo page
 
-## [0.103.12-dev.4] - 左侧聊天项跟随输入框的回复呼吸节奏
+## [0.103.12-dev.4] - Left chat items follow breathing rhythm of input box replies
 
-## [0.103.12-dev.3] - 同步多个回复中聊天项的呼吸节奏
+## [0.103.12-dev.3] - Sync breathing rhythm of chat items across multiple replies
 
-## [0.103.12-dev.1] - 左侧回复中聊天项整行显示呼吸提示
+## [0.103.12-dev.1] - Chat items in left replies show full-line breathing hint
 
-## [0.103.11-dev.1] - 排队消息默认保持收起
+## [0.103.11-dev.1] - Queued messages stay collapsed by default
 
-## [0.103.10-dev.1] - 修复排队图片在切换聊天后重新出现在输入框
+## [0.103.10-dev.1] - Fix queued images reappearing in input box after switching chats
 
-## [0.103.9-dev.1] - 左侧聊天标题在回复期间显示呼吸提示
+## [0.103.9-dev.1] - Left chat titles show breathing hint during replies
 
-## [0.103.8-dev.1] - 修复并发窗口空队列与有队列时输入框外框高度跳动
+## [0.103.8-dev.1] - Fix input box outline height jumping between empty and queued concurrent windows
 
-## [0.103.7-dev.1] - 统一网页 Codex 与 Claude 输入框默认高度
+## [0.103.7-dev.1] - Unify default web Codex and Claude input box heights
 
-## [0.103.6-dev.1] - 修复并发窗口空队列时输入框顶部留白
+## [0.103.6-dev.1] - Fix top whitespace of input box when concurrent window queue is empty
 
-## [0.103.5-dev.1] - 优化网页刷新时长对话的恢复速度
+## [0.103.5-dev.1] - Optimize recovery speed of refreshing long conversations on web
 
-## [0.103.4-dev.1] - 修复 Android 聊天表格横向滑动
+## [0.103.4-dev.1] - Fix Android chat table horizontal swipe
 
-## [0.103.3-dev.1] - 修复新建对话未跟随左侧选中的 Codex 或 Claude 模式
+## [0.103.3-dev.1] - Fix new chat not following selected Codex or Claude mode in left sidebar
 
-## [0.103.2-dev.1] - 修复文字模型因历史图片无法续聊，并明确提示本轮图片不受支持
+## [0.103.2-dev.1] - Fix text model unable to continue due to history images, and clearly note images unsupported this round
 
-## [0.103.1-dev.1] - 退出入口移至设置页，文件树侧栏支持收起并记住状态
+## [0.103.1-dev.1] - Move exit entry to settings page; file-tree sidebar supports collapse and remembers state
 
-## [0.103.0-dev.1] - Codex 与 Claude API 配置支持选择三种协议并自动转换
+## [0.103.0-dev.1] - Codex and Claude API config supports choosing three protocols with auto-conversion
 
-## [0.102.1-dev.1] - 修复 API 配置下拉菜单背景透明与主题样式缺失
+## [0.102.1-dev.1] - Fix API config dropdown transparent background and missing theme styling
 
-## [0.102.0-dev.1] - Codex 与 Claude API 支持多配置切换、模型映射和连通性测试
+## [0.102.0-dev.1] - Codex and Claude API support multi-config switching, model mapping, and connectivity tests
 
-## [0.101.0-dev.1] - 设置页支持配置本机 Codex 与 Claude Code API
+## [0.101.0-dev.1] - Settings page supports configuring local Codex and Claude Code API
 
-## [0.100.0-dev.4] - 设置页覆盖整个工作区
+## [0.100.0-dev.4] - Settings page covers entire workspace
 
-## [0.100.0-dev.3] - 设置入口支持链接式打开
+## [0.100.0-dev.3] - Settings entry supports link-style opening
 
-## [0.100.0-dev.2] - 设置页路由改为直接路径
+## [0.100.0-dev.2] - Settings page route changed to direct path
 
-## [0.100.0-dev.1] - 设置页与 Token 用量页支持 URL 查询路由
+## [0.100.0-dev.1] - Settings and Token usage pages support URL query routing
 
-## [0.99.1-dev.1] - 修复历史回复模型与思考副标题缺失
+## [0.99.1-dev.1] - Fix missing model and thinking subtitle in history replies
 
-## [0.99.0-dev.1] - AI 回复底部显示本次模型与思考等级
+## [0.99.0-dev.1] - Show this round's model and thinking level at bottom of AI replies
 
-## [0.98.1-dev.1] - 修复粘贴表格编辑显示为纯文本
+## [0.98.1-dev.1] - Fix pasted table editing showing as plain text
 
-## [0.98.0-dev.1] - 粘贴表格支持输入区和消息中的可滑动预览
+## [0.98.0-dev.1] - Pasted tables support swipeable preview in input area and messages
 
-## [0.97.6-dev.1] - AI 接管终端期间支持用户直接输入
+## [0.97.6-dev.1] - Support direct user input while AI takes over terminal
 
-## [0.97.5-dev.3] - 优化设置页宽度与主题背景
+## [0.97.5-dev.3] - Optimize settings page width and theme background
 
-## [0.97.5-dev.2] - 优化设置页布局
+## [0.97.5-dev.2] - Optimize settings page layout
 
-## [0.97.5-dev.1] - 设置页面改为侧边导航与限宽内容布局
+## [0.97.5-dev.1] - Settings page changed to sidebar navigation with constrained-width content layout
 
-## [0.97.4-dev.1] - 修复 Android 远端终端操作日志无法滚动
+## [0.97.4-dev.1] - Fix Android remote terminal operation log unable to scroll
 
-## [0.97.3-dev.6] - 修复翻译下拉选中项文字颜色
+## [0.97.3-dev.6] - Fix translation dropdown selected-item text color
 
-## [0.97.3-dev.5] - 升级翻译设置下拉菜单界面
+## [0.97.3-dev.5] - Upgrade translation settings dropdown UI
 
-## [0.97.3-dev.4] - 修复翻译设置下拉菜单的主题颜色与选项对比度
+## [0.97.3-dev.4] - Fix theme colors and option contrast of translation settings dropdown
 
-## [0.97.3-dev.3] - 将英文表达归入翻译方式
+## [0.97.3-dev.3] - Reclassify English expression into translation modes
 
-## [0.97.3-dev.2] - 调整翻译设置中引擎与接口配置的分组
+## [0.97.3-dev.2] - Adjust grouping of engine and interface config in translation settings
 
-## [0.97.3-dev.1] - 设置页内部选项分组更清晰并增加间距
+## [0.97.3-dev.1] - Clearer option grouping and more spacing inside settings page
 
-## [0.97.2-dev.1] - 修复 Chat 和 Responses 翻译接口连接网关失败
+## [0.97.2-dev.1] - Fix Chat and Responses translation interface gateway connection failure
 
-## [0.97.1-dev.1] - 翻译配置更改协议时保留已保存的参数
+## [0.97.1-dev.1] - Keep saved parameters when translation config changes protocol
 
-## [0.97.0-dev.1] - 聊天翻译支持 OpenAI Responses API
+## [0.97.0-dev.1] - Chat translation supports OpenAI Responses API
 
-## [0.96.0-dev.1] - 聊天翻译支持保存多套配置并切换使用
+## [0.96.0-dev.1] - Chat translation supports saving multiple configs and switching between them
 
-## [0.95.0-dev.1] - 翻译引擎支持 Anthropic Messages 接口及连通性检查
+## [0.95.0-dev.1] - Translation engine supports Anthropic Messages interface and connectivity check
 
-## [0.94.1-dev.1] - 修复译文显示前先出现英文回复
+## [0.94.1-dev.1] - Fix English reply appearing before translation
 
-## [0.94.0-dev.1] - 聊天翻译支持切换原文与译文显示
+## [0.94.0-dev.1] - Chat translation supports toggling original and translated text
 
-## [0.93.0-dev.1] - 网页聊天支持多引擎翻译、英文发送预览与中文回复译文
+## [0.93.0-dev.1] - Web chat supports multi-engine translation, English send preview, and Chinese reply translation
 
-## [0.92.0-dev.1] - Android 终端支持交给 AI 接管并查看远端操作结果
+## [0.92.0-dev.1] - Android terminal supports handing over to AI and viewing remote operation results
 
-## [0.91.2-dev.1] - 修复终端历史浏览模式下 AI 操作不显示或未执行
+## [0.91.2-dev.1] - Fix AI operations not shown or executed in terminal history browsing mode
 
-## [0.91.1-dev.1] - 修复切换聊天后终端自动显示在新聊天
+## [0.91.1-dev.1] - Fix terminal auto-appearing in new chat after switching chats
 
-## [0.91.0-dev.1] - 已登录 SSH 终端支持交给 AI 接管并在聊天查看操作结果
+## [0.91.0-dev.1] - Logged-in SSH terminal supports handed over to AI with operation results viewable in chat
 
-## [0.90.10-dev.1] - 修复带图片消息粘贴后正文变为文件名
+## [0.90.10-dev.1] - Fix message body becoming filename after pasting image messages
 
-## [0.90.9-dev.2] - 快捷键切换聊天后自动聚焦输入框
+## [0.90.9-dev.2] - Auto-focus input box after switching chats via shortcut
 
-## [0.90.9-dev.1] - 修复输入框聚焦时无法用快捷键切换聊天
+## [0.90.9-dev.1] - Fix inability to switch chats via shortcut while input box focused
 
-## [0.90.8-dev.1] - 修复 AI 内部子任务误显示为独立聊天
+## [0.90.8-dev.1] - Fix AI internal subtasks mistakenly shown as separate chats
 
-## [0.90.4-dev.4] - 网页侧边栏菜单删除支持 Del 快捷键
+## [0.90.4-dev.4] - Web sidebar menu delete supports Del shortcut
 
-## [0.90.4-dev.1] - 网页侧边栏右键菜单支持数字快捷键
+## [0.90.4-dev.1] - Web sidebar context menu supports number shortcuts
 
-## [0.90.3-dev.1] - 修复网页设置折叠状态无法保留
+## [0.90.3-dev.1] - Fix web settings collapse state not persisted
 
-## [0.90.2-dev.1] - 网页设置模块支持折叠展开
+## [0.90.2-dev.1] - Web settings modules support collapse/expand
 
-## [0.90.0-dev.1] - 网页设置页新增关于模块
+## [0.90.0-dev.1] - Web settings page adds About module
 
-## [0.89.0-dev.1] - Android 文件树支持上传文件并更新应用标识
+## [0.89.0-dev.1] - Android file tree supports uploading files and updates app identity
 
-## [0.88.1-dev.1] - 修复 AI 回复含链接时正文被隐藏
+## [0.88.1-dev.1] - Fix body hidden when AI reply contains links
 
-## [0.88.0-dev.3] - 修复网页聊天标题字间距不随设置变化
+## [0.88.0-dev.3] - Fix web chat title letter-spacing not following settings
 
-## [0.88.0-dev.2] - 修复网页字间距设置覆盖范围
+## [0.88.0-dev.2] - Fix coverage of web letter-spacing setting
 
-## [0.88.0-dev.1] - 网页显示设置支持自定义字间距
+## [0.88.0-dev.1] - Web display settings support custom letter-spacing
 
-## [0.87.4-dev.1] - 修复多行用户消息重复显示与旧草稿重复提交
+## [0.87.4-dev.1] - Fix duplicate display of multi-line user messages and duplicate submission of old drafts
 
-## [0.87.3-dev.1] - 修复回答选择卡片后重复显示上一段 AI 回复
+## [0.87.3-dev.1] - Fix previous AI reply duplicated after selecting answer card
 
-## [0.87.2-dev.1] - 修复网页代码块复制按钮不可见
+## [0.87.2-dev.1] - Fix web code block copy button invisible
 
-## [0.87.1-dev.1] - 修复同一对话在多个网页中显示重复回复
+## [0.87.1-dev.1] - Fix same conversation showing duplicate replies across multiple web pages
 
-## [0.87.0-dev.1] - 网页 AI 回复含网页链接时仅显示网址
+## [0.87.0-dev.1] - Web AI replies with links show only the URL
 
-## [0.86.6-dev.1] - 修复网页回复自动跟随意外停止
+## [0.86.6-dev.1] - Fix web reply auto-follow stopping unexpectedly
 
-## [0.86.5-dev.1] - 修复网页流式回复文字上下跳动
+## [0.86.5-dev.1] - Fix web streaming reply text jumping vertically
 
-## [0.86.4-dev.1] - 修复网页聊天回复与操作记录错位
+## [0.86.4-dev.1] - Fix web chat replies and operation logs misaligned
 
-## [0.86.3-dev.1] - 修复网页版新回复误停留在旧滚动位置
+## [0.86.3-dev.1] - Fix new web replies lingering at old scroll position
 
-## [0.86.2-dev.1] - 修复 CPA Manager 连接测试与用量统计查询超时
+## [0.86.2-dev.1] - Fix CPA Manager connection test and usage query timeouts
 
-## [v0.86.3] - 新增 Windows 启动与重启脚本
+## [v0.86.3] - Add Windows startup and restart scripts
 
-## [v0.86.2] - 修复 Codex 已无运行任务时网页停止失败
+## [v0.86.2] - Fix web stop failing when Codex has no running tasks
 
-## [v0.78.5] - 修复 Windows 网页版 Claude Code 停止回复卡住
+## [v0.78.5] - Fix Windows web Claude Code stop reply getting stuck
 
-## [0.86.1-dev.1] - 清理移除 SSH 后残留的授权，隐藏空授权卡片
+## [0.86.1-dev.1] - Clean up SSH removal residue authorization and hide empty authorization cards
 
-## [0.86.0-dev.1] - 移除内置远程 SSH 功能，恢复 AI 直接操作本机的运行方式
+## [0.86.0-dev.1] - Remove built-in remote SSH feature, restore direct local operation by AI
 
-## [0.85.0-dev.1] - 网页文件树支持下载原文件
+## [0.85.0-dev.1] - Web file tree supports downloading original files
 
-## [0.84.0-dev.1] - 网页排队消息支持调整发送顺序
+## [0.84.0-dev.1] - Web queued messages support adjusting send order
 
-## [0.83.4-dev.1] - 修复网页版终端关闭浮层后重新打开内容丢失
+## [0.83.4-dev.1] - Fix web terminal content lost after closing overlay and reopening
 
-## [0.83.3-dev.1] - 修复网页版快速选择回答未立即发送
+## [0.83.3-dev.1] - Fix web quick-select answer not sent immediately
 
-## [0.83.2-dev.1] - 修复网页版终端切换页面后关闭和内容丢失
+## [0.83.2-dev.1] - Fix web terminal closing and content loss after switching pages
 
-## [0.83.1-dev.1] - 隔离 AI 进程与已保存的 SSH 凭据
+## [0.83.1-dev.1] - Isolate AI process from saved SSH credentials
 
-## [0.83.0-dev.1] - SSH 设置支持首次连接时确认并信任服务器指纹
+## [0.83.0-dev.1] - SSH settings support confirming and trusting server fingerprint on first connect
 
-## [0.82.0-dev.1] - MCP 工具支持按工具或服务器保存始终允许授权并在设置中撤销
+## [0.82.0-dev.1] - MCP tools support saving always-allow authorization per tool or server, revocable in settings
 
-## [0.81.3-dev.1] - 修复网页端 MCP 工具授权请求未显示
+## [0.81.3-dev.1] - Fix web MCP tool authorization request not shown
 
-## [0.81.0-dev.2] - 远程 SSH 支持填写密码和导入私钥
+## [0.81.0-dev.2] - Remote SSH supports entering password and importing private key
 
-## [0.81.0-dev.1] - 新增远程 SSH 服务器配置与聊天操作记录
+## [0.81.0-dev.1] - Add remote SSH server config and chat operation logs
 
-## [0.80.0-dev.2] - 文件树上传显示传输进度
+## [0.80.0-dev.2] - File tree upload shows transfer progress
 
-## [0.80.0-dev.1] - 网页文件树支持上传本机文件
+## [0.80.0-dev.1] - Web file tree supports uploading local files
 
-## [0.79.1-dev.1] - 优化网页多窗口同时回复时的输入和滚动流畅度
+## [0.79.1-dev.1] - Optimize input and scroll smoothness when multiple web windows reply simultaneously
 
-## [0.79.0-dev.2] - 修复移动端 SVG 附件发送
+## [0.79.0-dev.2] - Fix mobile SVG attachment sending
 
-## [0.79.0-dev.1] - 支持在文件树中预览图片和 SVG
+## [0.79.0-dev.1] - Support previewing images and SVG in file tree
 
-## [0.78.4-dev.2] - 同步网页端的定时会话标记
+## [0.78.4-dev.2] - Sync scheduled-session markers across web
 
-## [0.78.4-dev.1] - 修复移动端侧栏开合时页面闪白
+## [0.78.4-dev.1] - Fix page white flash when toggling mobile sidebar
 
-## [0.78.3-dev.1] - 在侧边栏标记有定时发送的对话
+## [0.78.3-dev.1] - Mark conversations with scheduled sends in sidebar
 
-## [0.78.2-dev.1] - 优化移动端对话设置与输入框操作按钮
+## [0.78.2-dev.1] - Optimize mobile conversation settings and input box action buttons
 
-## [0.78.1-dev.1] - 修复文件树内容加入输入框时自动换行
+## [0.78.1-dev.1] - Fix file tree content auto-wrapping when added to input box
 
-## [0.78.0-dev.1] - Android 支持定时发送消息
+## [0.78.0-dev.1] - Android supports scheduled message sending
 
-## [0.77.1-dev.1] - 调整定时发送面板尺寸
+## [0.77.1-dev.1] - Adjust scheduled-send panel size
 
-## [0.77.0-dev.1] - 新增定时发送并修复手机输入框菜单显示
+## [0.77.0-dev.1] - Add scheduled sending and fix mobile input box menu display
 
-## [0.76.17-dev.1] - 修复手机端对话设置入口显示并改为三列平铺
+## [0.76.17-dev.1] - Fix mobile conversation settings entry display and switch to three-column tiling
 
-## [0.76.16-dev.1] - 手机端将模型、思考和权限菜单折叠到一个入口
+## [0.76.16-dev.1] - Mobile folds model, thinking, and permission menus into one entry
 
-## [0.76.15-dev.1] - 修复网页版历史选择题只显示纯文本
+## [0.76.15-dev.1] - Fix web history choices showing only plain text
 
-## [0.76.14-dev.1] - 修复网页版助手提问未显示可回答的快速选择卡片
+## [0.76.14-dev.1] - Fix web assistant questions not showing answerable quick-choice cards
 
-## [0.76.13-dev.1] - 修复 AI 回复中 Markdown 标记包裹的网址无法点击
+## [0.76.13-dev.1] - Fix Markdown-wrapped URLs in AI replies not clickable
 
-## [0.76.12-dev.1] - 修复 Android 内置浏览器网页输入框无法唤起输入法
+## [0.76.12-dev.1] - Fix Android built-in browser web input box unable to invoke input method
 
-## [0.76.11-dev.1] - 修复 Android 图片格式识别错误导致聊天图片无法显示
+## [0.76.11-dev.1] - Fix Android image format misdetection causing chat images not to display
 
-## [0.76.8-dev.1] - 修复网页刷新后并发窗口、聊天及选中状态丢失
+## [0.76.8-dev.1] - Fix concurrent windows, chats, and selection lost after web refresh
 
-## [0.76.7-dev.1] - 修复 Android 异步提问只显示纯文本及答案无法在当前回复中发送
+## [0.76.7-dev.1] - Fix Android async questions showing only plain text and answers not sendable in current reply
 
-## [0.76.4-dev.1] - 修复网页版助手选择题漏识别及回复进行中无法点选
+## [0.76.4-dev.1] - Fix web assistant choice misrecognition and inability to click while replying
 
-## [0.76.2-dev.1] - 修复网页版 Codex 运行中无法发送插队消息
+## [0.76.2-dev.1] - Fix web Codex unable to send queue-jump message while running
 
-## [0.76.1-dev.1] - 修复 Android 编辑长排队消息时输入框被遮挡且无法查看末尾
+## [0.76.1-dev.1] - Fix Android input box covered and end unviewable when editing long queued message
 
-## [0.76.0-dev.2] - Android 助手选择题支持现成答案和自定义回答并继续对话
+## [0.76.0-dev.2] - Android assistant choices support ready-made answers and custom replies to continue dialog
 
-## [0.76.0-dev.1] - Android 聊天支持点选助手回复中的选项并填入输入框
+## [0.76.0-dev.1] - Android chat supports tapping options in assistant replies to fill input box
 
-## [0.75.0-dev.2] - Android 聊天支持引用与导出
+## [0.75.0-dev.2] - Android chat supports quoting and exporting
 
-## [0.74.0-dev.1] - 单条消息支持最多 8 张图片
+## [0.74.0-dev.1] - Single message supports up to 8 images
 
-## [0.73.1-dev.1] - 修复 Claude 网页回复延迟及刷新后流式正文未及时显示
+## [0.73.1-dev.1] - Fix Claude web reply delay and streaming body not showing timely after refresh
 
-## [0.73.0-dev.1] - 移除跨设备群聊功能
+## [0.73.0-dev.1] - Remove cross-device group chat feature
 
-## [0.72.1-dev.1] - 修复绑定聊天同步到群聊时问答顺序颠倒
+## [0.72.1-dev.1] - Fix Q&A order reversed when binding chat syncs to group chat
 
-## [0.72.0-dev.1] - 设备群聊展示跨设备 Codex 的运行状态、操作记录和文件变化
+## [0.72.0-dev.1] - Device group chat shows cross-device Codex running state, operation logs, and file changes
 
-## [0.71.4-dev.1] - 修复绑定的普通聊天后续消息漏同步到设备群
+## [0.71.4-dev.1] - Fix bound normal chat later messages not syncing to device group
 
-## [0.71.3-dev.1] - 设备群聊消息与流式回复即时同步
+## [0.71.3-dev.1] - Device group chat messages and streaming replies sync instantly
 
-## [0.71.2-dev.1] - 设备群聊发送目标改为输入框下方平铺按钮
+## [0.71.2-dev.1] - Device group chat send target changed to tiled buttons below input box
 
-## [0.71.1-dev.1] - 支持点选助手消息中的文字选项并填入回答
+## [0.71.1-dev.1] - Support tapping text options in assistant messages to fill in answer
 
-## [0.71.0-dev.1] - 设备群聊支持选择模型、思考和本机授权，并恢复本机文件树与文本附件
+## [0.71.0-dev.1] - Device group chat supports selecting model, thinking, and local authorization; restores local file tree and text attachments
 
-## [0.70.4-dev.1] - 修复编辑排队消息时 Esc 误暂停对话
+## [0.70.4-dev.1] - Fix Esc pausing conversation while editing queued message
 
-## [0.70.3-dev.1] - 精简设备群聊提示消息，并收起较长的设备回复
+## [0.70.3-dev.1] - Slim device group chat prompt messages and collapse longer device replies
 
-## [0.70.2-dev.1] - 修复网页版聊天回复文字异常换行
+## [0.70.2-dev.1] - Fix web chat reply text wrapping abnormally
 
-## [0.70.1-dev.1] - 修复群聊正文停在首字、执行工具期间消息未及时同步
+## [0.70.1-dev.1] - Fix group chat body stuck at first character and messages not syncing timely during tool execution
 
-## [0.70.0-dev.1] - 支持群聊中的 Codex 跨设备自动接力
+## [0.70.0-dev.1] - Support cross-device auto relay of Codex in group chat
 
-## [0.69.11-dev.1] - 修复网页版复制消息时图片未进入剪贴板
+## [0.69.11-dev.1] - Fix images not entering clipboard when copying messages on web
 
-## [0.69.10-dev.1] - 修复网页版欢迎标题换行跳动
+## [0.69.10-dev.1] - Fix web welcome title line-break jumping
 
-## [0.69.9-dev.1] - 修复聊天消息复制时遗漏图片
+## [0.69.9-dev.1] - Fix images omitted when copying chat messages
 
-## [0.69.3-dev.1] - 修复已有群聊时加入房间入口消失
+## [0.69.3-dev.1] - Fix join-room entry disappearing when group chat exists
 
-## [0.69.2-dev.1] - 设备群聊支持内网穿透地址提示
+## [0.69.2-dev.1] - Device group chat supports intranet-penetration address hint
 
-## [0.69.1-dev.1] - 显示设备群聊的局域网加入信息
+## [0.69.1-dev.1] - Show LAN join info of device group chat
 
-## [0.69.0-dev.1] - 设备群聊可选择本机已有 Codex 聊天
+## [0.69.0-dev.1] - Device group chat can select existing local Codex chats
 
-## [0.68.1-dev.3] - 将设备群聊改为侧栏模式
+## [0.68.1-dev.3] - Change device group chat to sidebar mode
 
-## [0.68.1-dev.2] - 设备群聊复用现有聊天工作区
+## [0.68.1-dev.2] - Device group chat reuses existing chat workspace
 
-## [0.68.1-dev.1] - 将设备群聊接入主聊天页
+## [0.68.1-dev.1] - Integrate device group chat into main chat page
 
-## [0.68.0-dev.1] - 新增跨设备 Codex 群聊
+## [0.68.0-dev.1] - Add cross-device Codex group chat
 
-## [0.67.0-dev.1] - 新增中国复古风主题
+## [0.67.0-dev.1] - Add Chinese retro theme
 
-## [0.66.1-dev.6] - 同步 Windows、Claude 与 Codex 稳定性修复
+## [0.66.1-dev.6] - Sync Windows, Claude, and Codex stability fixes
 
-## [0.66.1-dev.2] - 补齐 Android 文件树的脚本终端运行入口
+## [0.66.1-dev.2] - Add script terminal run entry to Android file tree
 
-## [0.66.1-dev.1] - 修正 Android 聊天运行状态的显示时机
+## [0.66.1-dev.1] - Correct timing of Android chat running-state display
 
-## [0.66.0-dev.1] - 支持从文件树在终端运行脚本
+## [0.66.0-dev.1] - Support running scripts in terminal from file tree
 
-## [0.65.1-dev.1] - 统一 Code Remote 产品名称
+## [0.65.1-dev.1] - Unify Code Remote product name
 
-## [0.65.0-dev.1] - 在网页侧栏显示 Codex 与 Claude Code 状态
+## [0.65.0-dev.1] - Show Codex and Claude Code status in web sidebar
 
-## [0.64.0-dev.1] - 将项目目录与 GitHub、Gitea 仓库统一更名为 code-remote
+## [0.64.0-dev.1] - Rename project directory and GitHub/Gitea repos to code-remote
 
-## [0.62.0-dev.19] - 恢复 Android 终端关闭前的屏幕内容
+## [0.62.0-dev.19] - Restore Android terminal screen content before closing
 
-## [0.62.0-dev.15] - 显示 Android 终端输入光标
+## [0.62.0-dev.15] - Show Android terminal input cursor
 
-## [0.62.0-dev.14] - 优化 Android 终端输入响应与快捷键布局
+## [0.62.0-dev.14] - Optimize Android terminal input response and shortcut layout
 
-## [0.63.1-dev.1] - 调整 CPA 按模型表格的金额列顺序
+## [0.63.1-dev.1] - Adjust amount column order of CPA per-model table
 
-## [0.62.0-dev.11] - 精简 Android 终端的空闲提示符
+## [0.62.0-dev.11] - Slim idle prompt of Android terminal
 
-## [0.63.0-dev.1] - 在 CPA 用量统计中显示各模型消耗金额
+## [0.63.0-dev.1] - Show per-model cost in CPA usage statistics
 
-## [0.62.0-dev.10] - 修复 Android 终端尺寸同步并隐藏状态行
+## [0.62.0-dev.10] - Fix Android terminal size sync and hide status row
 
-## [0.62.0-dev.9] - 修复 Android 终端输入时提示符消失
+## [0.62.0-dev.9] - Fix prompt disappearing when typing in Android terminal
 
-## [0.62.0-dev.8] - 稳定 Android 终端输入时的可视区域
+## [0.62.0-dev.8] - Stabilize visible area while typing in Android terminal
 
-## [0.62.0-dev.7] - 避免输入法候选浮层触发终端重排
+## [0.62.0-dev.7] - Avoid input-method candidate overlay triggering terminal reflow
 
-## [0.62.0-dev.6] - 修复 Android 终端无法唤起输入法
+## [0.62.0-dev.6] - Fix Android terminal unable to invoke input method
 
-## [0.62.0-dev.5] - 修复 Android 终端输入焦点与键盘重绘
+## [0.62.0-dev.5] - Fix Android terminal input focus and keyboard redraw
 
-## [0.62.0-dev.4] - 修复 Android 终端键盘布局、输入焦点和屏幕重绘
+## [0.62.0-dev.4] - Fix Android terminal keyboard layout, input focus, and screen redraw
 
-## [0.62.0-dev.3] - 修复 Android 终端随键盘跳动并保留手动滚动位置
+## [0.62.0-dev.3] - Fix Android terminal jumping with keyboard and preserve manual scroll position
 
-## [0.62.0-dev.2] - 支持 Android 终端直接键盘交互
+## [0.62.0-dev.2] - Support direct keyboard interaction with Android terminal
 
-## [0.62.0-dev.1] - 移除 AI 群聊功能
+## [0.62.0-dev.1] - Remove AI group chat feature
 
-## [0.61.0-dev.1] - 新增 CPA Token 用量昨天筛选
+## [0.61.0-dev.1] - Add CPA Token usage yesterday filter
 
-## [0.60.0-dev.3] - 调整移动端聊天记录加载状态显示
+## [0.60.0-dev.3] - Adjust mobile chat history loading state display
 
-## [0.60.0-dev.2] - 为 Android 文件树加入终端操作并按模式显示输入框图标
+## [0.60.0-dev.2] - Add terminal operations to Android file tree and show input box icons per mode
 
-## [0.60.0-dev.1] - 支持移动端将文件夹添加到终端
+## [0.60.0-dev.1] - Support adding folders to terminal on mobile
 
-## [0.59.4-dev.1] - 锁定移动网页版的外层页面滚动
+## [0.59.4-dev.1] - Lock outer page scroll on mobile web
 
-## [0.59.3-dev.1] - 缩短侧栏 Claude 对话打开等待时间
+## [0.59.3-dev.1] - Shorten sidebar Claude conversation open wait
 
-## [0.59.2-dev.1] - 修复 AI 群聊 Claude 排队回复未同步显示
+## [0.59.2-dev.1] - Fix AI group chat Claude queued reply not syncing to display
 
-## [0.59.1-dev.1] - 修复输入框新建聊天后侧边栏未及时显示
+## [0.59.1-dev.1] - Fix sidebar not updating timely after new chat from input box
 
-## [0.59.0-dev.1] - 恢复 CPA 浏览器直连配置
+## [0.59.0-dev.1] - Restore CPA browser direct-connect config
 
-## [0.58.1-dev.1] - 区分 CPA 管理接口的认证与远程访问错误
+## [0.58.1-dev.1] - Distinguish authentication vs remote-access errors of CPA management interface
 
-## [0.58.0-dev.1] - 新增 CPA 配置独立保存与连通性测试
+## [0.58.0-dev.1] - Add independent CPA config saving and connectivity test
 
-## [0.57.0-dev.1] - 新增侧边栏 AI 群聊右键管理菜单
+## [0.57.0-dev.1] - Add sidebar AI group chat context management menu
 
-## [0.56.4-dev.9] - 将移动端新建对话入口移至输入框
+## [0.56.4-dev.9] - Move mobile new-chat entry to input box
 
-## [0.56.4-dev.8] - 调整桌面网页版新建对话入口
+## [0.56.4-dev.8] - Adjust desktop web new-chat entry
 
-## [0.56.4-dev.7] - 修复 CPA 查询配置刷新后误显示为空
+## [0.56.4-dev.7] - Fix CPA query config showing empty after refresh
 
-## [0.56.4-dev.6] - 修复 Android 实时计时超过一小时仍显示累计分钟
+## [0.56.4-dev.6] - Fix Android real-time timer still showing cumulative minutes after one hour
 
-## [0.56.4-dev.5] - 修复 Android 聊天图片预览模糊
+## [0.56.4-dev.5] - Fix Android chat image preview blur
 
-## [0.56.4-dev.4] - 修复 Android 大型代码文件预览卡顿
+## [0.56.4-dev.4] - Fix Android large code file preview lag
 
-## [0.56.4-dev.3] - 修复新增文件差异预览与行数统计
+## [0.56.4-dev.3] - Fix new-file diff preview and line count
 
-## [0.56.4-dev.2] - 修复文件预览和终端浮层未优先响应 Escape
+## [0.56.4-dev.2] - Fix file preview and terminal overlay not responding to Escape first
 
-## [0.56.4-dev.1] - 修复 Codex 旧会话暂停失败后计时持续运行
+## [0.56.4-dev.1] - Fix timer continuing after Codex old-session pause fails
 
-## [0.56.3-dev.2] - 补全 Android 操作记录分页提示的英文翻译
+## [0.56.3-dev.2] - Complete English translation of Android operation-log pagination hints
 
-## [0.56.3-dev.1] - 修复 Android 长会话操作记录展开与计时卡顿
+## [0.56.3-dev.1] - Fix Android long-session operation log expand and timer lag
 
-## [0.56.2-dev.1] - 在 Android 已完成的 AI 回复旁显示回复用时
+## [0.56.2-dev.1] - Show reply time next to completed AI replies on Android
 
-## [0.56.1-dev.1] - 修复排队消息编辑时输入框被键盘遮挡
+## [0.56.1-dev.1] - Fix input box covered by keyboard when editing queued message
 
-## [0.56.0-dev.1] - 共享 CPA Manager 用量统计连接配置
+## [0.56.0-dev.1] - Share CPA Manager usage statistics connection config
 
-## [0.55.1-dev.5] - 支持在 Android 侧边栏筛选 Codex 与 Claude 聊天
+## [0.55.1-dev.5] - Support filtering Codex and Claude chats in Android sidebar
 
-## [0.55.1-dev.4] - 修复 AI 群聊排队消息的回复同步竞态
+## [0.55.1-dev.4] - Fix reply sync race of AI group chat queued messages
 
-## [0.55.1-dev.3] - 修复 AI 群聊改名后的成员点名路由并显示排队状态
+## [0.55.1-dev.3] - Fix member-mention routing after AI group chat rename and show queue state
 
-## [0.55.1-dev.2] - 修复 AI 群聊成员无声失败并明确成员身份称呼
+## [0.55.1-dev.2] - Fix silent failure of AI group chat members and clarify member identity titles
 
-## [0.55.1-dev.1] - 修复 AI 群聊成员设置面板的文字对比度
+## [0.55.1-dev.1] - Fix text contrast in AI group chat member settings panel
 
-## [0.55.0-dev.2] - 移除 Android 离线语音输入
+## [0.55.0-dev.2] - Remove Android offline voice input
 
-## [0.55.0-dev.1] - 支持在 AI 群聊中点名成员并直接设置模型与思考等级
+## [0.55.0-dev.1] - Support mentioning members in AI group chat and directly setting model and thinking level
 
-## [0.54.0-dev.1] - 支持在 AI 群聊中分别调整 Codex 与 Claude 设置
+## [0.54.0-dev.1] - Support adjusting Codex and Claude settings separately in AI group chat
 
-## [0.53.3-dev.1] - 修复 AI 群聊中 Claude 推理强度参数导致的拒绝
+## [0.53.3-dev.1] - Fix AI group chat Claude refusal caused by reasoning-strength parameter
 
-## [0.53.2-dev.1] - 调整群聊输入区域的高度与状态提示
+## [0.53.2-dev.1] - Adjust group chat input area height and status hints
 
-## [0.53.1-dev.1] - 群聊界面与普通聊天保持一致
+## [0.53.1-dev.1] - Group chat UI consistent with normal chat
 
-## [0.53.0-dev.1] - 群聊接入主聊天区并支持侧边栏切换
+## [0.53.0-dev.1] - Group chat integrated into main chat area with sidebar switching
 
-## [0.52.1-dev.2] - 修复网页与 Android 聊天同步滞后及旧回复状态回退
+## [0.52.1-dev.2] - Fix web-Android chat sync lag and old reply state regression
 
-## [0.52.0-dev.1] - 扩展 AI 群聊并关联已有聊天
+## [0.52.0-dev.1] - Expand AI group chat and link existing chats
 
-## [0.51.0-dev.1] - 新增 Codex 与 Claude Code AI 群聊
+## [0.51.0-dev.1] - Add Codex and Claude Code AI group chat
 
-## [0.50.1-dev.1] - 修复 Android 跨设备用户消息偶发延迟显示
+## [0.50.1-dev.1] - Fix occasional delayed display of Android cross-device user messages
 
-## [0.50.0-dev.1] - 新增安卓聊天内文档预览并收紧输入框底部间距
+## [0.50.0-dev.1] - Add document preview in Android chat and tighten input box bottom spacing
 
-## [0.49.1-dev.8] - 修复安卓聊天中 Markdown 附件展开为全文
+## [0.49.1-dev.8] - Fix Android chat Markdown attachment expanding to full text
 
-## [0.49.1-dev.7] - 修复大型 Codex 对话导致的 App Server 断连
+## [0.49.1-dev.7] - Fix App Server disconnection caused by large Codex conversations
 
-## [0.49.1-dev.6] - 修复 Claude 对话引用中的助手名称
+## [0.49.1-dev.6] - Fix assistant name in Claude conversation references
 
-## [0.49.1-dev.5] - 提升安卓离线语音输入的噪声识别准确率
+## [0.49.1-dev.5] - Improve noise recognition accuracy of Android offline voice input
 
-## [0.49.1-dev.3] - 降低安卓离线语音输入的启动与停止延迟
+## [0.49.1-dev.3] - Reduce Android offline voice input start and stop latency
 
-## [0.49.0-dev.1] - 新增安卓端离线语音输入
+## [0.49.0-dev.1] - Add Android offline voice input
 
-## [0.48.1-dev.4] - 调大旧网页主题统计页辅助文字
+## [0.48.1-dev.4] - Increase auxiliary text size on old web theme statistics page
 
-## [0.48.1-dev.3] - 修复旧网页主题统计页面文字对比度不足
+## [0.48.1-dev.3] - Fix insufficient text contrast on old web theme statistics page
 
-## [0.48.1-dev.2] - 修复刷新统计页面后跳转到设置页面
+## [0.48.1-dev.2] - Fix jumping to settings page after refreshing statistics page
 
-## [0.48.1-dev.1] - 优化统计卡片字号与响应式排列
+## [0.48.1-dev.1] - Optimize statistics card font size and responsive layout
 
-## [0.48.0-dev.1] - 新增侧边栏 Codex / Claude 聊天筛选
+## [0.48.0-dev.1] - Add sidebar Codex/Claude chat filter
 
-## [0.47.1-dev.1] - 统计页面内容铺满可用宽度
+## [0.47.1-dev.1] - Statistics page content fills available width
 
-## [0.47.0-dev.1] - 新增调用方密钥筛选与金额统计
+## [0.47.0-dev.1] - Add caller key filter and amount statistics
 
-## [0.46.0-dev.3] - 修正缓存 Token 统计显示
+## [0.46.0-dev.3] - Fix cached Token statistics display
 
-## [0.46.0-dev.2] - 明确 CPA Manager Server 接入设置与管理密钥用途
+## [0.46.0-dev.2] - Clarify CPA Manager Server connection setup and admin key purpose
 
-## [0.46.0-dev.1] - 新增 CPA-Manager-Plus Token 用量统计
+## [0.46.0-dev.1] - Add CPA-Manager-Plus Token usage statistics
 
-## [0.45.6-dev.5] - 修复用户消息链接后的中文也带下划线
+## [0.45.6-dev.5] - Fix Chinese text after user message links also having underline
 
-## [0.45.6-dev.4] - 下调像素主题输入框底部边框
+## [0.45.6-dev.4] - Lower pixel theme input box bottom border
 
-## [0.45.6-dev.3] - 微调像素主题输入框底部位置
+## [0.45.6-dev.3] - Fine-tune pixel theme input box bottom position
 
-## [0.45.6-dev.2] - 保留像素主题输入框按钮悬停边框
+## [0.45.6-dev.2] - Keep pixel theme input box button hover border
 
-## [0.45.6-dev.1] - 修复像素主题输入框按钮悬停时边框闪变
+## [0.45.6-dev.1] - Fix pixel theme input box button border flashing on hover
 
-## [0.45.5-dev.1] - 修正像素主题用户消息边框与操作记录分隔线
+## [0.45.5-dev.1] - Fix pixel theme user message border and operation log divider
 
-## [0.45.4-dev.1] - 为像素主题接入可正常显示的网页像素字体
+## [0.45.4-dev.1] - Wire normally renderable web pixel font into pixel theme
 
-## [0.45.3-dev.1] - 恢复像素主题文字显示
+## [0.45.3-dev.1] - Restore pixel theme text display
 
-## [0.45.2-dev.1] - 修复像素主题文字显示
+## [0.45.2-dev.1] - Fix pixel theme text display
 
-## [0.45.1-dev.1] - 优化像素主题消息边框与字体
+## [0.45.1-dev.1] - Optimize pixel theme message border and font
 
-## [0.45.0-dev.1] - 新增网页版像素风格主题
+## [0.45.0-dev.1] - Add web pixel-style theme
 
-## [0.44.1-dev.1] - 修复网页版无法预览 Codex 查看过的工作区外图片
+## [0.44.1-dev.1] - Fix web unable to preview workspace-external images viewed by Codex
 
-## [0.44.0-dev.19] - 修复新建聊天过早恢复空历史读取
+## [0.44.0-dev.19] - Fix new chat reading empty history too early
 
-## [0.44.0-dev.18] - 修复新建聊天未直接显示欢迎页
+## [0.44.0-dev.18] - Fix new chat not directly showing welcome page
 
-## [0.44.0-dev.17] - 统一聊天导航栏与侧栏标题字号
+## [0.44.0-dev.17] - Unify chat nav bar and sidebar title font size
 
-## [0.44.0-dev.16] - 支持聊天导航栏标题最多显示两行
+## [0.44.0-dev.16] - Support chat nav bar title showing up to two lines
 
-## [0.44.0-dev.15] - 改善聊天导航栏长标题显示
+## [0.44.0-dev.15] - Improve long-title display of chat nav bar
 
-## [0.44.0-dev.14] - 移除聊天导航栏被裁切的项目路径副标题
+## [0.44.0-dev.14] - Remove clipped item-path subtitle in chat nav bar
 
-## [0.44.0-dev.13] - 修复像素主题侧边栏与排队消息可读性
+## [0.44.0-dev.13] - Fix pixel theme sidebar and queued message readability
 
-## [0.44.0-dev.12] - 修复像素主题侧栏底部按钮文字不可见
+## [0.44.0-dev.12] - Fix pixel theme sidebar bottom button text invisible
 
-## [0.44.0-dev.11] - 扩大像素主题侧栏底部按钮区域
+## [0.44.0-dev.11] - Enlarge pixel theme sidebar bottom button area
 
-## [0.44.0-dev.10] - 修正像素主题聊天图标边界并放大顶部图标
+## [0.44.0-dev.10] - Fix pixel theme chat icon boundaries and enlarge top icon
 
-## [0.44.0-dev.9] - 为像素主题中文与界面文字补上像素化显示
+## [0.44.0-dev.9] - Add pixelated display for pixel theme Chinese and UI text
 
-## [0.44.0-dev.7] - 恢复像素主题文字显示
+## [0.44.0-dev.7] - Restore pixel theme text display
 
-## [0.44.0-dev.6] - 改善像素主题字体绘制兼容性
+## [0.44.0-dev.6] - Improve pixel theme font rendering compatibility
 
-## [0.44.0-dev.6] - 修复像素主题文字不显示
+## [0.44.0-dev.6] - Fix pixel theme text not displaying
 
-## [0.44.0-dev.5] - 优化像素主题字体回退与边框状态绘制
+## [0.44.0-dev.5] - Optimize pixel theme font fallback and border state rendering
 
-## [0.44.0-dev.4] - 细化像素主题侧栏的视觉还原
+## [0.44.0-dev.4] - Refine pixel theme sidebar visual restoration
 
-## [0.44.0-dev.3] - 为像素主题加入简体中文与拉丁像素字体
+## [0.44.0-dev.3] - Add Simplified Chinese and Latin pixel fonts to pixel theme
 
-## [0.44.0-dev.2] - 为像素主题接入可拉伸的边框素材
+## [0.44.0-dev.2] - Add stretchable border assets to pixel theme
 
-## [0.44.0-dev.1] - 新增 Android 像素风主题与对应像素图标
+## [0.44.0-dev.1] - Add Android pixel-style theme and matching pixel icons
 
-## [0.43.0-dev.5] - 调整旧主题文件树右键菜单风格
+## [0.43.0-dev.5] - Adjust old theme file tree context menu style
 
-## [0.43.0-dev.4] - 修复旧主题文件树右键菜单纵向挤压
+## [0.43.0-dev.4] - Fix old theme file tree context menu vertical squeeze
 
-## [0.43.0-dev.3] - 修复旧主题文件树右键菜单布局
+## [0.43.0-dev.3] - Fix old theme file tree context menu layout
 
-## [0.43.0-dev.2] - 修复网页品牌与 logo 静态资源加载
+## [0.43.0-dev.2] - Fix web brand and logo static resource loading
 
-## [0.43.0-dev.1] - 移除网页版百炼语音输入
+## [0.43.0-dev.1] - Remove web Bailian voice input
 
-## [0.42.3-dev.2] - 按聊天模式显示任务完成提示品牌色
+## [0.42.3-dev.2] - Show task-completion brand color by chat mode
 
-## [0.42.3-dev.1] - 修复网页语音录音脚本无法加载
+## [0.42.3-dev.1] - Fix web voice recording script unable to load
 
-## [0.42.2-dev.1] - 将配对码错误锁定调整为三次
+## [0.42.2-dev.1] - Adjust pairing-code error lock to three attempts
 
-## [0.42.1-dev.1] - 修复百炼语音连接测试误报失败
+## [0.42.1-dev.1] - Fix Bailian voice connection test falsely reporting failure
 
-## [0.42.0-dev.1] - 支持点击网页聊天消息中的链接
+## [0.42.0-dev.1] - Support clicking links in web chat messages
 
-## [0.41.0-dev.1] - 新增聊天图片 90 天自动清理
+## [0.41.0-dev.1] - Add 90-day auto-cleanup of chat images
 
-## [0.40.4-dev.1] - 修复服务重启后聊天图片无法查看
+## [0.40.4-dev.1] - Fix chat images unviewable after service restart
 
-## [0.40.3-dev.1] - 修复百炼语音识别模型接入
+## [0.40.3-dev.1] - Fix Bailian speech-recognition model integration
 
-## [0.40.1-dev.1] - 修复网页终端选区与打开异常
+## [0.40.1-dev.1] - Fix web terminal selection and open issues
 
-## [0.40.0-dev.1] - 新增百炼语音连接测试
+## [0.40.0-dev.1] - Add Bailian voice connection test
 
-## [0.39.1-dev.2] - 修复移动网页终端长按选区松手后高亮消失
+## [0.39.1-dev.2] - Fix mobile web terminal long-press selection highlight disappearing on release
 
-## [0.39.1-dev.1] - 修复网页终端长按选区松开后消失
+## [0.39.1-dev.1] - Fix web terminal long-press selection disappearing after release
 
-## [0.39.0-dev.1] - 新增 APP 聊天消息与代码块复制
+## [0.39.0-dev.1] - Add APP chat message and code block copy
 
-## [0.38.2-dev.1] - 网页发送消息后即时显示内容与排队状态
+## [0.38.2-dev.1] - Show content and queue state immediately after sending on web
 
-## [0.38.1-dev.1] - 修复用户消息气泡宽度异常
+## [0.38.1-dev.1] - Fix user message bubble width anomaly
 
-## [0.38.0-dev.1] - 支持 Codex 与 Claude Code 混合并发聊天
+## [0.38.0-dev.1] - Support mixed concurrent chat with Codex and Claude Code
 
-## [0.37.0-dev.5] - 调整 Claude 输入框默认高度与 Codex 图标颜色
+## [0.37.0-dev.5] - Adjust Claude input box default height and Codex icon color
 
-## [0.37.0-dev.4] - 调整网页刷新入口与旧经典文件菜单布局
+## [0.37.0-dev.4] - Adjust web refresh entry and old classic file menu layout
 
-## [0.37.0-dev.3] - 支持在项目设置中配置阿里云百炼语音
+## [0.37.0-dev.3] - Support configuring Alibaba Cloud Bailian voice in project settings
 
-## [0.37.0-dev.2] - 支持自定义侧栏聊天切换快捷键
+## [0.37.0-dev.2] - Support custom sidebar chat-switch shortcut
 
-## [0.37.0-dev.1] - 新增阿里云百炼语音输入
+## [0.37.0-dev.1] - Add Alibaba Cloud Bailian voice input
 
-## [0.36.0-dev.1] - 新增侧栏聊天快捷键切换
+## [0.36.0-dev.1] - Add sidebar chat shortcut switching
 
-## [0.35.0-dev.1] - 同步 APP 的真实回复活动状态
+## [0.35.0-dev.1] - Sync APP real reply activity state
 
-## [0.34.0-dev.1] - 支持从文件树将文件夹添加到终端
+## [0.34.0-dev.1] - Support adding folders to terminal from file tree
 
-## [0.33.0-dev.1] - 支持调整自定义背景图片的取景区域
+## [0.33.0-dev.1] - Support adjusting framing area of custom background image
 
-## [0.32.0-dev.2] - 新增网页下载进度和速度查看
+## [0.32.0-dev.2] - Add web download progress and speed viewing
 
-## [0.32.0-dev.1] - 新增 Android 网页地址输入和下载
+## [0.32.0-dev.1] - Add Android web address input and download
 
-## [0.31.0-dev.4] - 修复 Android 悬浮网页窗位置重置
+## [0.31.0-dev.4] - Fix Android floating web window position reset
 
-## [0.31.0-dev.3] - 新增 Android 悬浮网页窗顶部高度调节
+## [0.31.0-dev.3] - Add Android floating web window top height adjustment
 
-## [0.31.0-dev.2] - 优化 Android 悬浮网页窗尺寸调整
+## [0.31.0-dev.2] - Optimize Android floating web window resizing
 
-## [0.31.0-dev.1] - 新增 Android 聊天网页悬浮预览
+## [0.31.0-dev.1] - Add Android chat web floating preview
 
-## [0.30.1-dev.29] - 修复 Android 聊天链接跳转
+## [0.30.1-dev.29] - Fix Android chat link navigation
 
-## [0.30.1-dev.28] - 调整旧网页主题移动端顶部和欢迎语
+## [0.30.1-dev.28] - Adjust old web theme mobile top and welcome text
 
-## [0.30.1-dev.27] - 居中旧网页主题新建聊天欢迎文字
+## [0.30.1-dev.27] - Center old web theme new-chat welcome text
 
-## [0.30.1-dev.26] - 统一旧网页主题文件预览字体和文字颜色
+## [0.30.1-dev.26] - Unify old web theme file preview font and text color
 
-## [0.30.1-dev.25] - 加深旧网页主题文件预览文字颜色
+## [0.30.1-dev.25] - Darken old web theme file preview text color
 
-## [0.30.1-dev.24] - 统一旧网页主题文件预览字体并强化增删标识
+## [0.30.1-dev.24] - Unify old web theme file preview font and strengthen add/remove markers
 
-## [0.30.1-dev.23] - 加强旧网页主题用户消息边框可见度
+## [0.30.1-dev.23] - Strengthen old web theme user message border visibility
 
-## [0.30.1-dev.22] - 调整旧网页主题用户消息边框
+## [0.30.1-dev.22] - Adjust old web theme user message border
 
-## [0.30.1-dev.21] - 用侧栏反差色突出旧网页主题用户消息
+## [0.30.1-dev.21] - Highlight old web theme user messages with sidebar contrast color
 
-## [0.30.1-dev.20] - 调整旧网页主题完成提醒位置与边框
+## [0.30.1-dev.20] - Adjust old web theme completion notice position and border
 
-## [0.30.1-dev.19] - 加高旧网页主题左侧栏标题框
+## [0.30.1-dev.19] - Heighten old web theme left sidebar title box
 
-## [0.30.1-dev.18] - 调整旧网页主题的聊天与文件栏样式
+## [0.30.1-dev.18] - Adjust old web theme chat and file pane styles
 
-## [0.30.1-dev.17] - 强化旧网页主题的早期个人主页风格
+## [0.30.1-dev.17] - Strengthen early personal-homepage style of old web theme
 
-## [0.30.1-dev.16] - 还原 Android 1.0 主题的立体图标与按钮
+## [0.30.1-dev.16] - Restore dimensional icons and buttons of Android 1.0 theme
 
-## [0.30.1-dev.15] - 修正 Android 1.0 主题的偏黄配色
+## [0.30.1-dev.15] - Correct yellowish palette of Android 1.0 theme
 
-## [0.30.1-dev.14] - 修复 Android 横屏右侧显示缺口留白
+## [0.30.1-dev.14] - Fix gap whitespace on right side of Android landscape
 
-## [0.30.1-dev.13] - 调整 Android 1.0 主题图标并移除荧光绿
+## [0.30.1-dev.13] - Adjust Android 1.0 theme icons and remove fluorescent green
 
-## [0.30.1-dev.12] - 统一 Android 1.0 主题的中英文与数字字体
+## [0.30.1-dev.12] - Unify Chinese, English, and number fonts in Android 1.0 theme
 
-## [0.30.1-dev.11] - 按 Android 1.0 参考图调整金属按钮与彩色图标
+## [0.30.1-dev.11] - Adjust metal buttons and colored icons per Android 1.0 reference
 
-## [0.30.1-dev.10] - 按 Android 1.0 参考图调整金属控件、字体与配色
+## [0.30.1-dev.10] - Adjust metal controls, fonts, and palette per Android 1.0 reference
 
-## [0.30.1-dev.7] - 统一 Android 5 主题的操作入口图标
+## [0.30.1-dev.7] - Unify action-entry icons in Android 5 theme
 
-## [0.30.1-dev.6] - 补齐 Android 5 主题的聊天、文件和运行状态图标
+## [0.30.1-dev.6] - Complete chat, file, and running-state icons in Android 5 theme
 
-## [0.30.1-dev.5] - 完整套用 Android 5 Material 控件和模块图标
+## [0.30.1-dev.5] - Fully apply Android 5 Material controls and module icons
 
-## [0.30.1-dev.4] - 恢复旧网页主题的桌面双侧栏布局
+## [0.30.1-dev.4] - Restore old web theme dual-sidebar layout
 
-## [0.30.1-dev.3] - 将旧网页主题调整为早期 WWW 纯文档风格
+## [0.30.1-dev.3] - Reshape old web theme as early WWW plain document style
 
-## [0.30.1-dev.2] - 修正 Android 5 主题的状态栏与导航栏配色
+## [0.30.1-dev.2] - Correct Android 5 theme status bar and nav bar palette
 
-## [0.30.1-dev.1] - 按 Android 5 Lollipop 风格调整系统主题
+## [0.30.1-dev.1] - Adjust system theme per Android 5 Lollipop style
 
-## [0.30.0-dev.3] - 将旧网页主题改为早期个人主页式布局
+## [0.30.0-dev.3] - Change old web theme to early personal-homepage layout
 
-## [0.30.0-dev.2] - 调整旧网页主题的复古布局
+## [0.30.0-dev.2] - Adjust old web theme retro layout
 
-## [0.30.0-dev.1] - 新增 Android 8 风格主题
+## [0.30.0-dev.1] - Add Android 8 style theme
 
-## [0.29.0-dev.3] - 强化旧网页主题的复古视觉风格
+## [0.29.0-dev.3] - Strengthen retro visual style of old web theme
 
-## [0.29.0-dev.2] - 调整 Android 输入框操作布局、英文思考等级和运行状态显示
+## [0.29.0-dev.2] - Adjust Android input box action layout, English thinking levels, and running-state display
 
-## [0.29.0-dev.1] - 新增旧网页主题
+## [0.29.0-dev.1] - Add old web theme
 
-## [0.28.4-dev.3] - Codex 回复支持无消息续接并完善暂停队列控制
+## [0.28.4-dev.3] - Codex replies support continuing without messages; improve pause queue control
 
-## [0.28.4-dev.2] - 修复回复暂停续接与排队消息发送顺序
+## [0.28.4-dev.2] - Fix reply pause resume and queued message send order
 
-## [0.28.4-dev.1] - 优化网页版回复中断后的继续操作
+## [0.28.4-dev.1] - Optimize continue-after-interrupt operation on web
 
-## [0.28.2-dev.2] - 统一 Android 侧栏与设置文字配色，优化已编辑文件卡片展开滚动
+## [0.28.2-dev.2] - Unify Android sidebar and settings text palette; optimize expanded edited-file card scrolling
 
-## [0.28.2-dev.1] - 优化展开后的网页文件更改卡片滚动操作
+## [0.28.2-dev.1] - Optimize scrolling of expanded web file-change cards
 
-## [0.28.1-dev.11] - 调整 Android 输入框主题描边与运行时呼吸光晕
+## [0.28.1-dev.11] - Adjust Android input box theme outline and running breathing glow
 
-## [0.28.1-dev.10] - 将 Android 文件更改活动归入操作记录
+## [0.28.1-dev.10] - Move Android file-change activity into operation logs
 
-## [0.28.1-dev.8] - 优化 Android 文件更改卡片排版和操作入口
+## [0.28.1-dev.8] - Optimize Android file-change card layout and action entries
 
-## [0.28.1-dev.6] - 修复 Android 输入框呼吸光晕形状
+## [0.28.1-dev.6] - Fix Android input box breathing glow shape
 
-## [0.28.1-dev.5] - 修复 Android 文件摘要重复展开和浅色输入框边界
+## [0.28.1-dev.5] - Fix Android file summary duplicate expansion and light input box border
 
-## [0.28.1-dev.4] - 优化 Android 回复活动、文件摘要和排队消息布局
+## [0.28.1-dev.4] - Optimize Android reply activity, file summary, and queued message layout
 
-## [0.28.1-dev.1] - 修复 Android 聊天区布局与模式切换后原聊天恢复
+## [0.28.1-dev.1] - Fix Android chat area layout and original chat restore after mode switch
 
-## [0.24.0-dev.1] - 网页聊天、草稿和排队消息支持查看图片
+## [0.24.0-dev.1] - Web chat, drafts, and queued messages support viewing images
 
-## [0.23.0-dev.1] - 网页侧边栏增加聊天分组与批量管理，优化移动端侧栏打开体验
+## [0.23.0-dev.1] - Web sidebar adds chat grouping and batch management; improve mobile sidebar open experience
 
-## [0.28.0-dev.3] - 完善 Android 回复中的文件更改、运行记录与已编辑卡片，简化网页排队编辑操作
+## [0.28.0-dev.3] - Improve Android reply file changes, run logs, and edited cards; simplify web queued edit operations
 
-## [0.27.1-dev.1] - 优化 Android 聊天文字间距与输入框玻璃动效
+## [0.27.1-dev.1] - Optimize Android chat letter spacing and input box glass animation
 
-## [0.27.0-dev.3] - 完善 Android 消息排版与图标布局
+## [0.27.0-dev.3] - Improve Android message layout and icon layout
 
-## [0.26.5-dev.1] - 修复 Android 排队消息发送与编辑恢复
+## [0.26.5-dev.1] - Fix Android queued message sending and edit recovery
 
-## [0.26.4-dev.1] - 优化 Android 聊天菜单、设置页面和侧栏底部按钮
+## [0.26.4-dev.1] - Optimize Android chat menu, settings page, and sidebar bottom buttons
 
-## [0.26.3-dev.1] - 修复 Android 左侧聊天长按菜单松手后消失
+## [0.26.3-dev.1] - Fix Android left chat long-press menu disappearing on release
 
-## [0.26.2-dev.1] - 修复 Android 左侧聊天长按操作菜单无法打开
+## [0.26.2-dev.1] - Fix Android left chat long-press action menu unable to open
 
-## [0.26.1-dev.1] - 修正 Android 排队立即发送图标并完善侧栏批量操作状态隔离
+## [0.26.1-dev.1] - Fix Android queued send-immediately icon and improve sidebar batch action state isolation
 
-## [0.26.0-dev.1] - 增加 Android 聊天时间分组与批量操作，并优化消息显示和排队图标
+## [0.26.0-dev.1] - Add Android chat time grouping and batch operations; optimize message display and queue icons
 
-## [0.25.3-dev.1] - 合并 Android 输入框发送与暂停按钮并更新操作图标
+## [0.25.3-dev.1] - Merge Android input box send and pause buttons and update action icons
 
-## [0.25.2-dev.1] - 修复 Android 图片附件跨聊天串用并简化侧栏与返回操作
+## [0.25.2-dev.1] - Fix Android image attachments leaking across chats; simplify sidebar and back actions
 
-## [0.25.1-dev.1] - 调整 Android 侧栏操作图标并完善设置页关于信息
+## [0.25.1-dev.1] - Adjust Android sidebar action icons and improve settings page About info
 
-## [0.25.0-dev.1] - 增加 Android 输入框图片预览并改善附件发送、设置折叠、页面返回和侧栏操作
+## [0.25.0-dev.1] - Add Android input box image preview; improve attachment send, settings collapse, page back, and sidebar actions
 
-## [0.24.0-dev.1] - 增加 Android 中英文界面与检查更新，并改善排队操作、侧栏和回复控制
+## [0.24.0-dev.1] - Add Android Chinese/English UI and update check; improve queue ops, sidebar, and reply control
 
-## [0.23.0-dev.6] - 改善 Android 终端按钮、侧栏手势与后台增量刷新
+## [0.23.0-dev.6] - Improve Android terminal buttons, sidebar gestures, and background incremental refresh
 
-## [0.23.0-dev.5] - 优化 Android 排队消息编辑、图片预览和键盘动画
+## [0.23.0-dev.5] - Optimize Android queued message edit, image preview, and keyboard animation
 
-## [0.23.0-dev.4] - 修复 Android 图片加文字发送后的草稿残留与设置页位置跳动
+## [0.23.0-dev.4] - Fix draft residue after Android image+text send and settings page position jump
 
-## [0.23.0-dev.3] - 修复 Android 新增连接时仅填写局域网 IP 无法连接
+## [0.23.0-dev.3] - Fix Android new connection failing with only LAN IP
 
-## [0.23.0-dev.2] - 改善 Android 后台连接保活与完成通知
+## [0.23.0-dev.2] - Improve Android background keep-alive and completion notifications
 
-## [0.23.0-dev.1] - 支持 Android 多电脑连接切换并改善后台通知
+## [0.23.0-dev.1] - Support Android multi-computer connection switching and improve background notifications
 
-## [0.22.0-dev.11] - 修正 Android 系统通知开关状态
+## [0.22.0-dev.11] - Fix Android system notification switch state
 
-## [0.22.0-dev.10] - 压缩 Android 排队消息卡片高度
+## [0.22.0-dev.10] - Compact Android queued message card height
 
-## [0.22.0-dev.9] - 压缩 Android 排队消息卡片高度
+## [0.22.0-dev.9] - Compact Android queued message card height
 
-## [0.22.0-dev.8] - 修复 Android 排队消息编辑与附件保存
+## [0.22.0-dev.8] - Fix Android queued message edit and attachment saving
 
-## [0.22.0-dev.7] - 修复 Android 系统提示中的应用图标显示
+## [0.22.0-dev.7] - Fix app icon display in Android system notifications
 
-## [0.22.0-dev.6] - 修复 Android 图片预览及返回应用时输入法自动弹出
+## [0.22.0-dev.6] - Fix Android image preview and input method auto-popping on return to app
 
-## [0.22.0-dev.5] - 完善 Android 文件树上级目录导航
+## [0.22.0-dev.5] - Improve Android file tree parent-directory navigation
 
-## [0.22.0-dev.4] - 支持 Android 文件树浏览上级目录
+## [0.22.0-dev.4] - Support browsing parent directories in Android file tree
 
-## [0.22.0-dev.3] - 发送后的表格以带边框网格显示
+## [0.22.0-dev.3] - Sent tables display as bordered grid
 
-## [0.22.0-dev.2] - 修正表格粘贴时的内容识别
+## [0.22.0-dev.2] - Fix content recognition when pasting tables
 
-## [0.22.0-dev.1] - 支持粘贴表格内容
+## [0.22.0-dev.1] - Support pasting table content
 
-## [0.21.7-dev.22] - 修复 Android 文件树返回操作
+## [0.21.7-dev.22] - Fix Android file tree back operation
 
-## [0.21.7-dev.21] - 修复 Android 键盘动画期间页面跳位
+## [0.21.7-dev.21] - Fix page jumping during Android keyboard animation
 
-## [0.21.7-dev.20] - 修复 Android 键盘卡顿与流式回复导致的输入失焦
+## [0.21.7-dev.20] - Fix Android keyboard lag and input de-focus from streaming replies
 
-## [0.21.7-dev.19] - 修复 Android 键盘弹出时聊天内容未跟随滚动
+## [0.21.7-dev.19] - Fix chat content not following scroll when Android keyboard appears
 
-## [0.21.7-dev.18] - 统一自定义背景图片的全局显示
+## [0.21.7-dev.18] - Unify global display of custom background image
 
-## [0.21.7-dev.17] - 将自定义背景图片扩展到整个 APP
+## [0.21.7-dev.17] - Extend custom background image to entire APP
 
-## [0.21.7-dev.16] - 隔离自定义主题中的聊天背景与浮层
+## [0.21.7-dev.16] - Isolate chat background and overlays in custom theme
 
-## [0.21.7-dev.15] - 修复自定义主题侧栏透出聊天内容
+## [0.21.7-dev.15] - Fix custom theme sidebar showing chat content through
 
-## [0.21.7-dev.14] - 修整聊天主题配色与自定义主题体验
+## [0.21.7-dev.14] - Fix chat theme palette and custom theme experience
 
-## [0.21.7-dev.13] - 平衡 Codex 与 Claude 用户消息填充色
+## [0.21.7-dev.13] - Balance Codex and Claude user message fill colors
 
-## [0.21.7-dev.12] - Codex 用户消息使用侧栏品牌色
+## [0.21.7-dev.12] - Codex user messages use sidebar brand color
 
-## [0.21.7-dev.11] - 统一新建对话页的引擎名称
+## [0.21.7-dev.11] - Unify engine name on new-chat page
 
-## [0.21.7-dev.10] - 统一 Claude 模式侧栏与思考状态颜色
+## [0.21.7-dev.10] - Unify Claude mode sidebar and thinking state colors
 
-## [0.21.7-dev.9] - 优化新建对话标题与 Claude 消息配色
+## [0.21.7-dev.9] - Optimize new-chat title and Claude message palette
 
-## [0.21.7-dev.6] - 修正 Claude 模式下助手名称显示
+## [0.21.7-dev.6] - Fix assistant name display in Claude mode
 
-## [0.21.7-dev.5] - 改善网页版终端粘贴体验与字体一致性
+## [0.21.7-dev.5] - Improve web terminal paste experience and font consistency
 
-## [0.21.7-dev.4] - 保留终端选区供右键插入输入框
+## [0.21.7-dev.4] - Keep terminal selection for right-click insertion into input box
 
-## [0.21.7-dev.3] - 恢复 Android 侧栏项目 logo
+## [0.21.7-dev.3] - Restore Android sidebar project logo
 
-## [0.21.7-dev.2] - 修正 Android 侧栏顶部品牌图标
+## [0.21.7-dev.2] - Fix Android sidebar top brand icon
 
-## [0.21.7-dev.1] - 修复移动网页版终端长按松开后选区消失
+## [0.21.7-dev.1] - Fix mobile web terminal selection disappearing after long-press release
 
-## [0.21.6-dev.5] - 修正 Android 顶栏模式图标配色
+## [0.21.6-dev.5] - Fix Android top bar mode icon palette
 
-## [0.21.6-dev.4] - 修正 Android 顶栏模式切换图标方向
+## [0.21.6-dev.4] - Fix Android top bar mode-switch icon direction
 
-## [0.21.6-dev.3] - 修复 Android 侧栏滑动命中率与主题透明度预览卡顿
+## [0.21.6-dev.3] - Fix Android sidebar swipe hit rate and theme transparency preview lag
 
-## [0.21.6-dev.2] - 加粗 Android 侧边栏图标并标注文件树路径按钮
+## [0.21.6-dev.2] - Bolden Android sidebar icons and label file tree path button
 
-## [0.21.6-dev.1] - 恢复 Android 聊天区域侧栏滑动
+## [0.21.6-dev.1] - Restore Android chat area sidebar swipe
 
-## [0.21.5-dev.1] - 修复 Android 侧栏模式强调色与切换提示
+## [0.21.5-dev.1] - Fix Android sidebar mode accent color and switch hint
 
-## [0.21.4-dev.1] - 修复 Android 用户消息宽度与图片附件布局
+## [0.21.4-dev.1] - Fix Android user message width and image attachment layout
 
-## [0.21.3-dev.1] - 减少移动网页版输入区在流式更新时的卡顿
+## [0.21.3-dev.1] - Reduce mobile web input area lag during streaming updates
 
-## [0.21.2-dev.1] - 修复 Android 设置滑杆与输入手势
+## [0.21.2-dev.1] - Fix Android settings slider and input gestures
 
-## [0.21.1-dev.1] - 修复 Android 用户消息气泡窄屏竖排
+## [0.21.1-dev.1] - Fix Android user message bubble vertical stack on narrow screens
 
-## [0.21.0-dev.1] - 补齐 Android 原生设置和聊天工作区功能
+## [0.21.0-dev.1] - Complete Android native settings and chat workspace features
 
-## [0.20.0-dev.1] - 完善 Android 原生工作区与对话信息展示
+## [0.20.0-dev.1] - Improve Android native workspace and conversation info display
 
-## [0.19.0-dev.21] - 加快超长聊天首屏与增量同步
+## [0.19.0-dev.21] - Speed up ultra-long chat first screen and incremental sync
 
-## [0.19.0-dev.20] - 加快 Android 聊天首屏并统一文件浏览与修改预览
+## [0.19.0-dev.20] - Speed up Android chat first screen; unify file browsing and modification preview
 
-## [0.19.0-dev.19] - 降低 Android 长回复刷新时的内存波动
+## [0.19.0-dev.19] - Reduce memory fluctuation when refreshing long Android replies
 
-## [0.19.0-dev.18] - 改善 Android 长对话稳定性与消息区交互
+## [0.19.0-dev.18] - Improve Android long-conversation stability and message-area interaction
 
-## [0.19.0-dev.17] - 提升 Android 长对话与侧栏交互流畅度
+## [0.19.0-dev.17] - Improve Android long-conversation and sidebar interaction smoothness
 
-## [0.19.0-dev.13] - 统一 Android 原生界面并修复文件树与终端显示
+## [0.19.0-dev.13] - Unify Android native UI and fix file tree and terminal display
 
-## [0.19.0-dev.9] - 完善原生设置与系统通知控制
+## [0.19.0-dev.9] - Improve native settings and system notification control
 
-## [0.19.0-dev.8] - 避免侧栏手势期间刷新聊天和文件列表
+## [0.19.0-dev.8] - Avoid refreshing chat and file lists during sidebar gestures
 
-## [0.19.0-dev.7] - 复用 Android 侧栏缓存并修正设置返回
+## [0.19.0-dev.7] - Reuse Android sidebar cache and fix settings back
 
-## [0.19.0-dev.6] - 修正 Android 设置页选项布局
+## [0.19.0-dev.6] - Fix Android settings page option layout
 
-## [0.19.0-dev.5] - 修正 Android 输入菜单默认项与弹层布局
+## [0.19.0-dev.5] - Fix Android input menu default items and popup layout
 
-## [0.19.0-dev.4] - 完善 Android 输入区菜单、侧栏拖动和设置页面
+## [0.19.0-dev.4] - Improve Android input area menu, sidebar drag, and settings page
 
-## [0.19.0-dev.3] - 修复 Android 文件树文件名与路径入口布局
+## [0.19.0-dev.3] - Fix Android file tree filename and path entry layout
 
-## [0.19.0-dev.2] - 按消息顺序展示 Android 操作记录
+## [0.19.0-dev.2] - Display Android operation logs in message order
 
-## [0.19.0-dev.1] - 改善 Android 聊天布局、侧栏交互与文件树操作
+## [0.19.0-dev.1] - Improve Android chat layout, sidebar interaction, and file tree operations
 
-## [0.18.1-dev.14] - 让 Android 终端返回键先收起键盘
+## [0.18.1-dev.14] - Make Android terminal back key collapse keyboard first
 
-## [0.18.1-dev.13] - 修复 Android 终端收起键盘后弹窗未恢复高度
+## [0.18.1-dev.13] - Fix popup height not restored after collapsing Android terminal keyboard
 
-## [0.18.1-dev.12] - 稳定 Android 终端键盘显示期间的弹窗高度
+## [0.18.1-dev.12] - Stabilize popup height while Android terminal keyboard is shown
 
-## [0.18.1-dev.11] - 修复 Android 终端键盘弹出时输入区仍被遮挡
+## [0.18.1-dev.11] - Fix input area still covered when Android terminal keyboard appears
 
-## [0.18.1-dev.10] - 修复 Android 终端键盘弹出后输入和发送控件被遮挡
+## [0.18.1-dev.10] - Fix input and send controls covered after Android terminal keyboard appears
 
-## [0.18.1-dev.9] - 补充 Android 终端连接状态反馈
+## [0.18.1-dev.9] - Add Android terminal connection-state feedback
 
-## [0.18.1-dev.8] - 修复 Android 聊天列表滚动时左右面板侧滑不触发
+## [0.18.1-dev.8] - Fix side panels not triggering on swipe while scrolling Android chat list
 
-## [0.18.1-dev.7] - 调整 Android 双侧抽屉手势阈值与文件树显示宽度
+## [0.18.1-dev.7] - Adjust Android dual-drawer gesture thresholds and file tree display width
 
-## [0.18.1-dev.6] - 修复 Android 聊天布局、侧滑返回、终端输入和断线配对状态
+## [0.18.1-dev.6] - Fix Android chat layout, swipe-back, terminal input, and disconnect pairing state
 
-## [0.18.1-dev.5] - 改进 Android 原生侧栏拖动、聊天历史恢复与导航图标
+## [0.18.1-dev.5] - Improve Android native sidebar drag, chat history recovery, and nav icons
 
-## [0.18.1-dev.4] - 修复 Android 原生聊天页面系统栏布局和控件触摸问题
+## [0.18.1-dev.4] - Fix Android native chat page system-bar layout and control touch issues
 
-## [0.18.1-dev.3] - 修复 Android 客户端配对请求地址
+## [0.18.1-dev.3] - Fix Android client pairing request address
 
-## [0.18.1-dev.2] - 优化 Android 原生客户端的同步和断线恢复
+## [0.18.1-dev.2] - Optimize Android native client sync and disconnect recovery
 
-## [0.18.1-dev.1] - 使用 Kotlin 原生界面重建 Android 移动端
+## [0.18.1-dev.1] - Rebuild Android mobile end with Kotlin native UI
 
-## [0.18.0-dev.2] - 修复 Android APP 输入法逐段推动聊天页面
+## [0.18.0-dev.2] - Fix Android APP input method pushing chat page segment by segment
 
-## [0.18.0-dev.1] - 支持在侧边栏搜索聊天记录并压缩移动端顶部空间
+## [0.18.0-dev.1] - Support searching chat history in sidebar and compress mobile top space
 
-## [0.17.0-dev.2] - 修复 Android APP 打开聊天输入框时的整页闪动
+## [0.17.0-dev.2] - Fix full-page flicker when opening chat input box in Android APP
 
-## [0.17.0-dev.1] - 补全网页终端常用操作和断线重连能力
+## [0.17.0-dev.1] - Complete web terminal common operations and disconnect-reconnect capability
 
-## [0.16.0-dev.13] - 修复桌面终端复制粘贴快捷键和右键菜单
+## [0.16.0-dev.13] - Fix desktop terminal copy-paste shortcuts and context menu
 
-## [0.16.0-dev.12] - 支持移动端终端长按连续退格
+## [0.16.0-dev.12] - Support long-press continuous backspace in mobile terminal
 
-## [0.16.0-dev.11] - 修复移动端终端方向键输入普通字母
+## [0.16.0-dev.11] - Fix mobile terminal arrow keys typing normal letters
 
-## [0.16.0-dev.10] - 改善移动端终端的触摸滚动和方向输入
+## [0.16.0-dev.10] - Improve mobile terminal touch scroll and directional input
 
-## [0.16.0-dev.9] - 标明跨模式完成通知来源并修复点击后的回复加载
+## [0.16.0-dev.9] - Mark cross-mode completion notice source and fix reply loading after click
 
-## [0.16.0-dev.8] - 修复移动端输入法打开首帧跳动
+## [0.16.0-dev.8] - Fix mobile input method first-frame jump when opening
 
-## [0.16.0-dev.7] - 支持手动优先发送任意一条排队消息
+## [0.16.0-dev.7] - Support manually prioritizing sending any queued message
 
-## [0.16.0-dev.6] - 同步多设备审批状态并标明来源对话
+## [0.16.0-dev.6] - Sync multi-device approval state and mark source conversation
 
-## [0.16.0-dev.5] - 修复跨设备同步时用户消息缺失
+## [0.16.0-dev.5] - Fix user message missing during cross-device sync
 
-## [0.16.0-dev.4] - 修复移动端打开输入框时整页白屏闪烁
+## [0.16.0-dev.4] - Fix full-page white-screen flash when opening mobile input box
 
-## [0.16.0-dev.3] - 改善移动端侧栏滑动流畅度并保留文件树浏览位置
+## [0.16.0-dev.3] - Improve mobile sidebar swipe smoothness and preserve file tree browse position
 
-## [0.16.0-dev.1] - 支持回复期间选择消息模型与仅本次设置，改善手机键盘弹出时的页面闪动
+## [0.16.0-dev.1] - Support selecting message model and per-session settings during replies; improve page flicker on phone keyboard popup
 
-## [0.15.0-dev.9] - 修复删除 Claude Code 聊天后意外切回 Codex 模式
+## [0.15.0-dev.9] - Fix accidentally switching back to Codex mode after deleting Claude Code chat
 
-## [0.15.0-dev.8] - 提升桌面端侧边栏当前对话图标的选中提示
+## [0.15.0-dev.8] - Improve desktop sidebar current-conversation icon selection hint
 
-## [0.15.0-dev.7] - 修复移动端重复同步与后台下载消耗过多流量
+## [0.15.0-dev.7] - Fix mobile duplicate sync and background download consuming too much traffic
 
-## [0.15.0-dev.6] - 修复自定义主题文件代码仍显示单色
+## [0.15.0-dev.6] - Fix custom theme file code still showing monochrome
 
-## [0.15.0-dev.5] - 修复多种代码和配置文件语法颜色缺失
+## [0.15.0-dev.5] - Fix missing syntax colors for various code and config files
 
-## [0.15.0-dev.4] - 修复工作区文件树的文件类型图标
+## [0.15.0-dev.4] - Fix file type icons in workspace file tree
 
-## [0.15.0-dev.2] - 修复 Codex Remote 后端启动失败
+## [0.15.0-dev.2] - Fix Codex Remote backend startup failure
 
-## [0.15.0-dev.1] - 支持工作区文件树的新建、重命名、删除、复制、剪切与粘贴；支持 Windows 后台驻留与登录自启
+## [0.15.0-dev.1] - Support create, rename, delete, copy, cut, and paste in workspace file tree; support Windows background resident and login autostart
 
-## [0.14.1-dev.3] - 补全文件预览语法着色与类型图标
-## [0.14.1-dev.2] - 修复移动端聊天代码块横向溢出
+## [0.14.1-dev.3] - Complete file preview syntax coloring and type icons
 
-## [0.14.1-dev.1] - 修复 Claude Code 消息请求立即失败
+## [0.14.1-dev.2] - Fix mobile chat code block horizontal overflow
 
-## [0.14.0-dev.1] - 支持查看并继续本机 Claude Code 历史对话
+## [0.14.1-dev.1] - Fix Claude Code message request failing immediately
 
-## [0.13.1-dev.2] - 简化当前模式新建对话并更新品牌图标
+## [0.14.0-dev.1] - Support viewing and continuing local Claude Code history conversations
 
-## [0.13.1-dev.1] - 修复新建 Codex 对话首条消息无法发送
+## [0.13.1-dev.2] - Simplify new-chat in current mode and update brand icon
 
-## [0.13.0-dev.3] - 修复移动端文件树回弹闪烁、桌面代码块越界和 Windows 回复中发送绕过队列
+## [0.13.1-dev.1] - Fix first message unable to send in new Codex conversation
 
-## [0.13.0-dev.2] - 支持手指拖动移动端右侧文件树
+## [0.13.0-dev.3] - Fix mobile file tree bounce flash, desktop code block overflow, and Windows reply send bypassing queue
 
-## [0.13.0-dev.1] - 支持拖动移动端侧栏并配置 Claude Code 模型、思考等级和权限
+## [0.13.0-dev.2] - Support finger-dragging mobile right file tree
 
-## [0.12.0-dev.4] - 缩小移动端顶部栏、提升侧滑灵敏度并恢复模式对应聊天
+## [0.13.0-dev.1] - Support dragging mobile sidebar and configuring Claude Code model, thinking level, and permissions
 
-## [0.12.0-dev.3] - 增加 Codex 与 Claude Code 切换入口并修复手机代码块超宽
+## [0.12.0-dev.4] - Shrink mobile top bar, increase side-swipe sensitivity, and restore mode-matching chats
 
-## [0.12.0-dev.2] - 修复移动端输入法闪动并加快网页附件选择器
+## [0.12.0-dev.3] - Add Codex and Claude Code switch entry and fix phone code block over-wide
 
-## [0.12.0-dev.1] - 支持 Codex 与 Claude Code 模式并恢复 Windows Codex 历史共享
+## [0.12.0-dev.2] - Fix mobile input method flicker and speed up web attachment picker
 
-## [0.11.1-dev.15] - 修复输入框选项设置的间距与定位
+## [0.12.0-dev.1] - Support Codex and Claude Code modes and restore Windows Codex history sharing
 
-## [0.11.1-dev.13] - 修复输入法打开时选项菜单定位异常
+## [0.11.1-dev.15] - Fix input box option settings spacing and positioning
 
-## [0.11.1-dev.10] - 修复 Android APP 长时间保留旧版网页资源
+## [0.11.1-dev.13] - Fix option menu positioning anomaly when input method opens
 
-## [0.11.0-dev.1] - 支持从操作记录打开关联文件和图片
+## [0.11.1-dev.10] - Fix Android APP keeping old web resources for long time
 
-## [0.10.0-dev.2] - 按消息顺序展示 Codex 操作步骤
+## [0.11.0-dev.1] - Support opening linked files and images from operation logs
 
-## [0.10.0-dev.1] - 支持实时查看 Codex 操作步骤
+## [0.10.0-dev.2] - Display Codex operation steps in message order
 
-## [0.9.3-dev.5] - 修复选择权限模式时被活动写入者阻止
+## [0.10.0-dev.1] - Support real-time viewing of Codex operation steps
 
-## [0.9.3-dev.4] - 修复历史聊天调整权限时提示找不到会话
+## [0.9.3-dev.5] - Fix being blocked by active writer when selecting permission mode
 
-## [0.9.3-dev.3] - 修复空闲聊天被误判为回复中而无法删除
+## [0.9.3-dev.4] - Fix session-not-found prompt when adjusting permissions on history chat
 
-## [0.9.3-dev.2] - 修复 Codex 图片消息在网页中显示为文本
+## [0.9.3-dev.3] - Fix idle chat misjudged as replying and undeletable
 
-## [0.9.3-dev.1] - 修复回复中聊天无法删除
+## [0.9.3-dev.2] - Fix Codex image messages displaying as text on web
 
-## [0.9.2-dev.1] - 修复消息误入待核对队列
+## [0.9.3-dev.1] - Fix chat in reply unable to delete
 
-## [0.9.1-dev.1] - 修复新建聊天的审批能力兼容问题
+## [0.9.2-dev.1] - Fix messages wrongly entering pending-verification queue
 
-## [0.9.0-dev.2] - 修复输入框文件变更统计颜色
+## [0.9.1-dev.1] - Fix approval-capability compatibility for new chats
 
-## [0.9.0-dev.1] - Windows 网页会话与本机 Codex 共享历史，并支持回复和审批通知
+## [0.9.0-dev.2] - Fix input box file-change statistics color
 
-## [0.8.0-dev.10] - 修复移动端终端关闭按钮位置
+## [0.9.0-dev.1] - Windows web sessions share history with local Codex; support reply and approval notifications
 
-## [0.8.0-dev.9] - 修复移动浏览器键盘上方输入框留白
+## [0.8.0-dev.10] - Fix mobile terminal close button position
 
-## [0.8.0-dev.8] - 修复移动端终端重复显示关闭按钮
+## [0.8.0-dev.9] - Fix whitespace above input box on mobile browser keyboard
 
-## [0.8.0-dev.7] - 修复审批能力不匹配导致网页消息退回队列
+## [0.8.0-dev.8] - Fix mobile terminal duplicate close button
 
-## [0.8.0-dev.6] - 改善移动端远程连接恢复和弱网加载
+## [0.8.0-dev.7] - Fix approval capability mismatch returning web messages to queue
 
-## [0.8.0-dev.5] - 修复远程同步流量过高及移动端输入菜单遮挡
+## [0.8.0-dev.6] - Improve mobile remote connection recovery and weak-network loading
 
-## [0.8.0-dev.4] - 减少聊天同步过程中的重复历史下载
+## [0.8.0-dev.5] - Fix excessive remote sync traffic and mobile input menu blocking
 
-## [0.8.0-dev.1] - 支持移动端终端长按复制
+## [0.8.0-dev.4] - Reduce duplicate history downloads during chat sync
 
-## [0.7.0-dev.1] - 为每个聊天保留 tmux 终端会话
+## [0.8.0-dev.1] - Support mobile terminal long-press copy
 
-## [0.6.0-dev.1] - 支持将终端长选区作为文档附件加入消息
+## [0.7.0-dev.1] - Keep a tmux terminal session per chat
 
-## [0.5.0-dev.1] - 新增可调高度的聊天浮层
+## [0.6.0-dev.1] - Support adding long terminal selection as document attachment to message
 
-## [0.4.0-dev.1] - 新增可与聊天输入框交互的本机终端
+## [0.5.0-dev.1] - Add adjustable-height chat overlay
 
-## [0.3.0-dev.2] - 支持完整发送长文档内容
+## [0.4.0-dev.1] - Add local terminal interactive with chat input box
 
-## [0.3.0-dev.1] - 允许粘贴更长的内容
+## [0.3.0-dev.2] - Support fully sending long document content
 
-## [0.2.0-dev.6] - 修复移动端侧栏遮罩与吸顶标题层级
+## [0.3.0-dev.1] - Allow pasting longer content
 
-## [0.2.0-dev.5] - 修复发送消息偶发重复显示
+## [0.2.0-dev.6] - Fix mobile sidebar mask and sticky title stacking
 
-## [0.2.0-dev.4] - 修复历史文件改动卡片集中堆叠
+## [0.2.0-dev.5] - Fix occasional duplicate display of sent messages
 
-## [0.2.0-dev.3] - 新增全局字体大小调节并优化设置交互
+## [0.2.0-dev.4] - Fix history file-change cards piling up
 
-## [0.2.0-dev.1] - 支持删除聊天
+## [0.2.0-dev.3] - Add global font-size adjustment and optimize settings interaction
 
-## [0.1.0-dev.6] - 支持将现有聊天绑定到文件树目录
+## [0.2.0-dev.1] - Support deleting chats
 
-## [0.1.0-dev.5] - 修复移动端侧栏与吸顶内容重叠
+## [0.1.0-dev.6] - Support binding existing chat to file tree directory
 
-## [0.1.0-dev.4] - 修复从文件树进入目录后路径未生效
+## [0.1.0-dev.5] - Fix mobile sidebar and sticky content overlap
 
-## [0.1.0-dev.3] - 修复移动端已编辑文件模块滚动吸顶
+## [0.1.0-dev.4] - Fix entering directory from file tree not applying path
 
-## [0.1.0-dev.2] - 修复文件变更统计颜色
+## [0.1.0-dev.3] - Fix mobile edited-file module scroll sticky
 
-## [0.1.0-dev.1] - 支持从文件树目录启动聊天
+## [0.1.0-dev.2] - Fix file-change statistics color
 
-## [0.0.221] - 修复文件差异文字颜色并调整操作记录字号
+## [0.1.0-dev.1] - Support starting chat from file tree directory
 
-## [0.0.220] - 让文件预览悬浮窗避开文件树和输入框
+## [0.0.221] - Fix file diff text color and adjust operation log font size
 
-## [0.0.219] - 优化桌面文件预览与聊天页面布局
+## [0.0.220] - Make file preview overlay avoid file tree and input box
 
-## [0.0.218] - 对齐用户消息右边缘
+## [0.0.219] - Optimize desktop file preview and chat page layout
 
-## [0.0.217] - 对齐操作记录与本机编辑卡片
+## [0.0.218] - Align user message right edge
 
-## [0.0.216] - 调整操作记录与复制按钮顺序
+## [0.0.217] - Align operation logs with local edit cards
 
-## [0.0.215] - 让 Android 页面背景延伸到状态栏
+## [0.0.216] - Adjust operation log and copy button order
 
-## [0.0.214] - 修复 Android 手势导航底色和键盘输入区留白
+## [0.0.215] - Extend Android page background to status bar
 
-## [0.0.213] - 合并移动端图片与文件附件入口
+## [0.0.214] - Fix Android gesture nav background and keyboard input area whitespace
 
-## [0.0.212] - 支持移动端全局页面侧滑返回且不退出浏览页面
+## [0.0.213] - Merge mobile image and file attachment entries
 
-## [0.0.211] - 同步 Windows Codex 运行时与本机历史记录
+## [0.0.212] - Support mobile global page side-swipe back without exiting browse page
 
-## [v0.0.202] - 限制发送前工作区快照耗时以减少消息提交等待
+## [0.0.211] - Sync Windows Codex runtime with local history
 
-## [v0.0.201] - 修复重连后聊天刷新停滞并定期核对回复状态
+## [v0.0.202] - Limit pre-send workspace snapshot time to reduce message submit wait
 
-## [v0.0.200] - 修复本机聊天更新后网页内容与思考状态不刷新
+## [v0.0.201] - Fix chat refresh stall after reconnect and periodically verify reply state
 
-## [0.0.210] - 修复跨设备回复先于用户消息显示
+## [v0.0.200] - Fix web content and thinking state not refreshing after local chat update
 
-## [0.0.209] - 扩展自定义主题到操作记录、审核和文件预览等模块
+## [0.0.210] - Fix cross-device reply showing before user message
 
-## [0.0.208] - 补齐明暗主题控件表面与文字对比度
+## [0.0.209] - Extend custom theme to operation logs, approvals, and file preview modules
 
-## [0.0.207] - 修正文件差异预览中未着色文本的主题对比度
+## [0.0.208] - Complete light/dark theme control surface and text contrast
 
-## [0.0.206] - 明暗主题普通界面文字统一为纯黑和纯白
+## [0.0.207] - Fix uncolored text theme contrast in file diff preview
 
-## [0.0.205] - 缩短消息发送准备时间并恢复消息即时显示
+## [0.0.206] - Unify light/dark theme normal UI text to pure black and white
 
-## [0.0.204] - 修复空闲消息误显示排队并减少会话启动等待
+## [0.0.205] - Shorten message send prep time and restore immediate message display
 
-## [0.0.203] - 优化共享排队消息即时删除与空闲发送
+## [0.0.204] - Fix idle messages wrongly showing queued and reduce session-start wait
 
-## [0.0.202] - 修复并发窗口切换时输入区高度跳动
+## [0.0.203] - Optimize shared queued message immediate delete and idle send
 
-## [0.0.201] - 跨设备共享排队消息和会话置顶，电脑端接管断线续发
+## [0.0.202] - Fix input area height jump when switching concurrent windows
 
-## [0.0.200] - 修复排队消息重复发送及并发窗口队列同步
+## [0.0.201] - Share queued messages and session pinning across devices; desktop takes over interrupted sending
 
-## [0.0.199] - 侧栏对话支持置顶、导出和引用
+## [0.0.200] - Fix queued message duplicate send and concurrent window queue sync
 
-## [0.0.198] - Vite 重启时保留 Codex 后端和活动回复
+## [0.0.199] - Sidebar conversations support pinning, exporting, and quoting
 
-## [0.0.197] - 修复 Android 构建导致网页开发服务反复重启
+## [0.0.198] - Preserve Codex backend and active replies on Vite restart
 
-## [0.0.196] - 修复 Android 网页加载卡住并更新应用图标
+## [0.0.197] - Fix Android build causing web dev service to repeatedly restart
 
-## [0.0.195] - 优化长会话消息渲染与流式回复性能
+## [0.0.196] - Fix Android web load stuck and update app icon
 
-## [0.0.194] - 支持将左侧对话栏收窄至保留记录标题
+## [0.0.195] - Optimize long-session message rendering and streaming reply performance
 
-## [0.0.193] - 修复页面热更新因非组件导出失效
+## [0.0.194] - Support narrowing left conversation bar to keep record titles
 
-## [0.0.192] - 防止页面恢复后排队消息抢在未完成回复前发送
+## [0.0.193] - Fix page hot update failing due to non-component exports
 
-## [0.0.191] - 缓存最近会话历史并修正侧栏浮层遮挡
+## [0.0.192] - Prevent queued messages sending before unfinished replies after page restore
 
-## [0.0.190] - 修复长文本附件在聊天历史中展开显示
+## [0.0.191] - Cache recent session history and fix sidebar overlay covering
 
-## [0.0.189] - 调整移动端选区备注框位置以避开选中代码
+## [0.0.190] - Fix long text attachment expanding in chat history
 
-## [0.0.188] - 支持为文件预览中的代码选区添加修改备注
+## [0.0.189] - Adjust mobile selection note box position to avoid selected code
 
-## [0.0.187] - 为多个代码选区添加编号并改为横向滚动附件栏
+## [0.0.188] - Support adding edit notes to code selections in file preview
 
-## [0.0.186] - 将文件预览选中的代码作为文档附件加入待发送消息
+## [0.0.187] - Number multiple code selections and switch to horizontal-scroll attachment bar
 
-## [0.0.185] - 支持从文件预览右键引用选中代码及行号
+## [0.0.186] - Add selected code from file preview as document attachment to outgoing message
 
-## [0.0.184] - 支持在右侧文件预览中编辑并保存本机工作区文件
+## [0.0.185] - Support right-click referencing selected code and line numbers from file preview
 
-## [0.0.183] - 按屏幕左右半区独立侧滑开关对话栏和文件树
+## [0.0.184] - Support editing and saving local workspace files in right file preview
 
-## [0.0.182] - 修复用户消息重复显示并提示更新重命名后端
+## [0.0.183] - Independently swipe open conversation bar and file tree per screen half
 
-## [0.0.181] - 修复用户消息偶发重复显示
+## [0.0.182] - Fix duplicate user message display and prompt updating renamed backend
 
-## [0.0.180] - 支持在聊天记录中跨设备重命名对话
+## [0.0.181] - Fix occasional duplicate display of user messages
 
-## [0.0.179] - 支持让 Codex 读取原始 PDF 附件
+## [0.0.180] - Support renaming conversations across devices in chat history
 
-## [0.0.178] - 修复 PDF 解析器与 worker 版本错配
+## [0.0.179] - Support letting Codex read raw PDF attachments
 
-## [0.0.177] - 稳定回复计时并保留待发送图片草稿
+## [0.0.178] - Fix PDF parser and worker version mismatch
 
-## [0.0.176] - 支持附加常见文档、表格、文本和源码文件
+## [0.0.177] - Stabilize reply timer and preserve pending-send image drafts
 
-## [0.0.175] - 修复跨设备用户消息延迟显示
+## [0.0.176] - Support attaching common documents, tables, text, and source files
 
-## [0.0.174] - 显示消息发送时间与 Codex 回复耗时
+## [0.0.175] - Fix delayed display of cross-device user messages
 
-## [0.0.173] - 压缩自定义背景图片以确保本地保存和正常显示
+## [0.0.174] - Show message send time and Codex reply duration
 
-## [0.0.182] - 提升电脑端并发对话窗口上限至五个
+## [0.0.173] - Compress custom background image for reliable local save and display
 
-## [0.0.181] - 让远程会话共享主 Codex 数据并开放 Windows 同级工作区
+## [0.0.182] - Raise desktop concurrent conversation window cap to five
 
-## [0.0.180] - 恢复 Windows 一键启动器与 Codex CLI 自动发现
+## [0.0.181] - Let remote sessions share main Codex data and open Windows same-level workspace
 
-## [0.0.179] - 将 Windows 一键启动器端口统一为 4173
+## [0.0.180] - Restore Windows one-click launcher and Codex CLI auto-discovery
 
-## [0.0.178] - 合并 Codex App Server 与本机历史会话
+## [0.0.179] - Unify Windows one-click launcher port to 4173
 
-## [0.0.177] - 恢复已导入的本机 Codex 历史会话
+## [0.0.178] - Merge Codex App Server with local history sessions
 
-## [0.0.176] - 忽略 Codex Remote 运行目录的 Vite 文件监视
+## [0.0.177] - Restore imported local Codex history sessions
 
-## [0.0.175] - 隔离 Codex 远程引擎运行状态
+## [0.0.176] - Ignore Vite file watching of Codex Remote run directory
 
-## [0.0.174] - 恢复本机 Codex 模型配置读取
+## [0.0.175] - Isolate Codex remote engine running state
 
-## [0.0.173] - 恢复 Windows 启动器编码和 pnpm 路径兼容
+## [0.0.174] - Restore local Codex model config reading
 
-## [0.0.172] - 修复 Windows 配对确认一直转圈
+## [0.0.173] - Restore Windows launcher encoding and pnpm path compatibility
 
-## [0.0.171] - 让自定义背景覆盖应用内所有页面
+## [0.0.172] - Fix Windows pairing confirmation spinning forever
 
-## [0.0.170] - 让自定义背景在整个工作区透出
+## [0.0.171] - Let custom background cover all in-app pages
 
-## [0.0.169] - 修复立即发送时新消息短暂消失并合并旧回复
+## [0.0.170] - Let custom background show through entire workspace
 
-## [0.0.168] - 支持展开移动端文件修改明细并统一顶部操作
+## [0.0.169] - Fix new message briefly disappearing on immediate send and merge old replies
 
-## [0.0.167] - 修复中断后继续发送时的消息状态
+## [0.0.168] - Support expanding mobile file-change details and unify top actions
 
-## [0.0.166] - 移动端仅显示文件更改汇总
+## [0.0.167] - Fix message state when continuing to send after interrupt
 
-## [0.0.165] - 合并移动端发送和停止按钮
+## [0.0.166] - Mobile shows only file-change summary
 
-## [0.0.164] - 修复旧会话回包中断与消息误撤回
+## [0.0.165] - Merge mobile send and stop buttons
 
-## [0.0.163] - 增加移动端消息去重重试和断线恢复
+## [0.0.164] - Fix old-session reply interruption and message false-recall
 
-## [0.0.162] - 改善移动端网络中断后的消息发送状态恢复
+## [0.0.163] - Add mobile message dedup retry and disconnect recovery
 
-## [0.0.161] - 支持移动端侧滑打开和收起对话侧栏
+## [0.0.162] - Improve mobile message send-state recovery after network interruption
 
-## [0.0.160] - 支持浏览后端任意目录及绑定文件区根目录
+## [0.0.161] - Support mobile side-swipe to open and close conversation sidebar
 
-## [0.0.159] - 修复移动端排队消息恢复发送及立即发送
+## [0.0.160] - Support browsing any backend directory and binding file-area root directory
 
-## [0.0.158] - 增加移动端文件只读预览与差异标注
+## [0.0.159] - Fix mobile queued message recovery send and immediate send
 
-## [0.0.157] - 显示逐文件增删统计并在预览中标注差异
+## [0.0.158] - Add mobile file read-only preview and diff annotation
 
-## [0.0.156] - 在输入框上方显示回复期间的文件变更统计
+## [0.0.157] - Show per-file add/delete counts and annotate diffs in preview
 
-## [0.0.155] - 等 Codex 整轮回答结束后再显示文件审核卡片
+## [0.0.156] - Show file-change statistics above input box during replies
 
-## [0.0.154] - 将运行中的操作记录收为单行并增加扫光动效
+## [0.0.155] - Show file review cards only after Codex completes full round of answers
 
-## [0.0.153] - 让文件树与预览之间的分隔线同步调整两侧宽度
+## [0.0.154] - Collapse running operation logs to one line and add sweep-light animation
 
-## [0.0.152] - 放宽文件树和预览区域的可调宽度
+## [0.0.153] - Let divider between file tree and preview adjust both side widths
 
-## [0.0.151] - 保持文件树可调宽并让预览区按需让位
+## [0.0.152] - Relax adjustable widths of file tree and preview area
 
-## [0.0.150] - 分离文件树与文件预览的宽度调整
+## [0.0.151] - Keep file tree adjustable and let preview yield as needed
 
-## [0.0.149] - 显示 Codex 回复期间的操作记录
+## [0.0.150] - Separate width adjustments of file tree and file preview
 
-## [0.0.148] - 保持文件预览栏随窗口宽度等比缩放
+## [0.0.149] - Show operation logs during Codex replies
 
-## [0.0.147] - 为未知扩展名增加语法自动识别
+## [0.0.148] - Keep file preview bar scaling proportionally with window width
 
-## [0.0.146] - 为工作区文件预览添加代码语法着色
+## [0.0.147] - Add automatic syntax detection for unknown extensions
 
-## [0.0.145] - 修复 systemd 启动时网页 Codex 缺失代理环境
+## [0.0.146] - Add code syntax coloring to workspace file preview
 
-## [0.0.144] - 桌面端文件预览独立分栏并支持调宽
+## [0.0.145] - Fix web Codex missing proxy environment at systemd startup
 
-## [0.0.143] - 增加桌面端工作区文件预览和右侧面板调宽
+## [0.0.144] - Desktop file preview in separate column with resizable width
 
-## [0.0.142] - 修复自定义主题背景透明度和审核界面布局
+## [0.0.143] - Add desktop workspace file preview and right panel width adjustment
 
-## [0.0.141] - 为文件审核增加行号、对话插入和刷新焦点恢复
+## [0.0.142] - Fix custom theme background transparency and approval interface layout
 
-## [0.0.140] - 修复文件审核卡片吸顶与状态栏间距
+## [0.0.141] - Add line numbers, conversation insertion, and refresh focus restore to file review
 
-## [0.0.139] - 为审核 diff 标注新增删除行并启用吸顶标题
+## [0.0.140] - Fix file review card sticky and status bar spacing
 
-## [0.0.138] - 编辑结束后恢复排队发送并缩小确认按钮
+## [0.0.139] - Add deleted lines to review diff annotation and enable sticky title
 
-## [0.0.137] - 支持在输入框中编辑排队消息
+## [0.0.138] - Restore queued send after editing and shrink confirm button
 
-## [0.0.136] - 防止重复添加工作区路径并修复移动端文件浮层闪透
+## [0.0.137] - Support editing queued messages in input box
 
-## [0.0.135] - 恢复聊天文字选择的系统菜单
+## [0.0.136] - Prevent duplicate workspace path addition and fix mobile file overlay flash-through
 
-## [0.0.134] - 修复 Android 安装版复制消息内容
+## [0.0.135] - Restore system menu for chat text selection
 
-## [0.0.133] - 修正单亮段跑马灯周期
+## [0.0.134] - Fix Android installed version copying message content
 
-## [0.0.132] - 强制只保留一条侧边栏跑马灯
+## [0.0.133] - Fix single-bright-segment marquee period
 
-## [0.0.131] - 移除侧边栏跑马灯的第二层边框
+## [0.0.132] - Force keeping only one sidebar marquee
 
-## [0.0.130] - 移除静态边框并修正跑马灯圆角
+## [0.0.131] - Remove second border layer of sidebar marquee
 
-## [0.0.129] - 改为单条连续路径跑马灯
+## [0.0.130] - Remove static border and fix marquee rounded corners
 
-## [0.0.128] - 修复侧边栏跑马灯圆角裁切
+## [0.0.129] - Switch to single continuous-path marquee
 
-## [0.0.127] - 修正深色自定义主题的活动边框颜色
+## [0.0.128] - Fix sidebar marquee rounded-corner clipping
 
-## [0.0.126] - 将多开窗口跑马灯改为呼吸边框
+## [0.0.127] - Fix dark custom theme active border color
 
-## [0.0.125] - 发布带网页资源强制刷新的 Android 包
+## [0.0.126] - Change multi-window marquee to breathing border
 
-## [0.0.124] - 禁止 Android WebView 复用旧网页资源
+## [0.0.125] - Release Android build with forced web resource refresh
 
-## [0.0.123] - 将跑马灯主题色写入活动元素
+## [0.0.124] - Prevent Android WebView reusing old web resources
 
-## [0.0.122] - 强制黑色主题使用白色跑马灯
+## [0.0.123] - Write marquee theme color to active element
 
-## [0.0.121] - 修复跑马灯转角断开
+## [0.0.122] - Force black theme to use white marquee
 
-## [0.0.120] - 增强跑马灯亮度和移动长度
+## [0.0.121] - Fix marquee corner disconnect
 
-## [0.0.119] - 修正跑马灯沿矩形边框顺时针移动
+## [0.0.120] - Increase marquee brightness and travel length
 
-## [0.0.118] - 修复主题跑马灯兼容性和黑色主题颜色
+## [0.0.119] - Fix marquee moving clockwise along rectangular border
 
-## [0.0.117] - 重做侧边栏跑马灯边框并固定黑色主题颜色
+## [0.0.118] - Fix theme marquee compatibility and black theme color
 
-## [0.0.116] - 修复侧边栏跑马灯显示层级并保持多开主题色
+## [0.0.117] - Redo sidebar marquee border and fix black theme color
 
-## [0.0.115] - 修正对话边框裁切并统一多开窗口单色跑马灯
+## [0.0.116] - Fix sidebar marquee layer and keep multi-window theme color
 
-## [0.0.114] - 增加侧边栏当前对话单色跑马灯边框
+## [0.0.115] - Fix conversation border clipping and unify multi-window monochrome marquee
 
-## [0.0.113] - 增加本机数据盘迁移支持
+## [0.0.114] - Add monochrome marquee border to sidebar current conversation
 
-## [0.0.112] - 移除 PC 文件资源树拖放并保留右键加入输入框
+## [0.0.113] - Add local data-disk migration support
 
-## [0.0.111] - 修复 Android 检测连接后 WebView 黑屏并增加加载失败提示
+## [0.0.112] - Remove PC file resource-tree drag-and-drop; keep right-click add to input box
 
-## [0.0.110] - 调整侧栏底部按钮和文件树加号样式
+## [0.0.111] - Fix Android WebView black screen after detecting connection and add load-failure hint
 
-## [0.0.109] - 修复手机横屏侧栏滚动和文件树按钮布局
+## [0.0.110] - Adjust sidebar bottom buttons and file tree plus-button style
 
-## [0.0.108] - 支持横屏输入框按行增高并隐藏聊天导航
+## [0.0.109] - Fix phone landscape sidebar scroll and file tree button layout
 
-## [0.0.107] - 压缩手机横屏输入框高度
+## [0.0.108] - Support landscape input box growing by row and hide chat nav
 
-## [0.0.106] - 调整手机横屏三列为一比二比一
+## [0.0.107] - Compress phone landscape input box height
 
-## [0.0.105] - 修复手机横屏聊天区右侧内容裁切
+## [0.0.106] - Adjust phone landscape three-column ratio to 1:2:1
 
-## [0.0.104] - 修复触控设备横屏布局条件
+## [0.0.105] - Fix phone landscape chat area right content clipping
 
-## [0.0.103] - 优化手机横屏三列面板比例
+## [0.0.104] - Fix touch-device landscape layout condition
 
-## [0.0.102] - 调整移动端文件浮层高度比例
+## [0.0.103] - Optimize phone landscape three-column panel ratio
 
-## [0.0.101] - 缩短移动端文件浮层高度
+## [0.0.102] - Adjust mobile file overlay height ratio
 
-## [0.0.100] - 修复移动端文件浮层顶部间隙
+## [0.0.101] - Shorten mobile file overlay height
 
-## [0.0.99] - 支持移动端文件夹快捷插入路径
+## [0.0.100] - Fix mobile file overlay top gap
 
-## [0.0.98] - 增加移动端文件浮层和路径快捷插入
+## [0.0.99] - Support mobile folder quick path insertion
 
-## [0.0.97] - 支持资源树 Ctrl/⌘ 多选路径
+## [0.0.98] - Add mobile file overlay and path quick insertion
 
-## [0.0.96] - 简化文件右键菜单文案
+## [0.0.97] - Support Ctrl/⌘ multi-select paths in resource tree
 
-## [0.0.95] - 文件和文件夹统一只发送路径
+## [0.0.96] - Simplify file context menu wording
 
-## [0.0.94] - 文件拖放和点击改为插入路径
+## [0.0.95] - Files and folders uniformly send path only
 
-## [0.0.93] - 支持一条消息加入多个文件附件
+## [0.0.94] - File drag-and-drop and click insert path
 
-## [0.0.92] - 修复资源树右键菜单不显示
+## [0.0.93] - Support adding multiple file attachments to one message
 
-## [0.0.91] - 支持文件夹右键将绝对路径加入输入框
+## [0.0.92] - Fix resource tree context menu not showing
 
-## [0.0.90] - 增加文件右键加入当前对话并屏蔽网页原生右键菜单
+## [0.0.91] - Support folder right-click adding absolute path to input box
 
-## [0.0.89] - 修复工作区文件拖放在浏览器中的兼容性
+## [0.0.90] - Add file right-click add to current conversation and block native web context menu
 
-## [0.0.88] - 增加按对话工作目录切换的右侧文件资源管理器
+## [0.0.89] - Fix workspace file drag-and-drop browser compatibility
 
-## [0.0.87] - 强化全局域名默认隔离并避免未匹配请求串站
+## [0.0.88] - Add per-conversation working-directory switch right file explorer
 
-## [0.0.86] - 修复主域名未匹配时错误落到 note 项目
+## [0.0.87] - Strengthen global domain default isolation and avoid unmatched requests crossing sites
 
-## [0.0.85] - 修复移动端用户消息气泡固定宽度
+## [0.0.86] - Fix unmatching main domain wrongly falling to note project
 
-## [0.0.84] - 修复后台服务缺少 Codex 凭据导致消息无回复
+## [0.0.85] - Fix mobile user message bubble fixed width
 
-## [0.0.83] - 增加 Codex Remote systemd 后台常驻运行
+## [0.0.84] - Fix background service missing Codex credentials causing no reply
 
-## [0.0.82] - 让 Android 返回手势按界面层级逐层关闭
+## [0.0.83] - Add Codex Remote systemd background resident running
 
-## [0.0.81] - 支持 Android 网页聊天图片选择
+## [0.0.82] - Let Android back gesture close by UI layer
 
-## [0.0.80] - 修复 Android 键盘缩小视口下输入框被遮挡
+## [0.0.81] - Support Android web chat image selection
 
-## [0.0.79] - 修复 Android 键盘显示时输入框下方空白
+## [0.0.80] - Fix Android input box covered under shrunk viewport keyboard
 
-## [0.0.78] - 重启 WebView 输入连接后恢复系统输入法
+## [0.0.79] - Fix whitespace below input box when Android keyboard shown
 
-## [0.0.77] - 支持重复点击恢复 Android 聊天输入法
+## [0.0.78] - Restore system input method after restarting WebView input connection
 
-## [0.0.76] - 强制唤起 Android 网页聊天输入法
+## [0.0.77] - Support repeated tap to restore Android chat input method
 
-## [0.0.75] - 修复 Android WebView 在边到边窗口下无法显示输入法
+## [0.0.76] - Force invoking Android web chat input method
 
-## [0.0.74] - 修复 Android 聊天输入框无法唤起系统输入法
+## [0.0.75] - Fix Android WebView unable to show input method in edge-to-edge window
 
-## [0.0.73] - 修复 Android WebView 输入法无法唤起
+## [0.0.74] - Fix Android chat input box unable to invoke system input method
 
-## [0.0.72] - 将 Android 地址入口移入网页侧边栏
+## [0.0.73] - Fix Android WebView input method unable to invoke
 
-## [0.0.71] - 修复移动端配对码输入兼容性并刷新 WebView 资源
+## [0.0.72] - Move Android address entry into web sidebar
 
-## [0.0.70] - 修复 APK 状态栏安全区布局
+## [0.0.71] - Fix mobile pairing-code input compatibility and refresh WebView resources
 
-## [0.0.69] - 修复 APK 网页区域宽度为零
+## [0.0.70] - Fix APK status bar safe-area layout
 
-## [0.0.68] - 完成 Android 地址连接 APK
+## [0.0.69] - Fix APK web area width zero
 
-## [0.0.67] - 新增 Android 地址连接 APK
+## [0.0.68] - Complete Android address-connection APK
 
-## [0.0.66] - 将回复中的输入框跑马灯改为浅白光晕
+## [0.0.67] - Add Android address-connection APK
 
-## [0.0.65] - 修复移动端单窗口聊天区隐藏
+## [0.0.66] - Change in-reply input box marquee to soft white glow
 
-## [0.0.64] - 单窗口隐藏并发选择跑马灯
+## [0.0.65] - Fix mobile single-window chat area hidden
 
-## [0.0.63] - 降低并发对话窗口的重复加载并修复事件串流
+## [0.0.64] - Hide concurrent-selection marquee in single window
 
-## [0.0.62] - 支持 PC 端最多三个并发 Codex 对话窗口
+## [0.0.63] - Reduce duplicate loading of concurrent conversation windows and fix event streaming
 
-## [0.0.61] - 修复自定义主题输入提示文字颜色
+## [0.0.62] - Support up to three concurrent Codex conversation windows on PC
 
-## [0.0.60] - 修复自定义主题字体颜色未覆盖输入控件
+## [0.0.61] - Fix custom theme input hint text color
 
-## [0.0.59] - 保留后台恢复后的排队消息
+## [0.0.60] - Fix custom theme font color not covering input controls
 
-## [0.0.58] - 合并流式回复与恢复历史中的重复消息
+## [0.0.59] - Preserve queued messages after background restore
 
-## [0.0.57] - 增加移动端黑屏自恢复保护
+## [0.0.58] - Merge duplicate messages in streaming replies and recovery history
 
-## [0.0.56] - 稳定移动端后台恢复连接
+## [0.0.57] - Add mobile black-screen self-recovery protection
 
-## [0.0.55] - 支持回复中排队发送与立即插话
+## [0.0.56] - Stabilize mobile background restore connection
 
-## [0.0.54] - 刷新期间保持输入框可编辑和可发送
+## [0.0.55] - Support queued sending and immediate interjection during replies
 
-## [0.0.53] - 稳定按轮次保存并展示文件修改汇总
+## [0.0.54] - Keep input box editable and sendable during refresh
 
-## [0.0.52] - 清理消息流遗留分隔线并收敛布局层级
+## [0.0.53] - Stabilize per-round save and display of file-change summaries
 
-## [0.0.51] - 优化流式回复期间的输入响应性能
+## [0.0.52] - Clean leftover message flow dividers and converge layout layers
 
-## [0.0.50] - 支持网页会话交还给本机 Codex
+## [0.0.51] - Optimize input response performance during streaming replies
 
-## [0.0.49] - 隔离会话草稿并消除缓存聊天的二次刷新
+## [0.0.50] - Support handing web session back to local Codex
 
-## [0.0.48] - 修复输入法与流式回复期间的输入中断
+## [0.0.49] - Isolate session drafts and eliminate second refresh of cached chats
 
-## [0.0.47] - 缓存并后台预热近期会话历史以加快切换
+## [0.0.48] - Fix input interruption during input method and streaming replies
 
-## [0.0.46] - 增加后台会话完成提示和侧边栏状态点
+## [0.0.47] - Cache and prewarm recent session history to speed switching
 
-## [0.0.45] - 修复暂停后新消息被旧历史刷新覆盖
+## [0.0.46] - Add background session-completion hints and sidebar status dots
 
-## [0.0.44] - 优化刷新后的聊天恢复速度并增加历史缓存
+## [0.0.45] - Fix new messages after pause being overwritten by old-history refresh
 
-## [0.0.43] - 支持自定义主题上传本地背景图片
+## [0.0.44] - Optimize post-refresh chat recovery speed and add history cache
 
-## [0.0.42] - 按聊天独立保存模型、思考强度和授权模式
+## [0.0.43] - Support custom theme uploading local background image
 
-## [0.0.41] - 支持回复期间编辑草稿并强化停止任务
+## [0.0.42] - Save model, thinking strength, and authorization mode per chat
 
-## [0.0.40] - 合并流式回复并移除回复分隔线
+## [0.0.41] - Support editing drafts during replies and strengthen stop task
 
-## [0.0.39] - 支持 Windows 与 Linux 双平台启动
+## [0.0.40] - Merge streaming replies and remove reply dividers
 
-## [0.0.38] - 优化移动端后台恢复与草稿保留
+## [0.0.39] - Support Windows and Linux dual-platform startup
 
-## [0.0.37] - 增加宿主机 systemd 常驻部署支持
+## [0.0.38] - Optimize mobile background restore and draft preservation
 
-## [0.0.36] - 兼容新版 Codex 沙箱策略格式
+## [0.0.37] - Add host systemd resident deployment support
 
-## [0.0.35] - 恢复上次打开的远程对话
+## [0.0.36] - Compatible with new Codex sandbox policy format
 
-## [0.0.34] - 修正主题下输入区菜单与操作按钮颜色
+## [0.0.35] - Restore last opened remote conversation
 
-## [0.0.33] - 新增侧边栏主题设置与自定义颜色透明度
+## [0.0.34] - Fix input area menu and action button colors under theme
 
-## [0.0.32] - 强化 DSH 风格欢迎页、状态栏和移动端输入区
+## [0.0.33] - Add sidebar theme settings and custom color transparency
 
-## [0.0.31] - 参考 DSH 风格重构聊天工作区视觉层
+## [0.0.32] - Strengthen DSH-style welcome page, status bar, and mobile input area
 
-## [0.0.30] - 修复移动端用户消息逐字竖排
+## [0.0.31] - Refactor chat workspace visual layer per DSH style
 
-## [0.0.29] - 加快移动端图片选择器唤起
+## [0.0.30] - Fix mobile user message vertical stacking character by character
 
-## [0.0.28] - 显示 Codex 当前轮次耗时
+## [0.0.29] - Speed up mobile image picker invocation
 
-## [0.0.27] - 新增 Codex 风格文件改动汇总卡片
+## [0.0.28] - Show Codex current round duration
 
-## [0.0.26] - 合并恢复历史中的同一轮 Codex 回复
+## [0.0.27] - Add Codex-style file-change summary card
 
-## [0.0.25] - 兼容本机授权策略枚举
+## [0.0.26] - Merge same-round Codex replies in recovered history
 
-## [0.0.24] - 记忆授权模式选择
+## [0.0.25] - Compatible with local authorization policy enum
 
-## [0.0.23] - 记忆模型和思考强度选择
+## [0.0.24] - Remember authorization mode selection
 
-## [0.0.22] - 修复活动任务中断和 Esc 停止操作
+## [0.0.23] - Remember model and thinking-strength selection
 
-## [0.0.21] - 修正移动端消息布局并增加代码复制按钮
+## [0.0.22] - Fix active task interruption and Esc stop operation
 
-## [0.0.20] - 新增授权模式选择并修正授权卡片对齐
+## [0.0.21] - Fix mobile message layout and add code copy button
 
-## [0.0.19] - 增强输入框、消息复制、长文本附件和文件变更展示
+## [0.0.20] - Add authorization mode selection and fix authorization card alignment
 
-## [0.0.18] - 修复图片历史显示并优化模型菜单和回复状态动效
+## [0.0.19] - Enhance input box, message copy, long-text attachments, and file-change display
 
-## [0.0.17] - 支持思考强度并调整 Codex 风格输入栏
+## [0.0.18] - Fix image history display and optimize model menu and reply-state animation
 
-## [0.0.16] - 修复图片消息请求校验
+## [0.0.17] - Support thinking strength and adjust Codex-style input bar
 
-## [0.0.15] - 支持从剪贴板粘贴图片
+## [0.0.16] - Fix image message request validation
 
-## [0.0.14] - 支持图片输入与动态模型选择
+## [0.0.15] - Support pasting images from clipboard
 
-## [0.0.13] - 提供被占用会话的远程对话入口
+## [0.0.14] - Support image input and dynamic model selection
 
-## [0.0.12] - 单命令启动本机远程服务
+## [0.0.13] - Provide remote conversation entry for occupied sessions
 
-## [0.0.11] - 默认开放局域网页面入口
+## [0.0.12] - Single command starts local remote service
 
-## [0.0.10] - 默认新建网页远程对话
+## [0.0.11] - Open LAN page entry by default
 
-## [0.0.9] - 优化被占用对话的查看与提示
+## [0.0.10] - Create web remote conversation by default
 
-## [0.0.8] - 支持局域网受信任设备配对
+## [0.0.9] - Optimize viewing and hints for occupied conversations
 
-## [0.0.7] - 修复侧边栏重复显示同一对话
+## [0.0.8] - Support LAN trusted-device pairing
 
-## [0.0.6] - 处理已有活动任务时的重复发送
+## [0.0.7] - Fix sidebar showing same conversation twice
 
-## [0.0.5] - 修复会话恢复期间发送消息失败
+## [0.0.6] - Handle duplicate send when active task exists
 
-## [0.0.4] - 新增 Codex 回复过程动态活动状态
+## [0.0.5] - Fix send failure during session recovery
 
-## [0.0.3] - 自动同步本机 Codex 会话记录
+## [0.0.4] - Add dynamic activity state during Codex replies
 
-## [0.0.2] - 修复大历史会话读取导致的连接循环
+## [0.0.3] - Auto-sync local Codex session records
 
-## [0.0.1] - 新增本机 Codex 实时远程聊天 Web 应用
+## [0.0.2] - Fix connection loop from large history session reads
+
+## [0.0.1] - Add local Codex real-time remote chat web application
