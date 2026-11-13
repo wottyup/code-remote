@@ -14,3 +14,4 @@ android/app/build/
 android/local.properties
 /tests/
 /终端运行测试/
+docs/
