@@ -4556,6 +4556,14 @@ const RemoteChatPane = memo(function RemoteChatPane({
     // Layout changes can also move scrollTop; only recent input may pause following.
     upwardMessageScrollIntentUntil.current = window.performance.now() + 750
   }, [])
+  const pauseFollowOnOriginalToggle = useCallback(() => {
+    // Expanding/collapsing the translated original inside a message changes the
+    // stream height; without pausing following the resize observer would yank
+    // the view back to the bottom and blink the just-opened text away.
+    followMessageStream.current = false
+    upwardMessageScrollIntentUntil.current = window.performance.now() + 750
+    setShowScrollToBottom(true)
+  }, [])
 
   const handleMessageWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
     if (event.deltaY < 0) markUpwardMessageScrollIntent()
@@ -4952,6 +4960,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   assistantModelOptions={assistantModelOptions}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
+                  onOpenOriginal={pauseFollowOnOriginalToggle}
                   onOpenFile={openChangedFilePreview}
                   onOpenImage={openViewedImagePreview}
                 />
@@ -8449,7 +8458,7 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
 
 const assistantTranslationCache = new Map<string, string>()
 
-function AssistantTranslation({ token, text, preferences, revision, streaming, choiceCard, children, renderCopyAction }: {
+function AssistantTranslation({ token, text, preferences, revision, streaming, choiceCard, children, renderCopyAction, onOpenOriginal }: {
   token: string
   text: string
   preferences: TranslationPreferences
@@ -8458,6 +8467,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   choiceCard?: ReactNode
   children: ReactNode
   renderCopyAction: (text: string) => ReactNode
+  onOpenOriginal?: () => void
 }) {
   useUiLanguage()
   const translationProfileId = selectedTranslationProfileId(preferences)
@@ -8521,7 +8531,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
     {eligible && error ? <div className="assistant-translation__error"><span>{uiMessage(error)}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>{ui("重试")}</button></div> : null}
     {eligible || tooLong
       ? translated || error || tooLong
-        ? <details className="assistant-translation__original"><summary>{ui("查看英文原文")}</summary>{children}{renderCopyAction(text)}</details>
+        ? <details className="assistant-translation__original"><summary onClick={onOpenOriginal}>{ui("查看英文原文")}</summary>{children}{renderCopyAction(text)}</details>
         : null
       : waitingForText ? null : children}
     {translated || error || tooLong || (!eligible && !waitingForText) ? choiceCard : null}
@@ -8529,7 +8539,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   </div>
 }
 
-const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, originalTextOverride, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, assistantModelOptions, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, originalTextOverride, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, assistantModelOptions, copyFeedback, onCopy, onOpenOriginal, onOpenFile, onOpenImage }: {
   token: string
   translation: TranslationPreferences
   translationRevision: number
@@ -8547,6 +8557,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   assistantModelOptions: ComposerMenuOption[]
   copyFeedback: string | null
   onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
+  onOpenOriginal?: () => void
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
 }) {
@@ -8616,7 +8627,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
           ? <PastedTablePreview key={`${document.name}-${index}`} content={document.content} maxRows={60} />
           : <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? ui('原始文件 · Codex 读取原件') : uiFormat("{0} 个字符", document.charCount.toLocaleString())}</small></span></div>)}
         {message.role === 'assistant' && (translateAssistant || !message.streaming)
-          ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
+          ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction} onOpenOriginal={onOpenOriginal}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
           : bodyContent}
         {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? ui('查看中文原文') : ui('查看英文发送内容')}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
         {message.replyError ? <div className="chat-message__reply-error" role="status"><AlertTriangle size={13} aria-hidden="true" /><span>{uiMessage(message.replyError)}</span></div> : null}

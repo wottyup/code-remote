@@ -4147,7 +4147,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .assistant-translation__result { margin: 0 0 10px; padding: 10px 12px; border: 1px solid rgba(151, 165, 195, .23); border-radius: 10px; background: rgba(151, 165, 195, .07); }
 .assistant-translation__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 11px; opacity: .85; }
 .assistant-translation__result > :last-child { margin-bottom: 0; }
-.assistant-translation__original { margin-top: 6px; font-size: 12px; }
+.assistant-translation__original { margin-top: 6px; font-size: 12px; overflow-anchor: none; }
 .assistant-translation__original > summary { width: fit-content; cursor: pointer; opacity: .7; }
 .assistant-translation__original[open] > summary { margin-bottom: 8px; }
 .chat-message__alternate-text { margin-top: 7px; font-size: 12px; }
