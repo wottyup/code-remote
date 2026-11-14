@@ -1,7 +1,7 @@
 import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { useEffect, useId, useState, type FormEvent } from 'react'
 import { Languages, LoaderCircle } from 'lucide-react'
-import { codexRemoteClient, type TranslationApiProtocol, type TranslationConfigInput, type TranslationConfigResponse, type TranslationProvider } from '../lib/codexRemoteClient'
+import { devwispClient, type TranslationApiProtocol, type TranslationConfigInput, type TranslationConfigResponse, type TranslationProvider } from '../lib/devwispClient'
 import type { TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSelect } from './TranslationSelect'
 
@@ -72,7 +72,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
 
   useEffect(() => {
     let cancelled = false
-    void codexRemoteClient.translationConfig(token).then((response) => {
+    void devwispClient.translationConfig(token).then((response) => {
       if (!cancelled) setConfiguration(response)
     }).catch((reason: unknown) => {
       if (!cancelled) setError(reason instanceof Error ? reason.message : '无法读取翻译设置。')
@@ -127,7 +127,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.moveTranslationProfile(token, source, profileId, target, config)
+      const response = await devwispClient.moveTranslationProfile(token, source, profileId, target, config)
       const sourceFallback = response.config.providers[source].profiles[0]
       setConfiguration(response.config)
       setKeyDraft('')
@@ -153,7 +153,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.updateTranslationProfile(token, provider, current.id, { name: nameDraft, ...configDraft() })
+      const response = await devwispClient.updateTranslationProfile(token, provider, current.id, { name: nameDraft, ...configDraft() })
       setConfiguration(response)
       setKeyDraft('')
       onConfigSaved()
@@ -171,7 +171,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.checkTranslationProfile(token, provider, current.id, configDraft())
+      const response = await devwispClient.checkTranslationProfile(token, provider, current.id, configDraft())
       setNotice(`连接成功，试译：${response.sample}`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '翻译接口连通性检查失败。')
@@ -186,7 +186,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.updateTranslationProfile(token, provider, current.id, { clearKey: true })
+      const response = await devwispClient.updateTranslationProfile(token, provider, current.id, { clearKey: true })
       setConfiguration(response)
       setKeyDraft('')
       onConfigSaved()
@@ -203,7 +203,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.createTranslationProfile(token, provider, copyCurrent ? current?.id : undefined)
+      const response = await devwispClient.createTranslationProfile(token, provider, copyCurrent ? current?.id : undefined)
       setConfiguration(response.config)
       onChange({ ...preferences, profileIds: { ...preferences.profileIds, [provider]: response.profileId } })
       onConfigSaved()
@@ -221,7 +221,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.deleteTranslationProfile(token, provider, current.id)
+      const response = await devwispClient.deleteTranslationProfile(token, provider, current.id)
       setConfiguration(response)
       const nextProfile = response.providers[provider].profiles[0]
       onChange({ ...preferences, profileIds: { ...preferences.profileIds, [provider]: nextProfile.id } })

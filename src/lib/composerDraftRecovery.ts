@@ -1,4 +1,4 @@
-import type { CodexDocumentAttachment } from './codexRemoteClient'
+import type { CodexDocumentAttachment } from './devwispClient'
 
 export interface ComposerDraftRecovery {
   draft: string

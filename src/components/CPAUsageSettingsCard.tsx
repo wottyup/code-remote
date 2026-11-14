@@ -169,9 +169,9 @@ export function CPAUsageSettingsCard({
         {message ? <p className={`cpa-usage-settings-message${message.error ? ' cpa-usage-settings-message--error' : ''}`} role={message.error ? 'alert' : 'status'}>{uiMessage(message.text)}</p> : null}
       </div>
       <p className="theme-settings-hint">{settings.source === 'codex-proxy'
-        ? ui('地址和登录密码保存在当前浏览器，并经已配对的 Code Remote 后端读取 Codex Proxy 管理接口。密码不会放入 URL。历史用量依赖 Codex Proxy 已记录的快照。')
+        ? ui('地址和登录密码保存在当前浏览器，并经已配对的 Dev Wisp 后端读取 Codex Proxy 管理接口。密码不会放入 URL。历史用量依赖 Codex Proxy 已记录的快照。')
         : settings.source === 'new-api'
-          ? ui('地址、访问令牌和用户 ID 保存在当前浏览器，并经已配对的 Code Remote 后端读取 New API 统计接口。令牌不会放入 URL；New API 需要开启数据导出。')
+          ? ui('地址、访问令牌和用户 ID 保存在当前浏览器，并经已配对的 Dev Wisp 后端读取 New API 统计接口。令牌不会放入 URL；New API 需要开启数据导出。')
         : ui('地址和管理密钥保存在当前浏览器；密钥只通过 Authorization Bearer 请求头发送，不会放进 URL。Full Mode 才提供持久化历史统计；跨域时 Manager Server 需要允许当前网页来源。')}</p>
     </section>
   )

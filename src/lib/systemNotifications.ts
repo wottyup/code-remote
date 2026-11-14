@@ -17,22 +17,22 @@ export interface AndroidNotificationBridge {
 
 declare global {
   interface Window {
-    CodexRemoteAndroid?: AndroidNotificationBridge
-    CodexRemoteOpenThread?: (threadId: string) => void
-    __codexRemotePendingThreadId?: string
+    DevWispAndroid?: AndroidNotificationBridge
+    DevWispOpenThread?: (threadId: string) => void
+    __devwispPendingThreadId?: string
   }
 }
 
-const permissionResultEvent = 'codex-remote-notification-permission'
+const permissionResultEvent = 'devwisp-notification-permission'
 
 export function canRequestSystemNotifications() {
-  const android = window.CodexRemoteAndroid
+  const android = window.DevWispAndroid
   if (android?.requestNotificationPermission && android.showSystemNotification) return true
   return window.isSecureContext && 'Notification' in window
 }
 
 export async function requestSystemNotificationPermission(): Promise<boolean> {
-  const android = window.CodexRemoteAndroid
+  const android = window.DevWispAndroid
   if (android?.requestNotificationPermission && android.showSystemNotification) {
     try {
       if (android.hasNotificationPermission?.()) return true
@@ -74,7 +74,7 @@ export async function requestSystemNotificationPermission(): Promise<boolean> {
 }
 
 export function sendSystemNotification(title: string, body: string, threadId: string, eventKey: string) {
-  const android = window.CodexRemoteAndroid
+  const android = window.DevWispAndroid
   if (android?.showSystemNotification) {
     try {
       if (android.isAppInBackground && !android.isAppInBackground()) return false
@@ -89,7 +89,7 @@ export function sendSystemNotification(title: string, body: string, threadId: st
   try {
     const notification = new Notification(title, {
       body,
-      icon: '/code-remote-mark.png',
+      icon: '/devwisp-mark.png',
       tag: eventKey,
     })
     notification.onclick = () => {
@@ -105,6 +105,6 @@ export function sendSystemNotification(title: string, body: string, threadId: st
 
 export function notifyThreadOpenedBySystem(threadId: string) {
   if (!threadId) return
-  if (window.CodexRemoteOpenThread) window.CodexRemoteOpenThread(threadId)
-  else window.__codexRemotePendingThreadId = threadId
+  if (window.DevWispOpenThread) window.DevWispOpenThread(threadId)
+  else window.__devwispPendingThreadId = threadId
 }

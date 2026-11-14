@@ -1,5 +1,5 @@
-const storageKey = 'code-remote:terminal-screens-v1'
-const openPanelsStorageKey = 'code-remote:open-terminals-v1'
+const storageKey = 'devwisp:terminal-screens-v1'
+const openPanelsStorageKey = 'devwisp:open-terminals-v1'
 const maxAgeMs = 30 * 60 * 1_000
 const maxEntries = 3
 const maxTextLength = 500_000

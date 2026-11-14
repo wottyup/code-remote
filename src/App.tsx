@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
-import { CodexRemotePage } from './components/CodexRemotePage'
+import { DevWispPage } from './components/DevWispPage'
 import { PairingPage } from './components/PairingPage'
-import { codexRemoteClient } from './lib/codexRemoteClient'
+import { devwispClient } from './lib/devwispClient'
 import { letterSpacingStyle, readThemePreferences, saveThemePreferences, themeRootStyle, type ThemePreferences } from './lib/themePreferences'
 
-const STORAGE_KEY = 'codex-remote-token'
+const STORAGE_KEY = 'devwisp-token'
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() => window.localStorage.getItem(STORAGE_KEY))
@@ -39,7 +39,7 @@ export default function App() {
     setToken(null)
     if (!currentToken) return
     try {
-      await codexRemoteClient.unpair(currentToken)
+      await devwispClient.unpair(currentToken)
     } catch {
       // The local token is already removed. A later server restart cannot restore it in this browser.
     }
@@ -48,7 +48,7 @@ export default function App() {
   return (
     <div className={`app-root app-root--theme-${themePreferences.theme}`} style={themeRootStyle(themePreferences)}>
       {!token ? <PairingPage onPaired={paired} /> : (
-        <CodexRemotePage
+        <DevWispPage
           token={token}
           onUnauthorized={unpair}
           onUnpair={unpair}

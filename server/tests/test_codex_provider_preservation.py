@@ -3,7 +3,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from code_remote.native_engine_config import NativeEngineConfigStore, NativeEngineConfigError
+from devwisp.native_engine_config import NativeEngineConfigStore, NativeEngineConfigError
 
 
 class CodexProviderPreservationTests(unittest.TestCase):
@@ -52,19 +52,19 @@ base_url = "https://other.example"
                 self.assertEqual(parsed['model_providers'][name]['base_url'], 'https://new.example')
 
     def test_preserves_legacy_managed_block_and_other_providers(self):
-        text = '''model_provider = "code_remote_settings"
-# BEGIN CODE REMOTE API CONFIG
-[model_providers.code_remote_settings]
-name = "Code Remote API"
+        text = '''model_provider = "devwisp_settings"
+# BEGIN DEVWISP API CONFIG
+[model_providers.devwisp_settings]
+name = "DevWisp API"
 base_url = "https://old.example"
 experimental_bearer_token = "old-test-key"
 wire_api = "responses"
 requires_openai_auth = false
-# END CODE REMOTE API CONFIG
+# END DEVWISP API CONFIG
 '''
         result = NativeEngineConfigStore._codex_content(text, tomllib.loads(text), 'https://new.example', 'test-key')
-        self.assertIn('# END CODE REMOTE API CONFIG', result.decode())
-        self.assertEqual(tomllib.loads(result.decode())['model_provider'], 'code_remote_settings')
+        self.assertIn('# END DEVWISP API CONFIG', result.decode())
+        self.assertEqual(tomllib.loads(result.decode())['model_provider'], 'devwisp_settings')
 
     def test_rejects_header_hidden_in_multiline_string(self):
         text = '''model_provider = "sevencn"

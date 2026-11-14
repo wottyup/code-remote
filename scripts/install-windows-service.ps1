@@ -8,14 +8,22 @@ if ($env:OS -ne 'Windows_NT') {
     throw 'This installer only supports Windows.'
 }
 
-# Keep the registered task name so existing installations are updated in place.
-$taskName = 'Wotty Codex Remote'
+$taskName = 'Wotty DevWisp'
+$legacyTaskName = 'Wotty Codex Remote'
 $runnerPath = Join-Path $PSScriptRoot 'run-windows-service.ps1'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $powershellPath = Join-Path $PSHOME 'powershell.exe'
 if (-not (Test-Path -LiteralPath $powershellPath)) {
     $powershellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
+}
+
+$legacyTask = Get-ScheduledTask -TaskName $legacyTaskName -ErrorAction SilentlyContinue
+if ($legacyTask) {
+    if ($legacyTask.State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $legacyTaskName
+    }
+    Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false
 }
 
 $actionArguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runnerPath`""
@@ -38,7 +46,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description 'Keeps Code Remote running independently of Codex Desktop.' `
+    -Description 'Keeps DevWisp running independently of Codex Desktop.' `
     -Force | Out-Null
 
 if ($Start) {
@@ -46,4 +54,4 @@ if ($Start) {
 }
 
 Write-Output "Registered scheduled task: $taskName"
-Write-Output "Log: $(Join-Path $projectRoot '.codex-remote\logs\windows-service.log')"
+Write-Output "Log: $(Join-Path $projectRoot '.devwisp\logs\windows-service.log')"

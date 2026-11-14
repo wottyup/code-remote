@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace 'com.sevencnup.codexremote'
+    namespace 'com.sevencnup.devwisp'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.sevencnup.codexremote'
+        applicationId 'com.sevencnup.devwisp'
         minSdk 26
         targetSdk 35
-        versionCode 457
-        versionName '0.118.11-dev.1'
+        versionCode 461
+        versionName '0.127.1-dev.1'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
@@ -45,6 +45,7 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'io.noties.markwon:core:4.6.2'
     implementation 'io.noties.markwon:linkify:4.6.2'
@@ -53,6 +54,6 @@ dependencies {
 
 android.applicationVariants.all { variant ->
     variant.outputs.all {
-        outputFileName = "code-remote-android-${variant.versionName}-${variant.buildType.name}.apk"
+        outputFileName = "devwisp-android-${variant.versionName}-${variant.buildType.name}.apk"
     }
 }

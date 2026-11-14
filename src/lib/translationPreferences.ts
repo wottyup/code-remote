@@ -1,4 +1,4 @@
-import type { TranslationProvider, TranslationStyle } from './codexRemoteClient'
+import type { TranslationProvider, TranslationStyle } from './devwispClient'
 
 export interface TranslationPreferences {
   enabled: boolean
@@ -8,7 +8,7 @@ export interface TranslationPreferences {
   style: TranslationStyle
 }
 
-export const translationPreferencesStorageKey = 'codex-remote.translation-preferences'
+export const translationPreferencesStorageKey = 'devwisp.translation-preferences'
 const providers = new Set<TranslationProvider>(['google', 'microsoft', 'deepl', 'codex', 'claude', 'chat', 'anthropic', 'responses'])
 
 export const defaultTranslationPreferences: TranslationPreferences = {

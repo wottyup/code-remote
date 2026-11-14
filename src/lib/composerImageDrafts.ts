@@ -1,7 +1,7 @@
-import type { CodexImageAttachment } from './codexRemoteClient'
+import type { CodexImageAttachment } from './devwispClient'
 import { maxImagesPerTurn } from './imageAttachmentRules'
 
-const databaseName = 'codex-remote-composer-drafts'
+const databaseName = 'devwisp-composer-drafts'
 const storeName = 'image-drafts'
 const maxEncodedImageLength = Math.ceil((8 * 1024 * 1024 * 4) / 3) + 8
 const supportedImageTypes = new Set<CodexImageAttachment['mediaType']>([

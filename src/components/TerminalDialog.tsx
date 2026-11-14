@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
 import { memo, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
-import { codexRemoteClient } from '../lib/codexRemoteClient'
+import { devwispClient } from '../lib/devwispClient'
 import { installTerminalMouseSelection } from '../lib/terminalMouseSelection'
 import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { terminalChangeDirectoryCommand, terminalRunScriptCommand } from '../lib/terminalPathCommand'
@@ -181,7 +181,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
     if (!visible) return
     let cancelled = false
     const refresh = () => {
-      void codexRemoteClient.terminalHandoffStatus(token, threadId).then((result) => {
+      void devwispClient.terminalHandoffStatus(token, threadId).then((result) => {
         if (cancelled || handoffBusy) return
         setHandoffSupported(result.supported)
         setHandoffStatusLoaded(true)
@@ -202,7 +202,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
     setHandoffBusy(true)
     setHandoffError('')
     try {
-      const result = await codexRemoteClient.setTerminalHandoff(token, threadId, !handoffEnabled)
+      const result = await devwispClient.setTerminalHandoff(token, threadId, !handoffEnabled)
       setHandoffEnabled(result.enabled)
       setHandoffSupported(result.supported)
     } catch (reason) {

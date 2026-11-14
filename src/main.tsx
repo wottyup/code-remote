@@ -40,7 +40,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     ).filter(Boolean).sort().join('\n')
     const loadedAssetSignature = assetSignature(document, window.location.href)
     const checkForUpdate = async () => {
-      if (!('CodexRemoteAndroid' in window) || document.hidden || checkingForUpdate || editingInput()) return
+      if (!('DevWispAndroid' in window) || document.hidden || checkingForUpdate || editingInput()) return
       const now = Date.now()
       if (now - lastUpdateCheckAt < 1_000) return
       lastUpdateCheckAt = now
@@ -68,10 +68,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       const viewport = window.visualViewport
       const layoutHeight = Math.round(window.innerHeight)
       const visualHeight = Math.round(viewport?.height ?? layoutHeight)
-      const nativeBridge = 'CodexRemoteAndroid' in window
-      const nativeKeyboardInsetAvailable = typeof window.CodexRemoteAndroid?.getKeyboardInsetDp === 'function'
+      const nativeBridge = 'DevWispAndroid' in window
+      const nativeKeyboardInsetAvailable = typeof window.DevWispAndroid?.getKeyboardInsetDp === 'function'
       const nativeKeyboardInset = nativeKeyboardInsetAvailable
-        ? Math.max(0, window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0)
+        ? Math.max(0, window.DevWispAndroid?.getKeyboardInsetDp?.() ?? 0)
         : 0
       const offsetTop = Math.max(0, viewport?.offsetTop ?? 0)
       const pannedVisualBottom = Math.round(visualHeight + offsetTop)
@@ -108,11 +108,11 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       document.documentElement.dataset.keyboardVisible = String(nativeKeyboardInset > 0)
       document.documentElement.dataset.composerKeyboard = String(nativeKeyboardInsetAvailable && composerKeyboardActive)
       writePixels('--native-keyboard-inset', nativeKeyboardInset)
-      const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
+      const composerBottomInset = window.DevWispAndroid?.getComposerBottomInsetDp?.() ?? 0
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
         writePixels('--native-composer-bottom-inset', composerBottomInset)
       }
-      const statusBarInset = window.CodexRemoteAndroid?.getStatusBarInsetDp?.() ?? 0
+      const statusBarInset = window.DevWispAndroid?.getStatusBarInsetDp?.() ?? 0
       if (Number.isFinite(statusBarInset) && statusBarInset >= 0) {
         writePixels('--native-status-bar-inset', statusBarInset)
       }
@@ -135,17 +135,17 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     }
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return
-      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
+      if ((window.DevWispAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
       scheduleViewportSync()
       void checkForUpdate()
     }
     const handleAppResume = () => {
-      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
+      if ((window.DevWispAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
       scheduleViewportSync()
       void checkForUpdate()
     }
     const handlePageShow = () => {
-      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
+      if ((window.DevWispAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
       scheduleViewportSync()
     }
     const handleOrientationChange = () => {
@@ -164,11 +164,11 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     window.addEventListener('orientationchange', handleOrientationChange)
     window.screen.orientation?.addEventListener('change', handleOrientationChange)
     window.addEventListener('pageshow', handlePageShow)
-    window.addEventListener('codex-remote:resume', handleAppResume)
+    window.addEventListener('devwisp:resume', handleAppResume)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     document.addEventListener('focusin', handleFocusChange)
     document.addEventListener('focusout', handleFocusChange)
-    window.addEventListener('codex-remote:keyboard-inset', handleKeyboardInset)
+    window.addEventListener('devwisp:keyboard-inset', handleKeyboardInset)
     viewport?.addEventListener('resize', scheduleViewportSync)
     viewport?.addEventListener('scroll', scheduleViewportSync)
     return () => {
@@ -180,11 +180,11 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       window.removeEventListener('orientationchange', handleOrientationChange)
       window.screen.orientation?.removeEventListener('change', handleOrientationChange)
       window.removeEventListener('pageshow', handlePageShow)
-      window.removeEventListener('codex-remote:resume', handleAppResume)
+      window.removeEventListener('devwisp:resume', handleAppResume)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       document.removeEventListener('focusin', handleFocusChange)
       document.removeEventListener('focusout', handleFocusChange)
-      window.removeEventListener('codex-remote:keyboard-inset', handleKeyboardInset)
+      window.removeEventListener('devwisp:keyboard-inset', handleKeyboardInset)
       viewport?.removeEventListener('resize', scheduleViewportSync)
       viewport?.removeEventListener('scroll', scheduleViewportSync)
     }

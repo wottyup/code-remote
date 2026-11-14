@@ -13,7 +13,7 @@ export interface SidebarChatShortcuts {
 
 export type SidebarChatShortcutAction = keyof SidebarChatShortcuts
 
-const storageKey = 'codex-remote.sidebar-chat-shortcuts'
+const storageKey = 'devwisp.sidebar-chat-shortcuts'
 const modifierKeys = new Set(['Alt', 'AltGraph', 'Control', 'Meta', 'OS', 'Shift'])
 
 export const defaultSidebarChatShortcuts: SidebarChatShortcuts = {

@@ -1,4 +1,4 @@
-import type { CodexThread } from './codexRemoteClient'
+import type { CodexThread } from './devwispClient'
 
 export type SidebarThreadEngineFilter = 'codex' | 'claude-code' | null
 

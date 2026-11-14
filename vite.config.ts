@@ -5,7 +5,7 @@ import { createReadStream, existsSync, promises as fs } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { resolve } from 'node:path'
 
-const androidPackageName = /^code-remote-android-(\d+)\.(\d+)\.(\d+)(?:-(dev|beta)\.(\d+))?-debug\.apk$/
+const androidPackageName = /^devwisp-android-(\d+)\.(\d+)\.(\d+)(?:-(dev|beta)\.(\d+))?-debug\.apk$/
 
 function androidVersionRank(name: string): number[] | null {
   const match = androidPackageName.exec(name)
@@ -112,7 +112,7 @@ async function handleAndroidUpdate(request: IncomingMessage, response: ServerRes
     const digest = createHash('sha256')
     for await (const chunk of createReadStream(path)) digest.update(chunk)
     updateJson(response, 200, {
-      version: candidate.name.slice('code-remote-android-'.length, -'-debug.apk'.length),
+      version: candidate.name.slice('devwisp-android-'.length, -'-debug.apk'.length),
       filename: candidate.name,
       sizeBytes: info.size,
       sha256: digest.digest('hex'),
@@ -182,7 +182,7 @@ export default defineConfig({
       ignored: [
         '**/android/**',
         '**/artifacts/**',
-        '**/.codex-remote/**',
+        '**/.devwisp/**',
         '**/docs/**',
         '**/dist/**',
         '**/server/**',

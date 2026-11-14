@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from code_remote.app import ResumeRequest, SteerRequest, TurnRequest, create_app
-from code_remote.codex_app_server import CodexRuntimeError
+from devwisp.app import ResumeRequest, SteerRequest, TurnRequest, create_app
+from devwisp.codex_app_server import CodexRuntimeError
 
 
 class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
@@ -22,8 +22,8 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
         images = workspace / "images"
         images.mkdir()
         with (
-            patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(workspace / "auth.json")}),
-            patch("code_remote.app.tempfile.mkdtemp", return_value=str(images)),
+            patch.dict(os.environ, {"DEVWISP_AUTH_FILE": str(workspace / "auth.json")}),
+            patch("devwisp.app.tempfile.mkdtemp", return_value=str(images)),
         ):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)
@@ -212,7 +212,7 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
             prompt="Check logs", translated_text="Check logs", original_text="检查日志",
             request_id="direct-metadata-001", direct=True,
         )
-        with patch.object(self.app.state.shared_state, "record_translated_user_message", side_effect=OSError("storage")), self.assertLogs("code_remote.app", level="ERROR"):
+        with patch.object(self.app.state.shared_state, "record_translated_user_message", side_effect=OSError("storage")), self.assertLogs("devwisp.app", level="ERROR"):
             self.assertEqual(await steer("thread-one", body), {"turn_id": "turn-one"})
             self.assertEqual(await steer("thread-one", body), {"turn_id": "turn-one"})
         self.server.steer_turn.assert_awaited_once()

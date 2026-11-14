@@ -6,18 +6,18 @@ import { fileURLToPath } from 'node:url'
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const serverRoot = join(projectRoot, 'server')
 const isWindows = process.platform === 'win32'
-const configuredPython = process.env.CODE_REMOTE_PYTHON
+const configuredPython = process.env.DEVWISP_PYTHON
 const virtualEnvironmentPython = isWindows ? join(projectRoot, '.venv', 'Scripts', 'python.exe') : join(projectRoot, '.venv', 'bin', 'python')
 const python = configuredPython
   || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
   || (isWindows ? 'python' : null)
 
 if (!python) {
-  console.error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 CODE_REMOTE_PYTHON。`)
+  console.error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 DEVWISP_PYTHON。`)
   process.exit(1)
 }
 
-const engine = spawn(python, ['-m', 'code_remote.main'], {
+const engine = spawn(python, ['-m', 'devwisp.main'], {
   cwd: serverRoot,
   env: process.env,
   stdio: 'inherit',

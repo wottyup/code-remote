@@ -1,8 +1,10 @@
-# Code Remote Android
+# Dev Wisp Android
 
 Android 客户端使用 Kotlin 和原生 Android View 绘制，不通过 WebView 加载网页。聊天输入框使用 Android 原生 `EditText`，键盘由系统输入法提供。
 
 首次启动时填写电脑网页地址，例如 `http://192.168.15.22:4173`，以及服务启动时显示的配对码。APP 会直接请求网页服务转发的 `/api/v1/pair` 接口；4173 网页端口不提供 `/health` 路径。
+
+Dev Wisp 使用新的 Android application ID：`com.sevencnup.devwisp`。旧版 `com.sevencnup.codexremote` 安装包不能原地升级到这个 ID；安装新版后需要重新配对，旧版应用数据不会自动转移。
 
 ## 构建
 
@@ -13,11 +15,17 @@ cd android
 ANDROID_HOME=/path/to/android-sdk ./gradlew assembleDebug
 ```
 
-APK 输出在 `app/build/outputs/apk/debug/code-remote-android-<版本号>-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
+APK 输出在 `app/build/outputs/apk/debug/devwisp-android-<版本号>-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
 
 ## 本机内网更新
 
-设置页“检查更新”使用当前保存的电脑连接地址及配对凭据，通过 `4173` 网页服务访问 `/api/v1/android/update`，不会连接 GitHub。服务会从项目根目录 `artifacts/` 选择版本最高的 `code-remote-android-<版本号>-debug.apk`；后续打包后须将新文件以这个名字单独复制到该目录，历史包不要覆盖。手机会通过系统下载管理器下载并校验安装包，再打开 Android 系统安装界面。首次使用时可能需要允许 Code Remote 安装未知应用；安装仍由用户在系统界面确认。
+设置页“检查更新”使用当前保存的电脑连接地址及配对凭据，通过 `4173` 网页服务访问 `/api/v1/android/update`，不会连接 GitHub。服务会从项目根目录 `artifacts/` 选择版本最高的 `devwisp-android-<版本号>-debug.apk`；后续打包后须将新文件以这个名字单独复制到该目录，历史包不要覆盖。手机会通过系统下载管理器下载并校验安装包，再打开 Android 系统安装界面。首次使用时可能需要允许 Dev Wisp 安装未知应用；安装仍由用户在系统界面确认。
+
+## 消息重新发送与 Claude 审批
+
+已确认发送的用户消息下方提供刷新图标，可重新发送该消息及原有图片、文档，不会清空当前草稿。回复进行中或聊天暂停时，重新发送的消息遵循普通排队规则。发送状态不明的消息仍使用消息下方的重试入口确认，避免重复提交。
+
+电脑端 Claude 产生真实权限请求时，当前聊天会显示审批卡片，展示工具、命令或文件、目录和原因，可以允许一次或拒绝。App 会在重连、回到前台时同步尚未处理的审批，并同步清除电脑端已处理的请求；请求的产生由电脑端 Claude 的权限配置决定。
 
 ## 聊天翻译
 

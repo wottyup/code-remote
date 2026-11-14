@@ -1,0 +1,5271 @@
+import { startTransition, useCallback, useEffect, useMemo, useReducer, useRef, useState, type SetStateAction } from 'react'
+import {
+  devwispClient,
+  isAmbiguousNetworkFailure,
+  messagesFromThread,
+  RemoteApiError,
+  threadContainsNewPayload,
+  threadListRefreshIntervalMs,
+  userMessageFromEventItem,
+  type CodexDocumentAttachment,
+  type CodexImageAttachment,
+  type ClaudeCodePermissionMode,
+  type ClaudePermissionRequest,
+  type CodexMessage,
+  type CodexModel,
+  type CodexApprovalPolicy,
+  type CodexRuntime,
+  type MCPApprovalScope,
+  type CodexThread,
+  type CodexThreadDetails,
+  type QueuedTranslationConfig,
+  type RemoteEvent,
+  type TranslationProvider,
+  type TranslationStyle,
+} from '../lib/devwispClient'
+import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
+import { collapseAssistantMessagesForTurn, completedAssistantText, reconcileAssistantStreamSnapshot, streamingAssistantText, type AssistantStreamSnapshotItem } from '../lib/assistantTextStream'
+import { deliveredQueuedMessageIdsFromHistory, historyMissingCurrentUserMessages, insertDeliveredLocalMessage, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mergeObservedUserMessages, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent, startsNewAssistantStreamSegment } from '../lib/threadMessageMerge'
+import { canUseCachedThreadHistory, threadHistoryVersionChanged } from '../lib/threadHistoryPolicy'
+import { ThreadLiveHistory } from '../lib/threadLiveHistory'
+import { deleteThreadHistoryCache, readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
+import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
+import { canAutomaticallyAdvanceQueue, completionReleasesQueueBarrier, reconcileQueueRecoveryBarrier, restoreQueueRecoveryBarriers, type QueueRecoveryBarrier, type QueueRecoveryBarriers } from '../lib/queueRecovery'
+import { mergePendingQueuedMessages, visibleQueuedMessages } from '../lib/sharedQueueVisibility'
+import { parseStructuredAssistantQuestions } from '../lib/messageChoices'
+
+interface ApprovalRequest {
+  requestId: string | number
+  method: string
+  params: Record<string, unknown>
+  approvalScope?: MCPApprovalScope | null
+}
+
+export interface CodexActivity {
+  label: string
+  detail?: string
+}
+
+export type CodexOperationStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+export interface CodexOperationStep {
+  label: string
+  detail?: string
+  path?: string
+}
+
+export interface CodexOperation {
+  id: string
+  kind: 'command' | 'file' | 'search' | 'tool'
+  label: string
+  detail?: string
+  steps?: CodexOperationStep[]
+  paths?: string[]
+  imagePath?: string
+  terminalOutput?: string
+  status: CodexOperationStatus
+}
+
+export type CodexActivityTimelineEntry =
+  | { type: 'message'; itemId: string; length: number }
+  | { type: 'operation'; itemId: string; operationId: string }
+
+export interface CodexThreadCompletion {
+  threadId: string
+  completedAt: number
+  engine: 'codex' | 'claude-code'
+}
+
+export interface SelectThreadOptions {
+  refreshHistory?: boolean
+}
+
+export interface CodexFileChangeEntry {
+  path: string
+  kind?: string
+  diff?: string
+  additions: number
+  deletions: number
+}
+
+export interface CodexFileChange {
+  id: string
+  status: 'inProgress' | 'completed'
+  changes: CodexFileChangeEntry[]
+}
+
+export interface QueuedTurnMessage {
+  id: string
+  text: string
+  originalText?: string
+  images: CodexImageAttachment[]
+  documents?: CodexDocumentAttachment[]
+  model?: string
+  effort?: string
+  claudeModel?: string
+  claudeEffort?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
+  scheduledAt?: string
+  createdAt: string
+  editing?: boolean
+  deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
+  blockedReason?: string
+  sendAttempt?: {
+    at: string
+    afterTurnId?: string
+    afterMessageId?: string
+    inTurnId?: string
+  }
+}
+
+export type QueuedMessageSendMode = 'start' | 'steer'
+
+interface QueuedTurnPayload extends QueuedTurnMessage {
+  requestText: string
+  approvalPolicy?: CodexApprovalPolicy
+  claudePermissionMode?: ClaudeCodePermissionMode
+}
+
+interface SendMessageInput {
+  prompt: string
+  originalText?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
+  continuePaused?: boolean
+  sendImmediately?: boolean
+  sendDirectly?: boolean
+  onDeliveryStatus?: (status: 'sent' | 'queued' | 'unverified') => void
+  images: CodexImageAttachment[]
+  documents?: CodexDocumentAttachment[]
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
+  scheduledAt?: string
+  onThreadCreated?: (thread: CodexThread) => void
+}
+
+interface PendingTurnDelivery {
+  threadId: string
+  turnId: string | null
+  acknowledged: boolean
+  completedTurnIds: Set<string>
+  previousMessageIds: ReadonlySet<string>
+  model?: string
+  effort?: string
+  resolveReceipt?: (result: { turn_id: string | null; completed: boolean }) => void
+}
+
+type TurnDisplayPreferences = Pick<CodexMessage, 'model' | 'effort'>
+
+function rememberTurnDisplayPreferences(
+  preferencesByTurn: Map<string, TurnDisplayPreferences>,
+  turnId: string | null | undefined,
+  preferences: TurnDisplayPreferences,
+) {
+  if (!turnId || (!preferences.model && !preferences.effort)) return
+  const previous = preferencesByTurn.get(turnId)
+  const model = preferences.model && preferences.model !== 'default' ? preferences.model : previous?.model ?? preferences.model
+  const effort = preferences.effort && preferences.effort !== 'default' ? preferences.effort : previous?.effort ?? preferences.effort
+  preferencesByTurn.set(turnId, {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  })
+  while (preferencesByTurn.size > 512) {
+    const oldest = preferencesByTurn.keys().next().value
+    if (!oldest) break
+    preferencesByTurn.delete(oldest)
+  }
+}
+
+function applyTurnDisplayPreferences(messages: CodexMessage[], turnId: string | null | undefined, preferences: TurnDisplayPreferences | undefined) {
+  if (!turnId || (!preferences?.model && !preferences?.effort)) return messages
+  return messages.map((message) => message.role === 'assistant' && message.turnId === turnId
+    ? {
+      ...message,
+      ...(preferences.model && !message.model ? { model: preferences.model } : {}),
+      ...(preferences.effort && !message.effort ? { effort: preferences.effort } : {}),
+    }
+    : message)
+}
+
+type FileChangesByTurn = Record<string, CodexFileChange[]>
+type OperationsByTurn = Record<string, CodexOperation[]>
+type ActivityTimelineByTurn = Record<string, CodexActivityTimelineEntry[]>
+type QueuedMessagesByThread = Record<string, QueuedTurnPayload[]>
+
+const emptyQueuedMessages: QueuedTurnMessage[] = []
+
+const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, runtimeMode: 'direct', runtimeMessage: null, fallbackReason: null, error: null }
+const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
+const activeThreadStorageKey = 'devwisp.active-thread-id'
+const activeThreadCacheStorageKey = 'devwisp.active-thread-cache'
+const queuedMessagesStorageKey = 'devwisp.queued-messages'
+const queuedRecoveryStorageKey = 'devwisp.queued-message-recovery'
+const queuedThreadStateChangedEvent = 'devwisp.queued-thread-state-changed'
+const sharedQueueAuthoritative = true
+const activeQueueControllers = new Map<string, Set<string>>()
+
+function threadHasAnotherActiveController(threadId: string, controllerId: string) {
+  return [...(activeQueueControllers.get(threadId) ?? [])].some((owner) => owner !== controllerId)
+}
+const maxCachedHistoryCharacters = 600_000
+const maxCachedMessageCharacters = 120_000
+const maxInMemoryThreadCacheEntries = 6
+const maxInMemoryThreadCacheCharacters = 1_200_000
+const maxBackgroundPrefetchThreads = 3
+const backgroundPrefetchDelayMs = 120
+const cachedActiveThreadRefreshDelayMs = 180
+const persistentThreadCacheWriteDelayMs = 600
+// Version 2 preserves original message whitespace and source item identity.
+const persistentThreadCacheVersion = 2
+const threadMetadataFreshnessMs = 30_000
+const streamingRenderIntervalMs = 24
+const maxPersistedQueuedImageCharacters = 12_000_000
+const maxPersistedQueuedThreads = 24
+const maxPersistedQueuedMessagesPerThread = 30
+
+interface PersistedActiveThread {
+  threadId: string
+  thread: CodexThread
+  messages: CodexMessage[]
+}
+
+type ChatEngine = NonNullable<CodexThread['engine']>
+
+interface ActiveThreadSelection {
+  thread: CodexThread | null
+  engine: ChatEngine
+}
+
+function engineOfThread(thread: CodexThread): ChatEngine {
+  return thread.engine ?? (thread.id.startsWith('claude:') ? 'claude-code' : 'codex')
+}
+
+function updateActiveThreadSelection(current: ActiveThreadSelection, action: SetStateAction<CodexThread | null>): ActiveThreadSelection {
+  const thread = typeof action === 'function' ? action(current.thread) : action
+  if (thread === current.thread) return current
+  // A deleted conversation leaves an empty pane in the same engine.
+  return { thread, engine: thread ? engineOfThread(thread) : current.engine }
+}
+
+interface ThreadCacheEntry {
+  thread: CodexThread
+  messages: CodexMessage[]
+  fileChangesByTurn: FileChangesByTurn
+  operationsByTurn: OperationsByTurn
+  activityTimelineByTurn: ActivityTimelineByTurn
+  running: boolean
+  turnId: string | null
+  characters: number
+  complete: boolean
+}
+
+interface PersistedThreadCacheSnapshot {
+  version: typeof persistentThreadCacheVersion
+  entry: ThreadCacheEntry
+}
+
+export interface UseDevWispOptions {
+  /** Keep the existing single-pane conversation in localStorage. */
+  persistActiveThread?: boolean
+  /** Restore this pane first; null keeps it empty, undefined allows the legacy primary-thread fallback. */
+  initialThreadId?: string | null
+  /** Restore the engine even when the pane no longer has a conversation. */
+  initialEngine?: ChatEngine
+  /** Keep the socket and background requests closed while a pane is hidden. */
+  enabled?: boolean
+  /** Keep list/model/history warm-up work in the primary controller only. */
+  loadThreads?: boolean
+  loadModels?: boolean
+  /** Explicit opt-in; each prefetch downloads the entire conversation history. */
+  prefetchHistory?: boolean
+}
+
+function readPersistedActiveThreadId() {
+  try {
+    const threadId = window.localStorage.getItem(activeThreadStorageKey)?.trim()
+    return threadId || null
+  } catch {
+    return null
+  }
+}
+
+function persistActiveThreadId(threadId: string) {
+  try {
+    window.localStorage.setItem(activeThreadStorageKey, threadId)
+  } catch {
+    // The current conversation remains available until the page is closed.
+  }
+}
+
+function clearPersistedThread(threadId: string) {
+  try {
+    if (window.localStorage.getItem(activeThreadStorageKey) === threadId) {
+      window.localStorage.removeItem(activeThreadStorageKey)
+    }
+    const cached = window.localStorage.getItem(activeThreadCacheStorageKey)
+    if (cached && (JSON.parse(cached) as Record<string, unknown>).threadId === threadId) {
+      window.localStorage.removeItem(activeThreadCacheStorageKey)
+    }
+  } catch {
+    // Server deletion remains authoritative when local storage is unavailable.
+  }
+}
+
+function readPersistedActiveThreadCache(threadId: string | null): PersistedActiveThread | null {
+  if (!threadId) return null
+  try {
+    const value = window.localStorage.getItem(activeThreadCacheStorageKey)
+    if (!value) return null
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    if (parsed.version !== persistentThreadCacheVersion) return null
+    if (parsed.threadId !== threadId || !parsed.thread || typeof parsed.thread !== 'object' || !Array.isArray(parsed.messages)) return null
+    const thread = parsed.thread as Record<string, unknown>
+    if (thread.id !== threadId) return null
+    const messages = parsed.messages.flatMap((value) => {
+      if (!value || typeof value !== 'object') return []
+      const message = value as Record<string, unknown>
+      if (typeof message.id !== 'string' || (message.role !== 'user' && message.role !== 'assistant') || typeof message.text !== 'string' || typeof message.createdAt !== 'string') return []
+      return [{
+        id: message.id,
+        ...(typeof message.sourceItemId === 'string' ? { sourceItemId: message.sourceItemId } : {}),
+        role: message.role,
+        text: message.text,
+        ...(typeof message.model === 'string' && message.model ? { model: message.model } : {}),
+        ...(typeof message.effort === 'string' && message.effort ? { effort: message.effort } : {}),
+        ...(typeof message.originalText === 'string' ? { originalText: message.originalText } : {}),
+        createdAt: message.createdAt,
+        ...(typeof message.sentAt === 'string' ? { sentAt: message.sentAt } : {}),
+        ...(typeof message.replyStartedAt === 'string' ? { replyStartedAt: message.replyStartedAt } : {}),
+        ...(typeof message.replyDurationMs === 'number' && Number.isFinite(message.replyDurationMs) && message.replyDurationMs >= 0
+          ? { replyDurationMs: message.replyDurationMs }
+          : {}),
+        ...(typeof message.turnId === 'string' ? { turnId: message.turnId } : {}),
+        ...(message.streaming === true ? { streaming: true } : {}),
+        ...(typeof message.completedTextLength === 'number' && Number.isFinite(message.completedTextLength)
+          ? { completedTextLength: Math.max(0, Math.min(message.text.length, message.completedTextLength)) }
+          : {}),
+        ...(Array.isArray(message.questions) ? { questions: message.questions } : {}),
+        ...(typeof message.choiceItemId === 'string' ? { choiceItemId: message.choiceItemId } : {}),
+        ...(typeof message.choicePromptText === 'string' ? { choicePromptText: message.choicePromptText } : {}),
+        ...(typeof message.choiceDelivery === 'string' ? { choiceDelivery: message.choiceDelivery } : {}),
+      } as CodexMessage]
+    })
+    return { threadId, thread: thread as unknown as CodexThread, messages }
+  } catch {
+    return null
+  }
+}
+
+function compactThread(thread: CodexThread): CodexThread {
+  return {
+    id: thread.id,
+    ...(thread.engine ? { engine: thread.engine } : {}),
+    ...(thread.name !== undefined ? { name: thread.name } : {}),
+    ...(thread.preview !== undefined ? { preview: thread.preview } : {}),
+    ...(thread.cwd !== undefined ? { cwd: thread.cwd } : {}),
+    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+    ...(thread.historyRevision !== undefined ? { historyRevision: thread.historyRevision } : {}),
+    ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
+    ...(thread.status !== undefined ? { status: thread.status } : {}),
+    ...(thread.canInterrupt !== undefined ? { canInterrupt: thread.canInterrupt } : {}),
+  }
+}
+
+function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[]) {
+  try {
+    const cachedMessages: CodexMessage[] = []
+    let cachedCharacters = 0
+    for (const message of [...messages].reverse()) {
+      const text = message.text.length > maxCachedMessageCharacters
+        ? `${message.text.slice(0, maxCachedMessageCharacters - 1)}…`
+        : message.text
+      const compactMessage = {
+        id: message.id,
+        ...(message.sourceItemId ? { sourceItemId: message.sourceItemId } : {}),
+        role: message.role,
+        text,
+        ...(message.model ? { model: message.model } : {}),
+        ...(message.effort ? { effort: message.effort } : {}),
+        ...(message.originalText ? { originalText: message.originalText } : {}),
+        createdAt: message.createdAt,
+        ...(message.sentAt ? { sentAt: message.sentAt } : {}),
+        ...(message.replyStartedAt ? { replyStartedAt: message.replyStartedAt } : {}),
+        ...(message.replyDurationMs !== undefined ? { replyDurationMs: message.replyDurationMs } : {}),
+        ...(message.turnId ? { turnId: message.turnId } : {}),
+        ...(message.streaming ? { streaming: true } : {}),
+        ...(message.completedTextLength !== undefined
+          ? { completedTextLength: Math.min(message.completedTextLength, text.length) }
+          : {}),
+        ...(message.questions?.length ? { questions: message.questions } : {}),
+        ...(message.choiceItemId ? { choiceItemId: message.choiceItemId } : {}),
+        ...(message.choicePromptText ? { choicePromptText: message.choicePromptText } : {}),
+        ...(message.choiceDelivery ? { choiceDelivery: message.choiceDelivery } : {}),
+      } as CodexMessage
+      const messageCharacters = text.length + (message.originalText?.length ?? 0) + 128
+      if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
+      cachedMessages.unshift(compactMessage)
+      cachedCharacters += messageCharacters
+    }
+    window.localStorage.setItem(activeThreadCacheStorageKey, JSON.stringify({
+      version: persistentThreadCacheVersion,
+      threadId: thread.id,
+      thread: compactThread(thread),
+      messages: cachedMessages,
+    }))
+  } catch {
+    // Cached history is an optimization; the server remains the source of truth.
+  }
+}
+
+function cachedMessageCharacters(message: CodexMessage) {
+  const imageCharacters = message.images?.reduce((total, image) => total + image.name.length + image.previewUrl.length, 0) ?? 0
+  const documentCharacters = message.documents?.reduce((total, document) => total + document.name.length + document.content.length, 0) ?? 0
+  return message.text.length + (message.originalText?.length ?? 0) + imageCharacters + documentCharacters + 128
+}
+
+function cachedHistoryCharacters(messages: CodexMessage[]) {
+  return messages.reduce((total, message) => total + cachedMessageCharacters(message), 0)
+}
+
+function isActivityTimelineByTurn(value: unknown): value is ActivityTimelineByTurn {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.values(value as Record<string, unknown>).every((entries) => Array.isArray(entries) && entries.every((entry) => {
+    if (!entry || typeof entry !== 'object') return false
+    const record = entry as Record<string, unknown>
+    return record.type === 'message'
+      ? typeof record.itemId === 'string' && typeof record.length === 'number' && Number.isFinite(record.length) && record.length >= 0
+      : record.type === 'operation' && typeof record.itemId === 'string' && typeof record.operationId === 'string'
+  }))
+}
+
+function isThreadCacheEntry(value: unknown, threadId: string): value is ThreadCacheEntry {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Record<string, unknown>
+  const thread = entry.thread
+  const messagesValid = Array.isArray(entry.messages) && entry.messages.every((value) => {
+    if (!value || typeof value !== 'object') return false
+    const message = value as Record<string, unknown>
+    const imagesValid = message.images === undefined || (Array.isArray(message.images) && message.images.every((image) => {
+      if (!image || typeof image !== 'object') return false
+      const record = image as Record<string, unknown>
+      return typeof record.name === 'string' && typeof record.previewUrl === 'string'
+    }))
+    const documentsValid = message.documents === undefined || (Array.isArray(message.documents) && message.documents.every((document) => {
+      if (!document || typeof document !== 'object') return false
+      const record = document as Record<string, unknown>
+      return typeof record.name === 'string' && typeof record.content === 'string'
+    }))
+    return typeof message.id === 'string'
+      && (message.role === 'user' || message.role === 'assistant')
+      && typeof message.text === 'string'
+      && typeof message.createdAt === 'string'
+      && imagesValid
+      && documentsValid
+  })
+  return Boolean(
+    thread && typeof thread === 'object' && (thread as Record<string, unknown>).id === threadId
+    && messagesValid
+    && entry.fileChangesByTurn && typeof entry.fileChangesByTurn === 'object' && !Array.isArray(entry.fileChangesByTurn)
+    && entry.operationsByTurn && typeof entry.operationsByTurn === 'object' && !Array.isArray(entry.operationsByTurn)
+    && (entry.activityTimelineByTurn === undefined || isActivityTimelineByTurn(entry.activityTimelineByTurn))
+    && typeof entry.running === 'boolean'
+    && (entry.turnId === null || typeof entry.turnId === 'string')
+    && typeof entry.characters === 'number' && Number.isFinite(entry.characters) && entry.characters >= 0
+    && entry.complete === true,
+  )
+}
+
+function threadTimestamp(thread: CodexThread) {
+  const value = thread.updatedAt ?? thread.createdAt
+  if (typeof value === 'number') return value > 10_000_000_000 ? value : value * 1000
+  if (typeof value === 'string') return Date.parse(value) || 0
+  return 0
+}
+
+export function threadIsRunning(thread: CodexThread) {
+  return ['active', 'inProgress', 'running', 'started'].includes(thread.status?.type ?? '')
+}
+
+function cachedHistoryMatchesThreadMetadata(entry: ThreadCacheEntry, latestThread: CodexThread | undefined, metadataLoaded: boolean, hasQueuedMessages: boolean) {
+  const activityTimelineIsMissing = Object.entries(entry.operationsByTurn).some(([turnId, operations]) => (
+    operations.length > 0 && !(entry.activityTimelineByTurn[turnId]?.length)
+  ))
+  return !activityTimelineIsMissing && canUseCachedThreadHistory({
+    complete: entry.complete,
+    running: entry.running,
+    updatedAt: entry.thread.updatedAt,
+    historyRevision: entry.thread.historyRevision,
+  }, latestThread, metadataLoaded, hasQueuedMessages)
+}
+
+function sendFailureMessage(reason: unknown) {
+  if (isAmbiguousNetworkFailure(reason)) {
+    return '连接中断，无法确认消息是否送达。草稿已保留；恢复后先检查对话记录，再决定是否重试。'
+  }
+  return reason instanceof Error ? reason.message : '发送消息失败'
+}
+
+function isActiveWriterError(reason: unknown) {
+  return reason instanceof Error && /active writer/i.test(reason.message)
+}
+
+function queuedMessageId() {
+  return `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function streamingMessageId(turnId: string | null) {
+  return `streaming-assistant-${turnId ?? 'turn'}-${queuedMessageId()}`
+}
+
+function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
+  const text = input.prompt.trim()
+  const documents = input.documents ?? []
+  return {
+    id: queuedMessageId(),
+    text,
+    ...(input.originalText && input.originalText !== text ? { originalText: input.originalText } : {}),
+    ...(input.translation ? { translation: input.translation } : {}),
+    ...(input.translationStatus ? { translationStatus: input.translationStatus } : {}),
+    ...(input.translationError ? { translationError: input.translationError } : {}),
+    requestText: queuedRequestText(text, documents),
+    images: input.images,
+    ...(documents.length > 0 ? { documents } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
+    ...(input.claudeModel ? { claudeModel: input.claudeModel } : {}),
+    ...(input.claudeEffort ? { claudeEffort: input.claudeEffort } : {}),
+    ...(input.claudePermissionMode ? { claudePermissionMode: input.claudePermissionMode } : {}),
+    ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function persistedQueuedImage(value: unknown): CodexImageAttachment | null {
+  if (!value || typeof value !== 'object') return null
+  const image = value as Record<string, unknown>
+  const name = typeof image.name === 'string' ? image.name.slice(0, 512) : ''
+  const mediaType = image.mediaType
+  const data = image.data
+  if (!name || (mediaType !== 'image/png' && mediaType !== 'image/jpeg' && mediaType !== 'image/webp' && mediaType !== 'image/gif')) return null
+  if (typeof data !== 'string' || data.length === 0 || data.length > maxPersistedQueuedImageCharacters) return null
+  return { name, mediaType, data }
+}
+
+function persistedQueuedDocument(value: unknown): CodexDocumentAttachment | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const document = value as Record<string, unknown>
+  if (typeof document.name !== 'string' || typeof document.content !== 'string') return undefined
+  if (typeof document.sourceFileId === 'string') {
+    if (!/^[A-Za-z0-9_-]{24,64}$/.test(document.sourceFileId) || !document.name || document.name.length > 512) return undefined
+    return { name: document.name, content: '', sourceFileId: document.sourceFileId }
+  }
+  if (!document.name || document.name.length > 512) return undefined
+  return { name: document.name, content: document.content }
+}
+
+function persistedQueuedDocuments(value: unknown): CodexDocumentAttachment[] {
+  const values = Array.isArray(value) ? value : value ? [value] : []
+  return values.flatMap((item) => {
+    const document = persistedQueuedDocument(item)
+    return document ? [document] : []
+  }).slice(0, 8)
+}
+
+function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
+  if (!value || typeof value !== 'object') return null
+  const payload = value as Record<string, unknown>
+  const id = typeof payload.id === 'string' ? payload.id : ''
+  const text = typeof payload.text === 'string' ? payload.text : ''
+  const originalText = typeof payload.originalText === 'string' && payload.originalText.length <= 30_000 ? payload.originalText : undefined
+  const createdAt = typeof payload.createdAt === 'string' ? payload.createdAt : ''
+  if (!id || id.length > 256 || !createdAt || createdAt.length > 128) return null
+  const images = Array.isArray(payload.images)
+    ? payload.images.flatMap((image) => {
+      const parsed = persistedQueuedImage(image)
+      return parsed ? [parsed] : []
+    }).slice(0, maxImagesPerTurn)
+    : []
+  const documents = persistedQueuedDocuments(payload.documents ?? payload.document)
+  if (!text && images.length === 0 && documents.length === 0) return null
+  const model = typeof payload.model === 'string' && payload.model.length <= 256 ? payload.model : undefined
+  const effort = typeof payload.effort === 'string' && payload.effort.length <= 64 ? payload.effort : undefined
+  const approvalPolicy = payload.approvalPolicy === 'on-request' || payload.approvalPolicy === 'untrusted' || payload.approvalPolicy === 'never'
+    ? payload.approvalPolicy
+    : undefined
+  const claudeModel = typeof payload.claudeModel === 'string' && payload.claudeModel.length <= 200 ? payload.claudeModel : undefined
+  const claudeEffort = payload.claudeEffort === 'low' || payload.claudeEffort === 'medium'
+    || payload.claudeEffort === 'high' || payload.claudeEffort === 'xhigh' || payload.claudeEffort === 'max'
+    ? payload.claudeEffort
+    : undefined
+  const claudePermissionMode = payload.claudePermissionMode === 'default' || payload.claudePermissionMode === 'manual'
+    || payload.claudePermissionMode === 'acceptEdits' || payload.claudePermissionMode === 'auto'
+    || payload.claudePermissionMode === 'bypassPermissions'
+    || payload.claudePermissionMode === 'dontAsk' || payload.claudePermissionMode === 'plan'
+    ? payload.claudePermissionMode
+    : undefined
+  const scheduledAt = typeof payload.scheduledAt === 'string' && Number.isFinite(Date.parse(payload.scheduledAt))
+    ? payload.scheduledAt
+    : undefined
+  const translationRecord = payload.translation && typeof payload.translation === 'object'
+    ? payload.translation as Record<string, unknown>
+    : null
+  const translationProviders: TranslationProvider[] = ['google', 'microsoft', 'deepl', 'codex', 'claude', 'chat', 'anthropic', 'responses']
+  const translation = translationRecord && translationProviders.includes(translationRecord.provider as TranslationProvider)
+    && (translationRecord.style === 'natural' || translationRecord.style === 'formal')
+    ? {
+      provider: translationRecord.provider as TranslationProvider,
+      ...(typeof translationRecord.profileId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(translationRecord.profileId)
+        ? { profileId: translationRecord.profileId }
+        : {}),
+      style: translationRecord.style as TranslationStyle,
+    }
+    : undefined
+  const translationStatus = translation && (payload.translationStatus === 'pending' || payload.translationStatus === 'failed')
+    ? payload.translationStatus
+    : undefined
+  const translationError = translationStatus === 'failed' && typeof payload.translationError === 'string'
+    ? payload.translationError.slice(0, 1000)
+    : undefined
+  const attempt = payload.sendAttempt && typeof payload.sendAttempt === 'object'
+    ? payload.sendAttempt as Record<string, unknown>
+    : null
+  const sendAttempt = attempt && typeof attempt.at === 'string' && Number.isFinite(Date.parse(attempt.at))
+    ? {
+      at: attempt.at,
+      ...(typeof attempt.afterTurnId === 'string' ? { afterTurnId: attempt.afterTurnId } : {}),
+      ...(typeof attempt.afterMessageId === 'string' ? { afterMessageId: attempt.afterMessageId } : {}),
+      ...(typeof attempt.inTurnId === 'string' ? { inTurnId: attempt.inTurnId } : {}),
+    }
+    : undefined
+  return {
+    id,
+    text,
+    ...(originalText && originalText !== text ? { originalText } : {}),
+    requestText: queuedRequestText(text, documents),
+    images,
+    ...(documents.length > 0 ? { documents } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(claudeModel ? { claudeModel } : {}),
+    ...(claudeEffort ? { claudeEffort } : {}),
+    ...(translation ? { translation } : {}),
+    ...(translationStatus ? { translationStatus } : {}),
+    ...(translationError ? { translationError } : {}),
+    ...(claudePermissionMode ? { claudePermissionMode } : {}),
+    ...(scheduledAt ? { scheduledAt } : {}),
+    ...(sendAttempt ? { sendAttempt } : {}),
+    createdAt,
+  }
+}
+
+function readPersistedQueuedMessages(): QueuedMessagesByThread {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = window.localStorage.getItem(queuedMessagesStorageKey)
+    if (!value) return {}
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const queues: QueuedMessagesByThread = {}
+    for (const [threadId, entries] of Object.entries(parsed as Record<string, unknown>).slice(0, maxPersistedQueuedThreads)) {
+      if (!threadId || threadId.length > 512 || !Array.isArray(entries)) continue
+      const messages = entries.flatMap((entry) => {
+        const payload = persistedQueuedPayload(entry)
+        return payload ? [payload] : []
+      }).slice(0, maxPersistedQueuedMessagesPerThread)
+      if (messages.length > 0) queues[threadId] = messages
+    }
+    return queues
+  } catch {
+    return {}
+  }
+}
+
+function persistQueuedMessages(queues: QueuedMessagesByThread) {
+  if (typeof window === 'undefined') return
+  try {
+    if (Object.keys(queues).length === 0) {
+      window.localStorage.removeItem(queuedMessagesStorageKey)
+      return
+    }
+    // Rebuild requestText during restoration so document bodies are stored only once.
+    const value = JSON.stringify(queues, (key, entry: unknown) => key === 'requestText' ? undefined : entry)
+    window.localStorage.setItem(queuedMessagesStorageKey, value)
+  } catch {
+    // Queues remain usable in the current page if browser storage is blocked.
+  }
+}
+
+function readPersistedQueueRecoveryBarriers(queues: QueuedMessagesByThread): QueueRecoveryBarriers {
+  if (typeof window === 'undefined') return restoreQueueRecoveryBarriers(null, Object.keys(queues))
+  try {
+    const value = window.localStorage.getItem(queuedRecoveryStorageKey)
+    const parsed = value ? JSON.parse(value) : null
+    return restoreQueueRecoveryBarriers(parsed, Object.keys(queues))
+  } catch {
+    return restoreQueueRecoveryBarriers(null, Object.keys(queues))
+  }
+}
+
+function persistQueueRecoveryBarriers(barriers: QueueRecoveryBarriers, queues: QueuedMessagesByThread) {
+  if (typeof window === 'undefined') return
+  try {
+    const queuedThreadIds = new Set(Object.keys(queues))
+    const persisted = Object.fromEntries(Object.entries(barriers).filter(([threadId]) => queuedThreadIds.has(threadId)))
+    if (Object.keys(persisted).length === 0) {
+      window.localStorage.removeItem(queuedRecoveryStorageKey)
+      return
+    }
+    window.localStorage.setItem(queuedRecoveryStorageKey, JSON.stringify(persisted))
+  } catch {
+    // Recovery metadata is an additional safety net; in-memory queue behavior remains available.
+  }
+}
+
+interface QueuedThreadStateChange {
+  origin: string
+  threadId: string
+  messages: QueuedTurnPayload[]
+  barrier: QueueRecoveryBarrier | null
+}
+
+function persistQueuedThreadState(change: QueuedThreadStateChange) {
+  if (typeof window === 'undefined') return
+  // Legacy browser queues are imported once by the primary pane. The old
+  // reconciliation code must not erase them before that import succeeds.
+  if (sharedQueueAuthoritative) return
+  // Each pane updates only its thread. Replacing a whole pane's old snapshot
+  // would restore queues another pane has already confirmed and removed.
+  const queues = readPersistedQueuedMessages()
+  if (change.messages.length > 0) queues[change.threadId] = change.messages
+  else delete queues[change.threadId]
+  persistQueuedMessages(queues)
+  const barriers = readPersistedQueueRecoveryBarriers(queues)
+  if (change.messages.length > 0 && change.barrier) barriers[change.threadId] = change.barrier
+  else delete barriers[change.threadId]
+  persistQueueRecoveryBarriers(barriers, queues)
+  window.dispatchEvent(new CustomEvent<QueuedThreadStateChange>(queuedThreadStateChangedEvent, { detail: change }))
+}
+
+function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: string | null): CodexMessage {
+  return {
+    id: payload.id,
+    role: 'user',
+    text: payload.text,
+    ...(payload.originalText ? { originalText: payload.originalText } : {}),
+    images: payload.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
+    ...(payload.documents?.length ? { documents: payload.documents.map((document) => ({ ...document, charCount: document.content.length })) } : {}),
+    createdAt: payload.createdAt,
+    sentAt: payload.createdAt,
+    ...(turnId ? { turnId } : {}),
+  }
+}
+
+function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
+  const byId = new Map<string, CodexMessage>()
+  const byTurnText = new Map<string, CodexMessage[]>()
+  const imageMessagesByText = new Map<string, CodexMessage[]>()
+  const imageOffsets = new Map<string, number>()
+  const usedImageIds = new Set<string>()
+  const turnTextKey = (message: CodexMessage, text: string) => JSON.stringify([message.role, message.turnId, text])
+  for (const message of current) {
+    if (!byId.has(message.id)) byId.set(message.id, message)
+    if (message.turnId) {
+      const key = turnTextKey(message, message.text)
+      const candidates = byTurnText.get(key) ?? []
+      candidates.push(message)
+      byTurnText.set(key, candidates)
+      if (message.role === 'user') {
+        const requestText = queuedRequestText(message.text, message.documents)
+        if (requestText !== message.text) {
+          const requestKey = turnTextKey(message, requestText)
+          const requestCandidates = byTurnText.get(requestKey) ?? []
+          requestCandidates.push(message)
+          byTurnText.set(requestKey, requestCandidates)
+        }
+      }
+    }
+    if (message.role === 'user' && message.images?.length) {
+      const imageMessages = imageMessagesByText.get(message.text) ?? []
+      imageMessages.push(message)
+      imageMessagesByText.set(message.text, imageMessages)
+    }
+  }
+  return next.map((message) => {
+    const previous = byId.get(message.id)
+      ?? (message.turnId ? byTurnText.get(turnTextKey(message, message.text))?.find((candidate) => candidate.text === message.text
+        || (message.role === 'user' && sameQueuedMessageHistoryContent(message, candidate))) : undefined)
+    let nextMessage = message
+    if (previous) {
+      nextMessage = {
+        ...message,
+        ...(!message.model && previous.model ? { model: previous.model } : {}),
+        ...(!message.effort && previous.effort ? { effort: previous.effort } : {}),
+        ...(!message.originalText && previous.originalText ? { originalText: previous.originalText } : {}),
+        ...(!message.sentAt && previous.sentAt ? { sentAt: previous.sentAt } : {}),
+        ...(!message.replyStartedAt && previous.replyStartedAt ? { replyStartedAt: previous.replyStartedAt } : {}),
+        ...(message.replyDurationMs === undefined && previous.replyDurationMs !== undefined
+          ? { replyDurationMs: previous.replyDurationMs }
+          : {}),
+        ...(!message.questions?.length && previous.questions?.length ? {
+          questions: previous.questions,
+          choiceItemId: previous.choiceItemId,
+          choicePromptText: previous.choicePromptText,
+          choiceDelivery: previous.choiceDelivery,
+        } : {}),
+      }
+    }
+    if (message.role !== 'user' || message.images?.length) return nextMessage
+    const imageMessages = imageMessagesByText.get(message.text) ?? []
+    let imageOffset = imageOffsets.get(message.text) ?? 0
+    while (imageOffset < imageMessages.length && usedImageIds.has(imageMessages[imageOffset].id)) imageOffset += 1
+    const previousImageMessage = imageMessages[imageOffset]
+    if (!previousImageMessage) return nextMessage
+    imageOffsets.set(message.text, imageOffset + 1)
+    usedImageIds.add(previousImageMessage.id)
+    return { ...nextMessage, images: previousImageMessage.images }
+  })
+}
+
+function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
+  return left.length === right.length && left.every((message, index) => {
+    const candidate = right[index]
+    if (!candidate) return false
+    return message.id === candidate.id
+      && message.sourceItemId === candidate.sourceItemId
+      && message.role === candidate.role
+      && message.text === candidate.text
+      && message.model === candidate.model
+      && message.effort === candidate.effort
+      && message.originalText === candidate.originalText
+      && message.turnId === candidate.turnId
+      && message.sentAt === candidate.sentAt
+      && message.replyStartedAt === candidate.replyStartedAt
+      && message.replyDurationMs === candidate.replyDurationMs
+      && message.replyError === candidate.replyError
+      && Boolean(message.streaming) === Boolean(candidate.streaming)
+      && message.completedTextLength === candidate.completedTextLength
+      && message.choiceItemId === candidate.choiceItemId
+      && message.choicePromptText === candidate.choicePromptText
+      && message.choiceDelivery === candidate.choiceDelivery
+      && (message.questions === candidate.questions || JSON.stringify(message.questions) === JSON.stringify(candidate.questions))
+      && sameMessageImages(message.images, candidate.images)
+      && sameMessageDocuments(message.documents, candidate.documents)
+  })
+}
+
+function sameActiveThread(left: CodexThread | null, right: CodexThread) {
+  return left?.id === right.id
+    && left.engine === right.engine
+    && left.name === right.name
+    && left.preview === right.preview
+    && left.cwd === right.cwd
+    && left.updatedAt === right.updatedAt
+    && left.historyRevision === right.historyRevision
+    && (left as CodexThreadDetails).historyContentRevision === (right as CodexThreadDetails).historyContentRevision
+    && left.createdAt === right.createdAt
+    && left.status?.type === right.status?.type
+    && left.canInterrupt === right.canInterrupt
+}
+
+function sameActivity(left: CodexActivity | null, right: CodexActivity | null) {
+  return left?.label === right?.label && left?.detail === right?.detail
+}
+
+function unifiedDiffLineCounts(diff: string | undefined) {
+  if (typeof diff !== 'string') return null
+  let additions = 0
+  let deletions = 0
+  let oldRemaining = 0
+  let newRemaining = 0
+  let foundHunk = false
+
+  for (const line of diff.split(/\r?\n/)) {
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+    if (hunk) {
+      foundHunk = true
+      oldRemaining = hunk[2] === undefined ? 1 : Number(hunk[2])
+      newRemaining = hunk[4] === undefined ? 1 : Number(hunk[4])
+      continue
+    }
+    if (!foundHunk) continue
+    if (line.startsWith('+') && newRemaining > 0) {
+      additions += 1
+      newRemaining -= 1
+    } else if (line.startsWith('-') && oldRemaining > 0) {
+      deletions += 1
+      oldRemaining -= 1
+    } else if (line.startsWith(' ') && oldRemaining > 0 && newRemaining > 0) {
+      oldRemaining -= 1
+      newRemaining -= 1
+    }
+  }
+
+  return foundHunk ? { additions, deletions } : null
+}
+
+function isAddedFileKind(kind: string | undefined) {
+  const normalized = kind?.replace(/[^a-z]/gi, '').toLowerCase()
+  return ['add', 'added', 'addition', 'addedfile', 'create', 'created', 'creation', 'createdfile', 'new', 'newfile'].includes(normalized ?? '')
+}
+
+function addedFileDiff(path: string, content: string) {
+  const lines = content.length === 0 ? [] : content.split(/\r\n|\n|\r/)
+  if (lines.length > 0 && /(?:\r\n|\n|\r)$/.test(content)) lines.pop()
+  const safePath = path.replace(/[\r\n]/g, '')
+  const newRange = lines.length === 0 ? '0,0' : `1,${lines.length}`
+  return [
+    '--- /dev/null',
+    `+++ b/${safePath}`,
+    `@@ -0,0 +${newRange} @@`,
+    ...lines.map((line) => `+${line}`),
+  ].join('\n')
+}
+
+function normalizeFileChangeEntry(entry: CodexFileChangeEntry): CodexFileChangeEntry {
+  const diff = typeof entry.diff === 'string' ? entry.diff : undefined
+  const diffCounts = unifiedDiffLineCounts(diff)
+  if (diffCounts) return { ...entry, diff, ...diffCounts }
+  if (isAddedFileKind(entry.kind) && diff !== undefined) {
+    const addedDiff = addedFileDiff(entry.path, diff)
+    const addedCounts = unifiedDiffLineCounts(addedDiff)
+    return { ...entry, diff: addedDiff, additions: addedCounts?.additions ?? 0, deletions: addedCounts?.deletions ?? 0 }
+  }
+  return diff === undefined
+    ? { ...entry, diff: undefined }
+    : { ...entry, diff: undefined, additions: 0, deletions: 0 }
+}
+
+function fileChangeForItem(value: unknown): CodexFileChange | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+  if (itemType !== 'filechange') return null
+  const rawChanges = item.changes
+  const changes = Array.isArray(rawChanges)
+    ? rawChanges
+    : rawChanges && typeof rawChanges === 'object'
+      ? Object.entries(rawChanges).map(([path, change]) => ({ path, ...(change && typeof change === 'object' ? change : {}) }))
+      : []
+  const explicitLineCount = (count: unknown) => (
+    typeof count === 'number' && Number.isFinite(count) ? Math.max(0, Math.floor(count)) : undefined
+  )
+  const entries = changes.flatMap((value) => {
+    if (typeof value === 'string') return [{ path: value, additions: 0, deletions: 0 }]
+    if (!value || typeof value !== 'object') return []
+    const change = value as Record<string, unknown>
+    const path = [change.path, change.filePath, change.filename, change.move_path, change.movePath]
+      .find((part): part is string => typeof part === 'string' && part.length > 0)
+    if (!path) return []
+    const diff = [change.diff, change.patch, change.unified_diff, change.unifiedDiff]
+      .find((part): part is string => typeof part === 'string')
+    const entry = normalizeFileChangeEntry({
+      path,
+      kind: typeof change.kind === 'string' ? change.kind : typeof change.type === 'string' ? change.type : undefined,
+      diff,
+      additions: explicitLineCount(change.additions) ?? 0,
+      deletions: explicitLineCount(change.deletions) ?? 0,
+    })
+    return [entry]
+  })
+  if (entries.length === 0) return null
+  const status = typeof item.status === 'string' ? item.status.toLowerCase() : ''
+  return {
+    id: typeof item.id === 'string' ? item.id : `file-change-${Date.now()}`,
+    status: status === 'completed' || status === 'complete' ? 'completed' : 'inProgress',
+    changes: entries,
+  }
+}
+
+function upsertFileChange(current: CodexFileChange[], next: CodexFileChange) {
+  const index = current.findIndex((change) => change.id === next.id)
+  if (index < 0) return [...current, next]
+  return current.map((change, currentIndex) => currentIndex === index ? next : change)
+}
+
+function mergeWorkspaceFileChange(current: CodexFileChange[], next: CodexFileChange) {
+  const withoutPreviousWorkspaceChange = current.filter((change) => change.id !== next.id)
+  const mergedChanges = [...withoutPreviousWorkspaceChange]
+  const missingWorkspaceEntries: CodexFileChange['changes'] = []
+  for (const workspaceEntry of next.changes) {
+    const previousLocation = mergedChanges.findIndex((change) => change.changes.some((entry) => entry.path === workspaceEntry.path))
+    if (previousLocation < 0) {
+      missingWorkspaceEntries.push(workspaceEntry)
+      continue
+    }
+    const previousChange = mergedChanges[previousLocation]
+    const previousEntries = previousChange.changes.map((entry) => {
+      if (entry.path !== workspaceEntry.path) return entry
+      const nativeEntry = normalizeFileChangeEntry(entry)
+      const workspaceEntryNormalized = normalizeFileChangeEntry(workspaceEntry)
+      const nativeHasDiff = unifiedDiffLineCounts(nativeEntry.diff) !== null
+      const workspaceHasDiff = unifiedDiffLineCounts(workspaceEntryNormalized.diff) !== null
+      const selectedEntry = nativeHasDiff || !workspaceHasDiff ? nativeEntry : workspaceEntryNormalized
+      return normalizeFileChangeEntry({
+        ...entry,
+        kind: nativeEntry.kind ?? workspaceEntryNormalized.kind,
+        diff: selectedEntry.diff,
+        additions: selectedEntry.additions,
+        deletions: selectedEntry.deletions,
+      })
+    })
+    mergedChanges[previousLocation] = { ...previousChange, changes: previousEntries }
+  }
+  if (missingWorkspaceEntries.length > 0) {
+    mergedChanges.push({ ...next, changes: missingWorkspaceEntries })
+  }
+  return mergedChanges
+}
+
+function isWorkspaceFileChange(change: CodexFileChange) {
+  return change.id.startsWith('workspace-change-')
+}
+
+function mergeTurnFileChanges(current: CodexFileChange[], incoming: CodexFileChange[]) {
+  let nativeChanges: CodexFileChange[] = []
+  const workspaceChanges: CodexFileChange[] = []
+  for (const rawChange of [...current, ...incoming]) {
+    const change = {
+      ...rawChange,
+      changes: rawChange.changes.map(normalizeFileChangeEntry),
+    }
+    if (isWorkspaceFileChange(change)) workspaceChanges.push(change)
+    else nativeChanges = upsertFileChange(nativeChanges, change)
+  }
+  return workspaceChanges.reduce(
+    (merged, change) => mergeWorkspaceFileChange(merged, change),
+    nativeChanges,
+  )
+}
+
+function mergeFileChangesByTurn(current: FileChangesByTurn, incoming: FileChangesByTurn) {
+  let merged = current
+  for (const [turnId, changes] of Object.entries(incoming)) {
+    const nextChanges = mergeTurnFileChanges(current[turnId] ?? [], changes)
+    if (nextChanges === current[turnId]) continue
+    if (merged === current) merged = { ...current }
+    if (nextChanges.length > 0) merged[turnId] = nextChanges
+    else delete merged[turnId]
+  }
+  return merged
+}
+
+function workspaceFileChange(turnId: string, changes: unknown): CodexFileChange | null {
+  if (!Array.isArray(changes) || changes.length === 0) return null
+  return fileChangeForItem({
+    type: 'fileChange',
+    id: `workspace-change-${turnId}`,
+    status: 'completed',
+    changes,
+  })
+}
+
+function nativeFileChangesFromItems(items: unknown[]): CodexFileChange[] {
+  return items.reduce<CodexFileChange[]>((changes, item) => {
+    const fileChange = fileChangeForItem(item)
+    return fileChange ? upsertFileChange(changes, fileChange) : changes
+  }, [])
+}
+
+function workspaceChangesForTurn(value: unknown, turnId: string): CodexFileChange | null {
+  if (!value || typeof value !== 'object') return null
+  const workspaceChanges = value as Record<string, unknown>
+  if (Array.isArray(workspaceChanges.changes)) {
+    return workspaceChanges.turnId === turnId ? workspaceFileChange(turnId, workspaceChanges.changes) : null
+  }
+  return workspaceFileChange(turnId, workspaceChanges[turnId])
+}
+
+function fileChangesFromThread(thread: { turns?: unknown[] }) {
+  const turns = Array.isArray(thread.turns) ? thread.turns : []
+  const workspaceChanges = (thread as Record<string, unknown>).devwispWorkspaceChanges
+  return turns.reduce<FileChangesByTurn>((groups, turnValue, index) => {
+    if (!turnValue || typeof turnValue !== 'object') return groups
+    const turn = turnValue as Record<string, unknown>
+    const turnId = typeof turn.id === 'string' ? turn.id : `history-turn-${index}`
+    const items = Array.isArray(turn.items) ? turn.items : []
+    const nativeChanges = nativeFileChangesFromItems(items)
+    const workspaceChange = workspaceChangesForTurn(workspaceChanges, turnId)
+    const changes = workspaceChange ? mergeTurnFileChanges(nativeChanges, [workspaceChange]) : nativeChanges
+    if (changes.length > 0) groups[turnId] = changes
+    return groups
+  }, {})
+}
+
+function reconcileFileChangesFromThread(
+  current: FileChangesByTurn,
+  thread: { turns?: unknown[] },
+  preserveTurnId: string | null = null,
+) {
+  const historical = fileChangesFromThread(thread)
+  const liveChanges = preserveTurnId ? current[preserveTurnId] : undefined
+  return preserveTurnId && liveChanges?.length
+    ? mergeFileChangesByTurn(historical, { [preserveTurnId]: liveChanges })
+    : historical
+}
+
+function activityForItem(value: unknown): CodexActivity {
+  if (!value || typeof value !== 'object') return { label: '正在处理' }
+  const item = value as Record<string, unknown>
+  const toolName = [item.namespace, item.tool]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join('.')
+
+  switch (item.type) {
+    case 'reasoning': return { label: '正在思考' }
+    case 'plan': return { label: '正在整理执行计划' }
+    case 'agentMessage': return { label: '正在生成回复' }
+    case 'commandExecution': {
+      const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
+      return { label: '正在执行命令', detail: command ? safeOperationDetail(command) : undefined }
+    }
+    case 'fileChange': {
+      const count = Array.isArray(item.changes) ? item.changes.length : 0
+      return { label: '正在修改文件', detail: count > 0 ? `${count} 个文件` : undefined }
+    }
+    case 'mcpToolCall': {
+      const server = typeof item.server === 'string' ? item.server : ''
+      const tool = typeof item.tool === 'string' ? item.tool : ''
+      return { label: '正在调用 MCP 工具', detail: safeOperationDetail([server, tool].filter(Boolean).join(' · ')) }
+    }
+    case 'dynamicToolCall': return { label: '正在调用工具', detail: safeOperationDetail(toolName) }
+    case 'webSearch': return { label: '正在搜索资料', detail: typeof item.query === 'string' ? safeOperationDetail(item.query) : undefined }
+    case 'imageView': return { label: '正在查看图片' }
+    case 'imageGeneration': return { label: '正在生成图片' }
+    case 'collabAgentToolCall': return { label: '正在协调子任务', detail: typeof item.tool === 'string' ? item.tool : undefined }
+    case 'subAgentActivity': return { label: '正在运行子任务' }
+    default: return { label: '正在处理' }
+  }
+}
+
+const maxOperationsPerTurn = 80
+const maxOperationHistoryTurns = 30
+const maxOperationDetailCharacters = 220
+const maxActivityTimelineEntriesPerTurn = 240
+
+function normalizedOperationStatus(value: unknown, fallback: CodexOperationStatus = 'completed'): CodexOperationStatus {
+  if (typeof value !== 'string') return fallback
+  const status = value.replace(/[-_]/g, '').toLowerCase()
+  if (status === 'inprogress' || status === 'running' || status === 'started') return 'running'
+  if (status === 'failed' || status === 'error') return 'failed'
+  if (status === 'interrupted' || status === 'cancelled' || status === 'canceled' || status === 'declined') return 'stopped'
+  if (status === 'completed' || status === 'complete' || status === 'success') return 'completed'
+  return fallback
+}
+
+function safeOperationDetail(value: string) {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/(--?(?:token|password|passwd|api[-_]?key|secret|authorization|cookie)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1[已隐藏]')
+    .replace(/\b([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)=(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1=[已隐藏]')
+    .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [已隐藏]')
+    .replace(/([a-z][\w+.-]*:\/\/[^:/\s@]+:)[^@\s/]+@/gi, '$1[已隐藏]@')
+  return sanitized.length > maxOperationDetailCharacters
+    ? `${sanitized.slice(0, maxOperationDetailCharacters - 1)}…`
+    : sanitized || undefined
+}
+
+function operationPaths(value: unknown, depth = 0): string[] {
+  if (depth > 4 || !value || typeof value !== 'object') return []
+  const paths: string[] = []
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (/^(?:path|filepath|file_path|filename|target_path|source_path|imagepath|image_path|imagefile|image_file)$/i.test(key) && typeof entry === 'string' && entry.trim()) {
+      paths.push(entry.trim())
+    } else if (entry && typeof entry === 'object') {
+      paths.push(...operationPaths(entry, depth + 1))
+    }
+  }
+  return [...new Set(paths)].slice(0, 8)
+}
+
+function commandActionSteps(value: unknown): CodexOperationStep[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 8).flatMap((entry): CodexOperationStep[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const action = entry as Record<string, unknown>
+    const type = typeof action.type === 'string' ? action.type.replace(/[-_]/g, '').toLowerCase() : ''
+    const name = typeof action.name === 'string' ? action.name.trim() : ''
+    const path = typeof action.path === 'string' ? action.path.trim() : ''
+    const query = typeof action.query === 'string' ? action.query.trim() : ''
+    const basename = (path: string) => path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? path
+
+    if (type === 'read') {
+      const detail = safeOperationDetail(name || basename(path))
+      return [{ label: '读取', ...(detail ? { detail } : {}), ...(path ? { path } : {}) }]
+    }
+    if (type === 'listfiles') {
+      const detail = safeOperationDetail(path || name)
+      return [{ label: '列出文件', ...(detail ? { detail } : {}) }]
+    }
+    if (type === 'search') {
+      const detail = safeOperationDetail([query, path].filter(Boolean).join(' · '))
+      return [{ label: '搜索', ...(detail ? { detail } : {}) }]
+    }
+    return []
+  })
+}
+
+function commandPathTargets(command: string) {
+  const paths = [...command.matchAll(/(?:^|[\s"'`])((?:\.\.?\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+\.[A-Za-z0-9_-]{1,16})(?=$|[\s"'`|;&)])/g)]
+  return [...new Set(paths.map((match) => match[1]))].slice(0, 8)
+}
+
+function operationForItem(value: unknown, statusOverride?: CodexOperationStatus): CodexOperation | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+  const id = typeof item.id === 'string' ? item.id : ''
+  if (!id || itemType === 'reasoning' || itemType === 'agentmessage' || itemType === 'usermessage' || itemType === 'plan') return null
+  const status = statusOverride ?? normalizedOperationStatus(item.status)
+
+  if (itemType === 'commandexecution') {
+    const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
+    const steps = commandActionSteps(item.commandActions ?? item.command_actions)
+    const knownCommand = command.match(/(?:^|[\s"'|;&])(?:\/[\w.\/-]+\/)?(rg|grep|find|fd|ag|ack|cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])/i)?.[1]?.toLowerCase() ?? ''
+    const isSearch = /^(?:rg|grep|find|fd|ag|ack)$/.test(knownCommand)
+    const isRead = /^(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)$/.test(knownCommand)
+    const detail = safeOperationDetail(command)
+    const paths = isSearch || isRead ? commandPathTargets(command) : []
+    return {
+      id,
+      kind: isSearch ? 'search' : isRead ? 'file' : 'command',
+      label: isSearch ? '搜索文件' : isRead ? '查看文件' : '执行命令',
+      ...(detail ? { detail } : {}),
+      ...(paths.length > 0 ? { paths } : {}),
+      ...(steps.length > 0 ? { steps } : {}),
+      status,
+    }
+  }
+
+  if (itemType === 'filechange') {
+    const fileChange = fileChangeForItem(item)
+    if (!fileChange) return null
+    const paths = fileChange.changes.map((change) => change.path)
+    const shownPaths = paths.slice(0, 3)
+    const suffix = paths.length > shownPaths.length ? ` 等 ${paths.length} 个文件` : ''
+    const detail = safeOperationDetail(`${shownPaths.join('、')}${suffix}`)
+    return { id, kind: 'file', label: '修改文件', ...(detail ? { detail } : {}), status }
+  }
+
+  if (itemType === 'mcptoolcall' || itemType === 'dynamictoolcall' || itemType === 'collabagenttoolcall') {
+    const tool = [item.server, item.tool, item.name]
+      .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+      .join(' · ')
+    const args = item.arguments ?? item.args ?? item.input
+    let parsedArgs = args
+    if (typeof args === 'string' && args.length < 20_000) {
+      try { parsedArgs = JSON.parse(args) } catch { parsedArgs = null }
+    }
+    const paths = operationPaths(parsedArgs)
+    const toolType = tool.toLowerCase()
+    const isTerminalHandoff = toolType.includes('devwisp_terminal') || toolType.includes('code_remote_terminal')
+    const isSearch = /search|find|grep|query/.test(toolType)
+    const isFile = /read|file|directory|folder|list/.test(toolType)
+    const skillName = parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs)
+      ? ['skill', 'skill_name', 'skillName'].map((key) => (parsedArgs as Record<string, unknown>)[key])
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : undefined
+    const isSkill = /skill/.test(toolType)
+    const label = isTerminalHandoff
+      ? /interrupt_command/.test(toolType) ? '中断远端命令' : /read_terminal/.test(toolType) ? '读取远端终端' : '在远端终端执行'
+      : isSkill ? '读取技能' : isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
+    const pathSummary = paths.length > 0
+      ? `${paths.slice(0, 3).join('、')}${paths.length > 3 ? ` 等 ${paths.length} 个路径` : ''}`
+      : ''
+    const detail = safeOperationDetail(isTerminalHandoff && typeof item.terminalCommand === 'string'
+      ? item.terminalCommand
+      : isSkill ? skillName?.trim() || tool
+        : [tool, pathSummary].filter(Boolean).join(' · '))
+    const terminalOutput = isTerminalHandoff && typeof item.terminalOutput === 'string'
+      ? item.terminalOutput.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').slice(-8_000)
+      : ''
+    return { id, kind: isTerminalHandoff ? 'command' : isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), ...(paths.length > 0 ? { paths } : {}), ...(terminalOutput ? { terminalOutput } : {}), status }
+  }
+
+  if (itemType === 'websearch') {
+    const query = typeof item.query === 'string' ? item.query : ''
+    const detail = safeOperationDetail(query)
+    return { id, kind: 'search', label: '搜索资料', ...(detail ? { detail } : {}), status }
+  }
+
+  if (itemType === 'imageview') {
+    const imagePath = operationPaths(item)[0]
+    const detail = safeOperationDetail(imagePath ?? '')
+    return { id, kind: 'tool', label: '查看图片', ...(imagePath ? { imagePath } : {}), ...(detail ? { detail } : {}), status }
+  }
+  if (itemType === 'imagegeneration') return { id, kind: 'tool', label: '生成图片', status }
+  if (itemType === 'subagentactivity') return { id, kind: 'tool', label: '运行子任务', status }
+  return null
+}
+
+function upsertTurnOperation(current: CodexOperation[], operation: CodexOperation[]) {
+  let next = current
+  for (const item of operation) {
+    const index = next.findIndex((entry) => entry.id === item.id)
+    if (index < 0) next = [...next, item]
+    else if (next[index] !== item) {
+      const previous = next[index]
+      const merged = !item.steps?.length && previous.steps?.length ? { ...item, steps: previous.steps } : item
+      next = next.map((entry, entryIndex) => entryIndex === index ? merged : entry)
+    }
+  }
+  return next.length > maxOperationsPerTurn ? next.slice(-maxOperationsPerTurn) : next
+}
+
+function withTurnOperation(current: OperationsByTurn, turnId: string, operation: CodexOperation) {
+  const next = {
+    ...current,
+    [turnId]: upsertTurnOperation(current[turnId] ?? [], [operation]),
+  }
+  const turnIds = Object.keys(next)
+  if (turnIds.length <= maxOperationHistoryTurns) return next
+  return Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, next[id]]))
+}
+
+function mergeOperationsByTurn(current: OperationsByTurn, incoming: OperationsByTurn): OperationsByTurn {
+  let merged = incoming
+  for (const [turnId, operations] of Object.entries(current)) {
+    const historical = merged[turnId] ?? []
+    const cachedWithHistoricalSteps = operations.map((operation) => {
+      if (operation.steps?.length) return operation
+      const historicalOperation = historical.find((entry) => entry.id === operation.id)
+      return historicalOperation?.steps?.length
+        ? { ...operation, steps: historicalOperation.steps }
+        : operation
+    })
+    const next = upsertTurnOperation(historical, cachedWithHistoricalSteps)
+    if (merged === incoming) merged = { ...incoming }
+    merged[turnId] = next
+  }
+  const turnIds = Object.keys(merged)
+  return turnIds.length > maxOperationHistoryTurns
+    ? Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, merged[id]]))
+    : merged
+}
+
+function operationsFromThread(thread: { turns?: unknown[] }): OperationsByTurn {
+  const turns = Array.isArray(thread.turns) ? thread.turns.slice(-maxOperationHistoryTurns) : []
+  return turns.reduce<OperationsByTurn>((groups, turnValue, index) => {
+    if (!turnValue || typeof turnValue !== 'object') return groups
+    const turn = turnValue as Record<string, unknown>
+    const turnId = typeof turn.id === 'string' ? turn.id : `history-turn-${index}`
+    const items = Array.isArray(turn.items) ? turn.items : []
+    const operations = items.flatMap((item) => {
+      const operation = operationForItem(item)
+      return operation ? [operation] : []
+    })
+    if (operations.length > 0) groups[turnId] = upsertTurnOperation([], operations)
+    return groups
+  }, {})
+}
+
+function assistantItemText(value: unknown) {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value.map((part) => {
+    if (!part || typeof part !== 'object') return ''
+    const text = (part as Record<string, unknown>).text
+    return typeof text === 'string' ? text : ''
+  }).join('')
+}
+
+function assistantSnapshotItemsForStreamSegment(thread: CodexThreadDetails, turnId: string) {
+  const turn = thread.turns?.find((candidate) => candidate && typeof candidate === 'object'
+    && (candidate as Record<string, unknown>).id === turnId) as Record<string, unknown> | undefined
+  if (!turn || !Array.isArray(turn.items)) return null
+  const items = turn.items as Record<string, unknown>[]
+  let latestUserIndex = -1
+  items.forEach((item, index) => {
+    if (typeof item?.type === 'string' && item.type.replace(/[-_]/g, '').toLowerCase() === 'usermessage') {
+      latestUserIndex = index
+    }
+  })
+  const snapshotItems: AssistantStreamSnapshotItem[] = []
+  const earlierItemIds = new Set<string>()
+  items.forEach((item, index) => {
+    if (typeof item?.type !== 'string' || item.type.replace(/[-_]/g, '').toLowerCase() !== 'agentmessage'
+      || typeof item.id !== 'string') return
+    if (index < latestUserIndex) {
+      earlierItemIds.add(item.id)
+      return
+    }
+    const questions = parseStructuredAssistantQuestions(item.questions)
+    const text = assistantItemText(item.text)
+      || questions.map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n')).join('\n\n')
+    const status = typeof item.status === 'string' ? item.status.replace(/[-_]/g, '').toLowerCase() : ''
+    snapshotItems.push({
+      id: item.id,
+      text,
+      complete: !['active', 'inprogress', 'running', 'started', 'streaming'].includes(status),
+    })
+  })
+  return { snapshotItems, earlierItemIds }
+}
+
+function activityTimelineEntryKey(entry: CodexActivityTimelineEntry) {
+  return entry.type === 'message' ? `message:${entry.itemId}` : `operation:${entry.operationId}`
+}
+
+function withTurnActivityEntry(
+  current: ActivityTimelineByTurn,
+  turnId: string,
+  incoming: CodexActivityTimelineEntry,
+) {
+  const commit = (entries: CodexActivityTimelineEntry[]) => {
+    const next = { ...current, [turnId]: entries }
+    const turnIds = Object.keys(next)
+    return turnIds.length > maxOperationHistoryTurns
+      ? Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, next[id]]))
+      : next
+  }
+  const previous = current[turnId] ?? []
+  const key = activityTimelineEntryKey(incoming)
+  const index = previous.findIndex((entry) => activityTimelineEntryKey(entry) === key)
+  if (index >= 0) {
+    const old = previous[index]
+    const nextEntry = old.type === 'message' && incoming.type === 'message'
+      ? { ...old, length: Math.max(old.length, incoming.length) }
+      : incoming
+    if (old.type === nextEntry.type
+      && (old.type === 'message' && nextEntry.type === 'message' && old.length === nextEntry.length
+        || old.type === 'operation' && nextEntry.type === 'operation' && old.itemId === nextEntry.itemId)) return current
+    return commit(previous.map((entry, entryIndex) => entryIndex === index ? nextEntry : entry))
+  }
+  const entries = [...previous, incoming]
+  return commit(entries.length > maxActivityTimelineEntriesPerTurn
+    ? entries.slice(-maxActivityTimelineEntriesPerTurn)
+    : entries)
+}
+
+function mergeActivityTimelineByTurn(incoming: ActivityTimelineByTurn, current: ActivityTimelineByTurn, preserveTurnId: string | null = null): ActivityTimelineByTurn {
+  let merged: ActivityTimelineByTurn = { ...incoming }
+  const canRetainAllCurrent = Object.keys(incoming).length === 0
+  for (const [turnId, entries] of Object.entries(current)) {
+    if (!merged[turnId] && !canRetainAllCurrent && turnId !== preserveTurnId) continue
+    for (const entry of entries) {
+      merged = withTurnActivityEntry(merged, turnId, entry)
+    }
+  }
+  const turnIds = Object.keys(merged)
+  return turnIds.length > maxOperationHistoryTurns
+    ? Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, merged[id]]))
+    : merged
+}
+
+function activityTimelineFromThread(thread: { turns?: unknown[] }): ActivityTimelineByTurn {
+  const turns = Array.isArray(thread.turns) ? thread.turns.slice(-maxOperationHistoryTurns) : []
+  return turns.reduce<ActivityTimelineByTurn>((groups, turnValue, turnIndex) => {
+    if (!turnValue || typeof turnValue !== 'object') return groups
+    const turn = turnValue as Record<string, unknown>
+    const turnId = typeof turn.id === 'string' ? turn.id : `history-turn-${turnIndex}`
+    const items = Array.isArray(turn.items) ? turn.items : []
+    let timeline: CodexActivityTimelineEntry[] = []
+    for (const [itemIndex, itemValue] of items.entries()) {
+      if (!itemValue || typeof itemValue !== 'object') continue
+      const item = itemValue as Record<string, unknown>
+      const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      const itemId = typeof item.id === 'string' && item.id ? item.id : `history-${turnId}-${itemIndex}`
+      if (itemType === 'agentmessage') {
+        const length = typeof item.length === 'number' && Number.isFinite(item.length)
+          ? Math.max(0, item.length) : assistantItemText(item.text).length
+        if (length > 0) timeline.push({ type: 'message', itemId, length })
+        continue
+      }
+      const operation = operationForItem(item)
+      if (operation) timeline.push({ type: 'operation', itemId, operationId: operation.id })
+    }
+    if (timeline.length > maxActivityTimelineEntriesPerTurn) timeline = timeline.slice(-maxActivityTimelineEntriesPerTurn)
+    if (timeline.length > 0) groups[turnId] = timeline
+    return groups
+  }, {})
+}
+
+function finishTurnOperations(current: OperationsByTurn, turnId: string, status: CodexOperationStatus): OperationsByTurn {
+  const operations = current[turnId]
+  if (!operations?.some((operation) => operation.status === 'running')) return current
+  return {
+    ...current,
+    [turnId]: operations.map((operation) => operation.status === 'running' ? { ...operation, status } : operation),
+  }
+}
+
+export function useDevWisp(token: string, onUnauthorized: () => void, options: UseDevWispOptions = {}) {
+  const persistActiveThread = options.persistActiveThread ?? true
+  const enabled = options.enabled ?? true
+  const loadThreads = options.loadThreads ?? true
+  const loadModels = options.loadModels ?? true
+  const prefetchHistory = options.prefetchHistory ?? false
+  const [initialActiveThreadId] = useState(() => options.initialThreadId !== undefined
+    ? options.initialThreadId?.trim() || null
+    : persistActiveThread ? readPersistedActiveThreadId() : null)
+  const [initialCachedThread] = useState(() => persistActiveThread ? readPersistedActiveThreadCache(initialActiveThreadId) : null)
+  const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
+  const [runtime, setRuntime] = useState(emptyRuntime)
+  const [handedOff, setHandedOff] = useState(false)
+  const [handoffInProgress, setHandoffInProgress] = useState(false)
+  const [threads, setThreads] = useState<CodexThread[]>([])
+  const [models, setModels] = useState<CodexModel[]>([])
+  // Keep the saved thread ID available before its history has finished
+  // loading. This gives the composer a stable draft scope and lets a new turn
+  // start without waiting for a large thread/read response.
+  const [{ thread: activeThread, engine: activeEngine }, setActiveThread] = useReducer(
+    updateActiveThreadSelection,
+    null,
+    (): ActiveThreadSelection => {
+      const thread = initialCachedThread?.thread ?? (initialActiveThreadId
+        ? { id: initialActiveThreadId, ...(options.initialEngine ? { engine: options.initialEngine } : {}) }
+        : null)
+      return { thread, engine: thread ? engineOfThread(thread) : options.initialEngine ?? 'codex' }
+    },
+  )
+  const [messages, setMessages] = useState<CodexMessage[]>(() => initialCachedThread?.messages ?? [])
+  const activeThreadRef = useRef(activeThread)
+  activeThreadRef.current = activeThread
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+  const [isRunning, setIsRunning] = useState(false)
+  const isRunningRef = useRef(isRunning)
+  isRunningRef.current = isRunning
+  // This is intentionally state as well as a ref: the ref lets socket events
+  // make immediate decisions, while the state tells the UI which turn is not
+  // finished yet so in-progress file changes can be shown beside its reply.
+  const [runningTurnId, setRunningTurnId] = useState<string | null>(null)
+  const [isInterrupting, setIsInterrupting] = useState(false)
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
+  const turnStartedAtRef = useRef<number | null>(null)
+  const [activity, setActivity] = useState<CodexActivity | null>(null)
+  const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
+  const [operationsByTurn, setOperationsByTurn] = useState<OperationsByTurn>({})
+  const [activityTimelineByTurn, setActivityTimelineByTurn] = useState<ActivityTimelineByTurn>({})
+  const [writerConflict, setWriterConflict] = useState(false)
+  const [updatingApprovalPolicy, setUpdatingApprovalPolicy] = useState(false)
+  const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
+  const [error, setError] = useState<string | null>(null)
+  const [approval, setApproval] = useState<ApprovalRequest | null>(null)
+  const [claudePermissions, setClaudePermissions] = useState<ClaudePermissionRequest[]>([])
+  const claudePermissionRevision = useRef(0)
+  const refreshingClaudePermissions = useRef(false)
+  const claudePermission = claudePermissions[0] ?? null
+  const [completedThreadIds, setCompletedThreadIds] = useState<string[]>([])
+  const [latestThreadCompletion, setLatestThreadCompletion] = useState<CodexThreadCompletion | null>(null)
+  const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
+  const [serverQueuedMessagesByThread, setServerQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
+  const [pendingSubmittedByThread, setPendingSubmittedByThread] = useState<QueuedMessagesByThread>({})
+  const [queueRevision, setQueueRevision] = useState(0)
+  const serverQueuedMessagesByThreadRef = useRef<QueuedMessagesByThread>({})
+  const serverQueueFetchVersion = useRef(new Map<string, number>())
+  const pendingServerQueueRemovals = useRef(new Map<string, Set<string>>())
+  const [pinRevision, setPinRevision] = useState(0)
+  // A restored queue may start only after a fresh thread/read confirms that
+  // the matching Codex turn is idle. Cached UI alone is not authoritative.
+  const [queueRecoveryReadyThreadId, setQueueRecoveryReadyThreadId] = useState<string | null>(null)
+  const [queueEditRevision, setQueueEditRevision] = useState(0)
+  const socketRef = useRef<ReturnType<typeof devwispClient.connect> | null>(null)
+  const connectionRef = useRef<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
+  const reconnectRef = useRef<(force?: boolean) => void>(() => {})
+  const handedOffRef = useRef(false)
+  const activeThreadId = useRef<string | null>(initialActiveThreadId)
+  const activeTurnId = useRef<string | null>(null)
+  const interruptRequestedThreadId = useRef<string | null>(null)
+  const interruptRequestedTurnId = useRef<string | null>(null)
+  const interruptInFlightThreadId = useRef<string | null>(null)
+  const resumedThreadId = useRef<string | null>(null)
+  const loadRequest = useRef(0)
+  const historyRevision = useRef(0)
+  const historyReadSequence = useRef(0)
+  const liveTurnHistory = useRef(new ThreadLiveHistory())
+  const activityItemId = useRef<string | null>(null)
+  const operationsByTurnRef = useRef<OperationsByTurn>({})
+  const activityTimelineByTurnRef = useRef<ActivityTimelineByTurn>({})
+  const streamingAssistantMessageId = useRef<string | null>(null)
+  const streamingAssistantTurnId = useRef<string | null>(null)
+  const streamingAssistantParts = useRef(new Map<string, string>())
+  const streamingAssistantChoice = useRef<Pick<CodexMessage, 'questions' | 'choiceItemId' | 'choicePromptText' | 'choiceDelivery'> | null>(null)
+  const streamingCompletedItems = useRef(new Set<string>())
+  const retiredAssistantItems = useRef({ turnId: null as string | null, ids: new Set<string>() })
+  const turnDisplayPreferences = useRef(new Map<string, TurnDisplayPreferences>())
+  const observedUserItems = useRef(new Map<string, CodexMessage>())
+  const streamingRenderTimer = useRef<number | undefined>(undefined)
+  const streamingRenderGeneration = useRef(0)
+  const turnStartedAtById = useRef(new Map<string, number>())
+  const writerConflictRef = useRef(false)
+  const writerRefreshTimer = useRef<number | undefined>(undefined)
+  const lastWriterRefreshAt = useRef(0)
+  const appBackgroundRef = useRef<boolean | null>(null)
+  if (appBackgroundRef.current === null) {
+    try {
+      appBackgroundRef.current = window.DevWispAndroid?.isAppInBackground?.() ?? false
+    } catch {
+      appBackgroundRef.current = false
+    }
+  }
+  const isBackground = useCallback(() => appBackgroundRef.current || document.visibilityState === 'hidden', [])
+  const restoringThreadId = useRef<string | null>(null)
+  const deletedThreadIds = useRef(new Set<string>())
+  const threadListOverrides = useRef(new Map<string, CodexThread>())
+  const threadHistoryCache = useRef(new Map<string, ThreadCacheEntry>())
+  const pendingPersistentThreadCache = useRef(new Map<string, ThreadCacheEntry>())
+  const persistentThreadCacheTimers = useRef(new Map<string, number>())
+  const persistentThreadCacheKnown = useRef(new Map<string, { lastAccessedAt: number; sizeBytes: number }>())
+  const threadListRef = useRef<CodexThread[]>([])
+  const threadListLoadedRef = useRef(false)
+  const threadListFetchedAtRef = useRef(0)
+  const threadListRequest = useRef<Promise<CodexThread[] | null> | null>(null)
+  const pendingThreadHistoryRefresh = useRef(new Set<string>())
+  const threadHistoryGaps = useRef(new Set<string>())
+  const prefetchingThreadIds = useRef(new Set<string>())
+  const forcedPrefetchThreadIds = useRef(new Set<string>())
+  const threadPrefetchTimer = useRef<number | undefined>(undefined)
+  const cachedActiveThreadRefreshTimer = useRef<number | undefined>(undefined)
+  const liveHistoryRefresh = useRef({ timer: undefined as number | undefined, inFlight: false, dirty: false, mounted: true, generation: 0 })
+  useEffect(() => {
+    const state = liveHistoryRefresh.current
+    state.mounted = true
+    state.inFlight = false
+    state.dirty = false
+    liveTurnHistory.current = new ThreadLiveHistory()
+    return () => {
+      state.mounted = false
+      state.generation++
+      if (state.timer !== undefined) window.clearTimeout(state.timer)
+      state.timer = undefined
+    }
+  }, [token])
+  const queuedMessagesByThreadRef = useRef<QueuedMessagesByThread>(queuedMessagesByThread)
+  const queueControllerId = useRef(queuedMessageId())
+  const queueRecoveryBarriers = useRef<QueueRecoveryBarriers | null>(null)
+  if (queueRecoveryBarriers.current === null) {
+    queueRecoveryBarriers.current = readPersistedQueueRecoveryBarriers(queuedMessagesByThread)
+  }
+  const queuedTurnStartsInFlight = useRef(new Set<string>())
+  const queuedTurnSteersInFlight = useRef(new Set<string>())
+  const pendingTurnDeliveries = useRef(new Map<string, PendingTurnDelivery>())
+  const editingQueuedMessageByThread = useRef<Record<string, string>>({})
+  const editingQueuedMessageThreadById = useRef(new Map<string, string>())
+  const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
+
+  useEffect(() => {
+    if (!sharedQueueAuthoritative) return
+    const timer = window.setInterval(() => {
+      for (const [messageId, threadId] of editingQueuedMessageThreadById.current) {
+        void devwispClient.renewQueuedEdit(token, threadId, messageId, queueControllerId.current).catch(() => {})
+      }
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [token])
+
+  useEffect(() => {
+    socketRef.current?.subscribeThread(isBackground() ? null : activeThread?.id ?? null)
+  }, [activeThread?.id, isBackground])
+
+  const publishServerQueue = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
+    serverQueuedMessagesByThreadRef.current = { ...serverQueuedMessagesByThreadRef.current, [threadId]: queue }
+    const pendingRemovals = pendingServerQueueRemovals.current.get(threadId)
+    const visibleQueue = visibleQueuedMessages(queue, pendingRemovals)
+    setServerQueuedMessagesByThread((current) => ({ ...current, [threadId]: visibleQueue }))
+  }, [])
+
+  const applyServerQueueResponse = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
+    serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
+    publishServerQueue(threadId, queue)
+    setQueueRevision((revision) => revision + 1)
+  }, [publishServerQueue])
+
+  const refreshServerQueue = useCallback(async (threadId: string) => {
+    if (isBackground()) return
+    const revision = (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1
+    serverQueueFetchVersion.current.set(threadId, revision)
+    try {
+      const result = await devwispClient.queuedMessages(token, threadId)
+      if (serverQueueFetchVersion.current.get(threadId) !== revision) return
+      publishServerQueue(threadId, result.queue)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (reason instanceof RemoteApiError && reason.status === 404) {
+        setError('电脑端服务尚未加载共享排队接口，请重启 Dev Wisp 后端。')
+      }
+    }
+  }, [isBackground, onUnauthorized, publishServerQueue, token])
+
+  useEffect(() => {
+    if (!enabled || !activeThread?.id) return
+    void refreshServerQueue(activeThread.id)
+  }, [activeThread?.id, enabled, refreshServerQueue])
+
+  useEffect(() => {
+    if (!enabled || !persistActiveThread) return
+    let disposed = false
+    void (async () => {
+      const legacy = readPersistedQueuedMessages()
+      const barriers = readPersistedQueueRecoveryBarriers(legacy)
+      try {
+        for (const [threadId, entries] of Object.entries(legacy)) {
+          for (const [index, entry] of entries.entries()) {
+            const unsafeRecovery = index === 0 && barriers[threadId]?.status !== 'running'
+            const migrated = unsafeRecovery && !entry.sendAttempt
+              ? { ...entry, sendAttempt: { at: entry.createdAt } }
+              : entry
+            await devwispClient.enqueueMessage(token, threadId, migrated)
+          }
+          if (!disposed) void refreshServerQueue(threadId)
+        }
+        window.localStorage.removeItem(queuedMessagesStorageKey)
+        window.localStorage.removeItem(queuedRecoveryStorageKey)
+      } catch (reason) {
+        if (!disposed) setError(reason instanceof Error ? `旧排队消息迁移失败：${reason.message}` : '旧排队消息迁移失败')
+      }
+    })()
+    return () => { disposed = true }
+  }, [enabled, onUnauthorized, persistActiveThread, refreshServerQueue, token])
+
+  useEffect(() => {
+    const threadId = activeThread?.id
+    if (!enabled || !threadId) return
+    const owners = activeQueueControllers.get(threadId) ?? new Set<string>()
+    owners.add(queueControllerId.current)
+    activeQueueControllers.set(threadId, owners)
+    return () => {
+      owners.delete(queueControllerId.current)
+      if (owners.size === 0) activeQueueControllers.delete(threadId)
+    }
+  }, [activeThread?.id, enabled])
+
+  useEffect(() => {
+    const syncQueue = (event: Event) => {
+      const change = (event as CustomEvent<QueuedThreadStateChange>).detail
+      if (!change || change.origin === queueControllerId.current) return
+      const next = { ...queuedMessagesByThreadRef.current }
+      if (change.messages.length > 0) next[change.threadId] = change.messages
+      else delete next[change.threadId]
+      queuedMessagesByThreadRef.current = next
+      setQueuedMessagesByThread(next)
+      const barriers = { ...(queueRecoveryBarriers.current ?? {}) }
+      if (change.messages.length > 0 && change.barrier) barriers[change.threadId] = change.barrier
+      else delete barriers[change.threadId]
+      queueRecoveryBarriers.current = barriers
+    }
+    window.addEventListener(queuedThreadStateChangedEvent, syncQueue)
+    return () => window.removeEventListener(queuedThreadStateChangedEvent, syncQueue)
+  }, [])
+
+  const setActiveTurnId = useCallback((turnId: string | null) => {
+    activeTurnId.current = turnId
+    setRunningTurnId((current) => current === turnId ? current : turnId)
+  }, [])
+
+  const setHandoffState = useCallback((next: boolean) => {
+    handedOffRef.current = next
+    setHandedOff(next)
+  }, [])
+
+  const setConnectionState = useCallback((next: 'connecting' | 'connected' | 'disconnected' | 'unavailable') => {
+    connectionRef.current = next
+    setConnection(next)
+  }, [])
+
+  const setQueueRecoveryBarrier = useCallback((threadId: string, barrier: QueueRecoveryBarrier | null) => {
+    const next = { ...(queueRecoveryBarriers.current ?? {}) }
+    if (barrier) next[threadId] = barrier
+    else delete next[threadId]
+    queueRecoveryBarriers.current = next
+    persistQueuedThreadState({
+      origin: queueControllerId.current,
+      threadId,
+      messages: queuedMessagesByThreadRef.current[threadId] ?? [],
+      barrier,
+    })
+  }, [])
+
+  const updateQueuedMessages = useCallback((threadId: string, update: (current: QueuedTurnPayload[]) => QueuedTurnPayload[]) => {
+    const current = queuedMessagesByThreadRef.current[threadId] ?? []
+    const next = update(current)
+    if (next === current) return current
+    const nextByThread = { ...queuedMessagesByThreadRef.current }
+    if (next.length > 0) nextByThread[threadId] = next
+    else {
+      delete nextByThread[threadId]
+      deferredQueueAdvanceAfterEdit.current.delete(threadId)
+      const nextBarriers = { ...(queueRecoveryBarriers.current ?? {}) }
+      delete nextBarriers[threadId]
+      queueRecoveryBarriers.current = nextBarriers
+    }
+    queuedMessagesByThreadRef.current = nextByThread
+    setQueuedMessagesByThread(nextByThread)
+    persistQueuedThreadState({
+      origin: queueControllerId.current,
+      threadId,
+      messages: next,
+      barrier: queueRecoveryBarriers.current?.[threadId] ?? null,
+    })
+    return next
+  }, [])
+
+  const recordQueuedSendAttempt = useCallback((threadId: string, messageId: string, inTurnId?: string | null) => {
+    const history = activeThreadId.current === threadId
+      ? messagesRef.current
+      : threadHistoryCache.current.get(threadId)?.messages ?? []
+    const previous = [...history].reverse().find((message) => message.turnId && !message.id.startsWith('queued-'))
+    const anchor = [...history].reverse().find((message) => !message.id.startsWith('queued-') && !message.id.startsWith('streaming-'))
+    const attempt = {
+      at: new Date().toISOString(),
+      ...(inTurnId ? { inTurnId } : previous?.turnId ? { afterTurnId: previous.turnId } : {}),
+      ...(anchor ? { afterMessageId: anchor.id } : {}),
+    }
+    updateQueuedMessages(threadId, (current) => current.map((message) => message.id === messageId
+      ? { ...message, sendAttempt: message.sendAttempt ?? attempt }
+      : message))
+  }, [updateQueuedMessages])
+
+  const reconcileQueuedHistory = useCallback((threadId: string, historyMessages: CodexMessage[]) => {
+    const deliveredIds = deliveredQueuedMessageIdsFromHistory(queuedMessagesByThreadRef.current[threadId] ?? [], historyMessages)
+    if (deliveredIds.size > 0) {
+      updateQueuedMessages(threadId, (current) => current.filter((message) => !deliveredIds.has(message.id)))
+    }
+    return deliveredIds
+  }, [updateQueuedMessages])
+
+  const beginTurnTimer = useCallback((startedAt: number) => {
+    turnStartedAtRef.current = startedAt
+    setTurnStartedAt(startedAt)
+  }, [])
+
+  const finishTurnTimer = useCallback(() => {
+    turnStartedAtRef.current = null
+    setTurnStartedAt(null)
+  }, [])
+
+  const clearTurnTimer = useCallback(() => {
+    turnStartedAtRef.current = null
+    setTurnStartedAt(null)
+  }, [])
+
+  const startTurnTimerForTurn = useCallback((turnId: string | null, historyStartedAt: number | null = null) => {
+    const savedStartedAt = turnId
+      ? turnStartedAtById.current.get(turnId)
+      : turnStartedAtRef.current ?? undefined
+    const startedAt = resolveTurnStartedAt(historyStartedAt, savedStartedAt)
+    if (turnId) turnStartedAtById.current.set(turnId, startedAt)
+    beginTurnTimer(startedAt)
+  }, [beginTurnTimer])
+
+  const resetStreamingAssistant = useCallback((keepRetiredItems = false) => {
+    streamingRenderGeneration.current += 1
+    if (streamingRenderTimer.current !== undefined) {
+      window.clearTimeout(streamingRenderTimer.current)
+      streamingRenderTimer.current = undefined
+    }
+    streamingAssistantMessageId.current = null
+    streamingAssistantTurnId.current = null
+    streamingAssistantParts.current.clear()
+    streamingAssistantChoice.current = null
+    streamingCompletedItems.current.clear()
+    if (!keepRetiredItems) {
+      retiredAssistantItems.current = { turnId: null, ids: new Set() }
+      observedUserItems.current.clear()
+    }
+  }, [])
+
+  const retireAssistantItems = useCallback((turnId: string, itemIds: Iterable<string>) => {
+    if (retiredAssistantItems.current.turnId !== turnId) {
+      retiredAssistantItems.current = { turnId, ids: new Set() }
+    }
+    for (const itemId of itemIds) retiredAssistantItems.current.ids.add(itemId)
+  }, [])
+
+  const addFileChangeToTurn = useCallback((turnId: string | null, fileChange: CodexFileChange) => {
+    if (!turnId) return
+    setFileChangesByTurn((current) => {
+      return mergeFileChangesByTurn(current, { [turnId]: [fileChange] })
+    })
+  }, [])
+
+  const flushStreamingAssistant = useCallback((synchronous = false, turnId = activeTurnId.current) => {
+    if (streamingRenderTimer.current !== undefined) {
+      window.clearTimeout(streamingRenderTimer.current)
+      streamingRenderTimer.current = undefined
+    }
+    const messageId = streamingAssistantMessageId.current
+    const text = streamingAssistantText(streamingAssistantParts.current)
+    const completedText = completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current)
+    const choice = streamingAssistantChoice.current
+    if (!messageId || !text) return
+    const startedAt = turnId ? turnStartedAtById.current.get(turnId) : undefined
+    const replyStartedAt = new Date(startedAt ?? Date.now()).toISOString()
+    const renderGeneration = streamingRenderGeneration.current
+    const update = () => {
+      setMessages((current) => {
+        // A delayed transition from a previous turn must never recreate an
+        // assistant bubble after the active thread has already changed.
+        if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
+        const collapsed = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt, completedText)
+        const withPreferences = applyTurnDisplayPreferences(collapsed, turnId, turnDisplayPreferences.current.get(turnId ?? ''))
+        const next = choice ? withPreferences.map((message) => message.id === messageId ? { ...message, ...choice } : message) : withPreferences
+        const tail = current.at(-1)
+        if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) return next
+        return sameMessages(current, next) ? current : next
+      })
+    }
+    if (synchronous) update()
+    else startTransition(update)
+  }, [])
+
+  const finalizeVisibleStreamingTurn = useCallback((
+    turnId: string | null,
+    completedAt = Date.now(),
+    recordDuration = true,
+    replyError?: string,
+  ) => {
+    const streamTurnId = streamingAssistantTurnId.current
+    const targetTurnId = turnId ?? streamTurnId
+    if (!targetTurnId
+      || (streamTurnId && streamTurnId !== targetTurnId)
+      || (!streamTurnId && activeTurnId.current && activeTurnId.current !== targetTurnId)) return
+    const messageId = streamingAssistantMessageId.current
+    flushStreamingAssistant(true, targetTurnId)
+    retireAssistantItems(targetTurnId, streamingAssistantParts.current.keys())
+    retireAssistantItems(targetTurnId, (activityTimelineByTurnRef.current[targetTurnId] ?? [])
+      .filter((entry) => entry.type === 'message').map((entry) => entry.itemId))
+    const recordedStart = turnStartedAtById.current.get(targetTurnId)
+    const finalizedActivityTimeline = activityTimelineByTurnRef.current
+    setActivityTimelineByTurn((current) => current === finalizedActivityTimeline ? current : finalizedActivityTimeline)
+    setMessages((current) => {
+      const next = current.map((message) => {
+        const matches = message.streaming
+          && message.role === 'assistant'
+          && (message.id === messageId || message.turnId === targetTurnId)
+        if (!matches) return message
+        const messageStart = message.replyStartedAt ? Date.parse(message.replyStartedAt) : Number.NaN
+        const startedAt = recordedStart ?? (Number.isNaN(messageStart) ? undefined : messageStart)
+        return {
+          ...message,
+          streaming: false,
+          ...(replyError ? { replyError } : {}),
+          ...(startedAt !== undefined ? {
+            replyStartedAt: message.replyStartedAt ?? new Date(startedAt).toISOString(),
+            ...(recordDuration ? { replyDurationMs: Math.max(0, completedAt - startedAt) } : {}),
+          } : {}),
+          ...(message.turnId || !targetTurnId ? {} : { turnId: targetTurnId }),
+        }
+      })
+      return sameMessages(current, next) ? current : next
+    })
+    turnStartedAtById.current.delete(targetTurnId)
+    resetStreamingAssistant(true)
+  }, [flushStreamingAssistant, resetStreamingAssistant, retireAssistantItems])
+
+  const scheduleStreamingAssistantRender = useCallback(() => {
+    if (streamingRenderTimer.current !== undefined) return
+    streamingRenderTimer.current = window.setTimeout(() => {
+      streamingRenderTimer.current = undefined
+      flushStreamingAssistant()
+    }, streamingRenderIntervalMs)
+  }, [flushStreamingAssistant])
+
+  const rememberPersistentThreadCache = useCallback((threadId: string, sizeBytes: number) => {
+    const known = persistentThreadCacheKnown.current
+    known.delete(threadId)
+    known.set(threadId, { lastAccessedAt: Date.now(), sizeBytes })
+    const recent = [...known.entries()].sort((left, right) => right[1].lastAccessedAt - left[1].lastAccessedAt)
+    let totalBytes = 0
+    let retainedCount = 0
+    for (const [id, record] of recent) {
+      if (retainedCount >= threadHistoryCacheMaxEntries || totalBytes + record.sizeBytes > threadHistoryCacheMaxBytes) {
+        known.delete(id)
+      } else {
+        retainedCount += 1
+        totalBytes += record.sizeBytes
+      }
+    }
+  }, [])
+
+  const writePersistentThreadCacheEntry = useCallback((threadId: string, entry: ThreadCacheEntry) => {
+    const snapshot: PersistedThreadCacheSnapshot = { version: persistentThreadCacheVersion, entry }
+    const sizeBytes = serializedCacheSizeBytes(snapshot)
+    if (sizeBytes <= 0) {
+      if (pendingPersistentThreadCache.current.get(threadId) === entry) pendingPersistentThreadCache.current.delete(threadId)
+      return
+    }
+    if (sizeBytes > threadHistoryCacheMaxBytes) {
+      if (pendingPersistentThreadCache.current.get(threadId) === entry) pendingPersistentThreadCache.current.delete(threadId)
+      return
+    }
+    void writeThreadHistoryCache(threadId, snapshot, sizeBytes).then((stored) => {
+      if (stored) {
+        rememberPersistentThreadCache(threadId, sizeBytes)
+        if (pendingPersistentThreadCache.current.get(threadId) === entry) {
+          pendingPersistentThreadCache.current.delete(threadId)
+        }
+      }
+    })
+  }, [rememberPersistentThreadCache])
+
+  const schedulePersistentThreadCacheWrite = useCallback((threadId: string, entry: ThreadCacheEntry) => {
+    if (!entry.complete || typeof window === 'undefined') return
+    pendingPersistentThreadCache.current.set(threadId, entry)
+    const pendingCharacters = () => [...pendingPersistentThreadCache.current.values()].reduce((total, candidate) => total + candidate.characters, 0)
+    while (pendingPersistentThreadCache.current.size > threadHistoryCacheMaxEntries
+      || pendingCharacters() * 2 > threadHistoryCacheMaxBytes) {
+      const oldest = [...pendingPersistentThreadCache.current.keys()].find((candidate) => candidate !== activeThreadId.current)
+        ?? pendingPersistentThreadCache.current.keys().next().value
+      if (!oldest) break
+      pendingPersistentThreadCache.current.delete(oldest)
+      const oldTimer = persistentThreadCacheTimers.current.get(oldest)
+      if (oldTimer !== undefined) window.clearTimeout(oldTimer)
+      persistentThreadCacheTimers.current.delete(oldest)
+    }
+    const previousTimer = persistentThreadCacheTimers.current.get(threadId)
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer)
+    const timer = window.setTimeout(() => {
+      persistentThreadCacheTimers.current.delete(threadId)
+      const latest = pendingPersistentThreadCache.current.get(threadId)
+      if (latest) writePersistentThreadCacheEntry(threadId, latest)
+    }, persistentThreadCacheWriteDelayMs)
+    persistentThreadCacheTimers.current.set(threadId, timer)
+  }, [writePersistentThreadCacheEntry])
+
+  useEffect(() => {
+    const flushPendingThreadCacheWrites = () => {
+      for (const [threadId, entry] of pendingPersistentThreadCache.current) {
+        const timer = persistentThreadCacheTimers.current.get(threadId)
+        if (timer !== undefined) window.clearTimeout(timer)
+        persistentThreadCacheTimers.current.delete(threadId)
+        writePersistentThreadCacheEntry(threadId, entry)
+      }
+    }
+    window.addEventListener('pagehide', flushPendingThreadCacheWrites)
+    document.addEventListener('visibilitychange', flushPendingThreadCacheWrites)
+    return () => {
+      window.removeEventListener('pagehide', flushPendingThreadCacheWrites)
+      document.removeEventListener('visibilitychange', flushPendingThreadCacheWrites)
+    }
+  }, [writePersistentThreadCacheEntry])
+
+  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Partial<Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn' | 'operationsByTurn' | 'activityTimelineByTurn' | 'complete'>>) => {
+    if (deletedThreadIds.current.has(thread.id)) return
+    const characters = cachedHistoryCharacters(nextMessages)
+    const cache = threadHistoryCache.current
+    const previous = cache.get(thread.id) ?? pendingPersistentThreadCache.current.get(thread.id)
+    const entry: ThreadCacheEntry = {
+      thread: compactThread(thread),
+      messages: nextMessages,
+      fileChangesByTurn: state?.fileChangesByTurn ?? previous?.fileChangesByTurn ?? {},
+      operationsByTurn: state?.operationsByTurn ?? previous?.operationsByTurn ?? {},
+      activityTimelineByTurn: state?.activityTimelineByTurn ?? previous?.activityTimelineByTurn ?? {},
+      running: state?.running ?? previous?.running ?? threadIsRunning(thread),
+      turnId: state?.turnId ?? previous?.turnId ?? null,
+      characters,
+      complete: state?.complete ?? previous?.complete ?? persistentThreadCacheKnown.current.has(thread.id),
+    }
+    schedulePersistentThreadCacheWrite(thread.id, entry)
+    if (characters > maxInMemoryThreadCacheCharacters) return
+    cache.delete(thread.id)
+    cache.set(thread.id, entry)
+
+    let totalCharacters = [...cache.values()].reduce((total, entry) => total + entry.characters, 0)
+    while (cache.size > maxInMemoryThreadCacheEntries || totalCharacters > maxInMemoryThreadCacheCharacters) {
+      const entries = [...cache.entries()]
+      const oldest = entries.find(([threadId]) => threadId !== activeThreadId.current) ?? entries[0]
+      if (!oldest) break
+      cache.delete(oldest[0])
+      totalCharacters -= oldest[1].characters
+    }
+  }, [schedulePersistentThreadCacheWrite])
+
+  const restorePersistentThreadCache = useCallback(async (threadId: string) => {
+    const snapshot = await readThreadHistoryCache<PersistedThreadCacheSnapshot>(threadId)
+    if (!snapshot || snapshot.version !== persistentThreadCacheVersion || !isThreadCacheEntry(snapshot.entry, threadId)) return null
+    const entry = snapshot.entry
+    const restored: ThreadCacheEntry = {
+      ...entry,
+      activityTimelineByTurn: entry.activityTimelineByTurn ?? {},
+      thread: compactThread(entry.thread),
+      characters: cachedHistoryCharacters(entry.messages),
+      complete: true,
+    }
+    const sizeBytes = serializedCacheSizeBytes(snapshot)
+    if (sizeBytes > 0) rememberPersistentThreadCache(threadId, sizeBytes)
+    cacheThreadSnapshot(restored.thread, restored.messages, {
+      running: restored.running,
+      turnId: restored.turnId,
+      fileChangesByTurn: restored.fileChangesByTurn,
+      operationsByTurn: restored.operationsByTurn,
+      activityTimelineByTurn: restored.activityTimelineByTurn,
+      complete: true,
+    })
+    return threadHistoryCache.current.get(threadId) ?? restored
+  }, [cacheThreadSnapshot, rememberPersistentThreadCache])
+
+  const commitTurnOperation = useCallback((threadId: string | null, turnId: string | null, operation: CodexOperation) => {
+    if (!threadId || !turnId) return
+    const timelineEntry: CodexActivityTimelineEntry = { type: 'operation', itemId: operation.id, operationId: operation.id }
+    if (threadId === activeThreadId.current) {
+      const next = withTurnOperation(operationsByTurnRef.current, turnId, operation)
+      const nextTimeline = withTurnActivityEntry(activityTimelineByTurnRef.current, turnId, timelineEntry)
+      operationsByTurnRef.current = next
+      activityTimelineByTurnRef.current = nextTimeline
+      setOperationsByTurn(next)
+      setActivityTimelineByTurn(nextTimeline)
+      const cached = threadHistoryCache.current.get(threadId)
+      if (cached) cacheThreadSnapshot(cached.thread, cached.messages, {
+        running: cached.running,
+        turnId: cached.turnId,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: next,
+        activityTimelineByTurn: nextTimeline,
+      })
+      return
+    }
+    const cached = threadHistoryCache.current.get(threadId)
+    if (!cached) return
+    const next = withTurnOperation(cached.operationsByTurn, turnId, operation)
+    const nextTimeline = withTurnActivityEntry(cached.activityTimelineByTurn, turnId, timelineEntry)
+    cacheThreadSnapshot(cached.thread, cached.messages, {
+      running: cached.running,
+      turnId: cached.turnId,
+      fileChangesByTurn: cached.fileChangesByTurn,
+      operationsByTurn: next,
+      activityTimelineByTurn: nextTimeline,
+    })
+  }, [cacheThreadSnapshot])
+
+  const commitTurnActivityMessage = useCallback((threadId: string | null, turnId: string | null, itemId: string, length: number, renderImmediately = true) => {
+    if (!threadId || !turnId || !itemId) return
+    const entry: CodexActivityTimelineEntry = { type: 'message', itemId, length }
+    if (threadId === activeThreadId.current) {
+      const next = withTurnActivityEntry(activityTimelineByTurnRef.current, turnId, entry)
+      if (next === activityTimelineByTurnRef.current) return
+      activityTimelineByTurnRef.current = next
+      if (renderImmediately) setActivityTimelineByTurn(next)
+      return
+    }
+    const cached = threadHistoryCache.current.get(threadId)
+    if (!cached) return
+    const next = withTurnActivityEntry(cached.activityTimelineByTurn, turnId, entry)
+    if (next === cached.activityTimelineByTurn) return
+    cacheThreadSnapshot(cached.thread, cached.messages, {
+      running: cached.running,
+      turnId: cached.turnId,
+      fileChangesByTurn: cached.fileChangesByTurn,
+      operationsByTurn: cached.operationsByTurn,
+      activityTimelineByTurn: next,
+    })
+  }, [cacheThreadSnapshot])
+
+  const finalizeTurnOperations = useCallback((threadId: string | null, turnId: string | null, status: CodexOperationStatus) => {
+    if (!threadId || !turnId) return
+    if (threadId === activeThreadId.current) {
+      const next = finishTurnOperations(operationsByTurnRef.current, turnId, status)
+      if (next === operationsByTurnRef.current) return
+      operationsByTurnRef.current = next
+      setOperationsByTurn(next)
+      const cached = threadHistoryCache.current.get(threadId)
+      if (cached) cacheThreadSnapshot(cached.thread, cached.messages, {
+        running: false,
+        turnId: null,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: next,
+      })
+      return
+    }
+    const cached = threadHistoryCache.current.get(threadId)
+    if (!cached) return
+    const next = finishTurnOperations(cached.operationsByTurn, turnId, status)
+    if (next === cached.operationsByTurn) return
+    cacheThreadSnapshot(cached.thread, cached.messages, {
+      running: false,
+      turnId: null,
+      fileChangesByTurn: cached.fileChangesByTurn,
+      operationsByTurn: next,
+    })
+  }, [cacheThreadSnapshot])
+
+  const updateCachedThreadRunState = useCallback((threadId: string, running: boolean, turnId: string | null) => {
+    const cache = threadHistoryCache.current
+    const current = cache.get(threadId)
+    if (!current) return
+    cache.delete(threadId)
+    const updated = { ...current, running, turnId }
+    cache.set(threadId, updated)
+    schedulePersistentThreadCacheWrite(threadId, updated)
+  }, [schedulePersistentThreadCacheWrite])
+
+  const prefetchThread = useCallback(async (thread: CodexThread, force = false) => {
+    if (!prefetchHistory || handedOffRef.current || isBackground()) return
+    if (!thread.id || thread.id === activeThreadId.current || deletedThreadIds.current.has(thread.id)) return
+    const cache = threadHistoryCache.current
+    const cached = cache.get(thread.id)
+    if (!force && cached && threadTimestamp(cached.thread) >= threadTimestamp(thread)) return
+    if (prefetchingThreadIds.current.has(thread.id)) {
+      if (force) forcedPrefetchThreadIds.current.add(thread.id)
+      return
+    }
+    prefetchingThreadIds.current.add(thread.id)
+    try {
+      const loadedThread = await devwispClient.readThread(token, thread.id)
+      if (thread.id === activeThreadId.current || deletedThreadIds.current.has(thread.id)) return
+      const cachedThread = cache.get(thread.id)
+      const loadedMessages = preserveCurrentImages(messagesFromThread(loadedThread), cachedThread?.messages ?? [])
+      const activityTimeline = mergeActivityTimelineByTurn(
+        activityTimelineFromThread(loadedThread),
+        cachedThread?.activityTimelineByTurn ?? {},
+        cachedThread?.running ? cachedThread.turnId : null,
+      )
+      cacheThreadSnapshot(loadedThread, loadedMessages, {
+        ...latestTurnState(loadedThread),
+        complete: true,
+        fileChangesByTurn: reconcileFileChangesFromThread(
+          cachedThread?.fileChangesByTurn ?? {},
+          loadedThread,
+          cachedThread?.running ? cachedThread.turnId : null,
+        ),
+        operationsByTurn: mergeOperationsByTurn(
+          operationsFromThread(loadedThread),
+          cachedThread?.operationsByTurn ?? {},
+        ),
+        activityTimelineByTurn: activityTimeline,
+      })
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+    } finally {
+      prefetchingThreadIds.current.delete(thread.id)
+      if (forcedPrefetchThreadIds.current.delete(thread.id) && thread.id !== activeThreadId.current) {
+        void prefetchThread({ id: thread.id }, true)
+      }
+    }
+  }, [cacheThreadSnapshot, isBackground, onUnauthorized, prefetchHistory, token])
+
+  const scheduleThreadPrefetch = useCallback((nextThreads: CodexThread[]) => {
+    if (!prefetchHistory || handedOffRef.current) return
+    const candidates = nextThreads
+      .filter((thread) => thread.id !== activeThreadId.current)
+      .slice(0, maxBackgroundPrefetchThreads)
+    if (candidates.length === 0) return
+    if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
+    threadPrefetchTimer.current = window.setTimeout(() => {
+      threadPrefetchTimer.current = undefined
+      void (async () => {
+        for (const thread of candidates) await prefetchThread(thread)
+      })()
+    }, backgroundPrefetchDelayMs)
+  }, [prefetchHistory, prefetchThread])
+
+  const clearThreadCompletion = useCallback((threadId: string) => {
+    if (!threadId) return
+    setCompletedThreadIds((current) => current.includes(threadId) ? current.filter((id) => id !== threadId) : current)
+    setLatestThreadCompletion((current) => current?.threadId === threadId ? null : current)
+  }, [])
+
+  const removeDeletedThread = useCallback((threadId: string) => {
+    if (!threadId) return
+    deletedThreadIds.current.add(threadId)
+    threadListOverrides.current.delete(threadId)
+    threadListRef.current = threadListRef.current.filter((thread) => thread.id !== threadId)
+    setThreads((current) => current.filter((thread) => thread.id !== threadId))
+    clearThreadCompletion(threadId)
+
+    threadHistoryCache.current.delete(threadId)
+    threadHistoryGaps.current.delete(threadId)
+    pendingThreadHistoryRefresh.current.delete(threadId)
+    pendingPersistentThreadCache.current.delete(threadId)
+    persistentThreadCacheKnown.current.delete(threadId)
+    const cacheTimer = persistentThreadCacheTimers.current.get(threadId)
+    if (cacheTimer !== undefined) window.clearTimeout(cacheTimer)
+    persistentThreadCacheTimers.current.delete(threadId)
+    prefetchingThreadIds.current.delete(threadId)
+    forcedPrefetchThreadIds.current.delete(threadId)
+    void deleteThreadHistoryCache(threadId)
+    if (persistActiveThread) clearPersistedThread(threadId)
+
+    updateQueuedMessages(threadId, () => [])
+    const nextServerQueues = { ...serverQueuedMessagesByThreadRef.current }
+    delete nextServerQueues[threadId]
+    serverQueuedMessagesByThreadRef.current = nextServerQueues
+    setServerQueuedMessagesByThread(nextServerQueues)
+    serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
+    pendingServerQueueRemovals.current.delete(threadId)
+    queuedTurnStartsInFlight.current.delete(threadId)
+    queuedTurnSteersInFlight.current.delete(threadId)
+    deferredQueueAdvanceAfterEdit.current.delete(threadId)
+    delete editingQueuedMessageByThread.current[threadId]
+    for (const [messageId, editingThreadId] of editingQueuedMessageThreadById.current) {
+      if (editingThreadId === threadId) editingQueuedMessageThreadById.current.delete(messageId)
+    }
+    for (const [requestId, delivery] of pendingTurnDeliveries.current) {
+      if (delivery.threadId === threadId) pendingTurnDeliveries.current.delete(requestId)
+    }
+    setQueueEditRevision((revision) => revision + 1)
+
+    if (activeThreadId.current !== threadId) return
+    loadRequest.current += 1
+    historyRevision.current += 1
+    activeThreadId.current = null
+    restoringThreadId.current = null
+    resumedThreadId.current = null
+    interruptRequestedThreadId.current = null
+    interruptRequestedTurnId.current = null
+    interruptInFlightThreadId.current = null
+    if (cachedActiveThreadRefreshTimer.current !== undefined) {
+      window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
+    if (writerRefreshTimer.current !== undefined) {
+      window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
+    }
+    resetStreamingAssistant()
+    setActiveTurnId(null)
+    turnStartedAtById.current.clear()
+    clearTurnTimer()
+    setQueueRecoveryReadyThreadId(null)
+    messagesRef.current = []
+    setActiveThread(null)
+    setMessages([])
+    setIsRunning(false)
+    setIsInterrupting(false)
+    setActivity(null)
+    setFileChangesByTurn({})
+    operationsByTurnRef.current = {}
+    setOperationsByTurn({})
+    activityTimelineByTurnRef.current = {}
+    setActivityTimelineByTurn({})
+    writerConflictRef.current = false
+    setWriterConflict(false)
+    activityItemId.current = null
+    setApproval(null)
+    setLoadingHistory(false)
+    setError(null)
+  }, [clearThreadCompletion, clearTurnTimer, persistActiveThread, resetStreamingAssistant, setActiveTurnId, updateQueuedMessages])
+
+  const markThreadCompletion = useCallback((threadId: string) => {
+    if (!threadId || (threadId === activeThreadId.current && !isBackground())) return
+    const thread = threadListRef.current.find((candidate) => candidate.id === threadId) ?? { id: threadId }
+    setCompletedThreadIds((current) => current.includes(threadId) ? current : [...current, threadId])
+    setLatestThreadCompletion({ threadId, completedAt: Date.now(), engine: engineOfThread(thread) })
+  }, [isBackground])
+
+  const upsertThread = useCallback((thread: CodexThread) => {
+    if (deletedThreadIds.current.has(thread.id)) return
+    threadListOverrides.current.set(thread.id, thread)
+    const next = [thread, ...threadListRef.current.filter((candidate) => candidate.id !== thread.id)]
+    threadListRef.current = next
+    threadListLoadedRef.current = true
+    setThreads(next)
+  }, [])
+
+  const refreshThreads = useCallback(async (force = false) => {
+    if (handedOffRef.current || isBackground()) return null
+    if (threadListRequest.current) return threadListRequest.current
+    const request = (async () => {
+      try {
+        const next = (await devwispClient.threads(token, force)).filter((thread) => !deletedThreadIds.current.has(thread.id))
+        for (const [threadId, thread] of threadListOverrides.current) {
+          if (next.some((candidate) => candidate.id === threadId)) {
+            threadListOverrides.current.delete(threadId)
+            continue
+          }
+          next.unshift(thread)
+        }
+        threadListRef.current = next
+        threadListLoadedRef.current = true
+        threadListFetchedAtRef.current = Date.now()
+        if (loadThreads) setThreads(next)
+        scheduleThreadPrefetch(next)
+        return next
+      } catch (reason) {
+        if (isBackground() || (reason instanceof Error && reason.name === 'AbortError')) return null
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        setError(reason instanceof Error ? reason.message : '无法读取对话记录')
+        return null
+      }
+    })()
+    threadListRequest.current = request
+    try {
+      return await request
+    } finally {
+      if (threadListRequest.current === request) threadListRequest.current = null
+    }
+  }, [isBackground, loadThreads, onUnauthorized, scheduleThreadPrefetch, token])
+
+  const applyThreadName = useCallback((threadId: string, name: string | null) => {
+    const updateName = (thread: CodexThread) => thread.id === threadId ? { ...thread, name } : thread
+    setThreads((current) => current.map(updateName))
+    setActiveThread((current) => current ? updateName(current) : current)
+
+    const cached = threadHistoryCache.current.get(threadId)
+    if (cached) {
+      cacheThreadSnapshot(updateName(cached.thread), cached.messages, {
+        running: cached.running,
+        turnId: cached.turnId,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: cached.operationsByTurn,
+      })
+    }
+    if (persistActiveThread) {
+      const persisted = readPersistedActiveThreadCache(threadId)
+      if (persisted) persistActiveThreadCache(updateName(persisted.thread), persisted.messages)
+    }
+  }, [cacheThreadSnapshot, persistActiveThread])
+
+  const applyThreadWorkspace = useCallback((threadId: string, cwd: string) => {
+    const updateWorkspace = (thread: CodexThread) => thread.id === threadId ? { ...thread, cwd } : thread
+    setThreads((current) => current.map(updateWorkspace))
+    setActiveThread((current) => current ? updateWorkspace(current) : current)
+
+    const cached = threadHistoryCache.current.get(threadId)
+    if (cached) {
+      cacheThreadSnapshot(updateWorkspace(cached.thread), cached.messages, {
+        running: cached.running,
+        turnId: cached.turnId,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: cached.operationsByTurn,
+      })
+    }
+    if (persistActiveThread) {
+      const persisted = readPersistedActiveThreadCache(threadId)
+      if (persisted) persistActiveThreadCache(updateWorkspace(persisted.thread), persisted.messages)
+    }
+  }, [cacheThreadSnapshot, persistActiveThread])
+
+  const renameThread = useCallback(async (threadId: string, name: string) => {
+    try {
+      const result = await devwispClient.renameThread(token, threadId, name)
+      applyThreadName(threadId, result.name)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (reason instanceof RemoteApiError && reason.status === 404) {
+        throw new Error('当前运行的 Dev Wisp 后端版本缺少会话重命名接口，请更新并重启后端后再试。')
+      }
+      throw reason
+    }
+  }, [applyThreadName, onUnauthorized, token])
+
+  const bindThreadWorkspace = useCallback(async (threadId: string, cwd: string) => {
+    try {
+      const result = await devwispClient.bindThreadWorkspace(token, threadId, cwd)
+      applyThreadWorkspace(threadId, result.cwd)
+      return result
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      throw reason
+    }
+  }, [applyThreadWorkspace, onUnauthorized, token])
+
+  const refreshModels = useCallback(async () => {
+    if (!loadModels || handedOffRef.current) return null
+    try {
+      const next = await devwispClient.models(token)
+      setModels(next)
+      return next
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      return null
+    }
+  }, [loadModels, onUnauthorized, token])
+
+  useEffect(() => {
+    if (!enabled || !loadModels) return
+    const onConfigChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine?: string; model?: string }>).detail
+      if (detail?.engine !== 'codex') return
+      void refreshModels().then((next) => {
+        if (detail.model && next?.some((model) => (model.model ?? model.id) === detail.model)) {
+          window.dispatchEvent(new CustomEvent('devwisp:native-models-loaded', { detail }))
+        }
+      })
+    }
+    window.addEventListener('devwisp:native-config-changed', onConfigChanged)
+    return () => window.removeEventListener('devwisp:native-config-changed', onConfigChanged)
+  }, [enabled, loadModels, refreshModels])
+
+  const loadThread = useCallback(async (
+    threadId: string,
+    revision = historyRevision.current,
+    silent = false,
+    preserveRunningTurnId: string | null = null,
+    snapshot?: CodexThreadDetails,
+  ) => {
+    if (handedOffRef.current || isBackground()) {
+      pendingThreadHistoryRefresh.current.add(threadId)
+      return false
+    }
+    const readSequence = ++historyReadSequence.current
+    try {
+      const received = snapshot ?? await devwispClient.readThread(token, threadId)
+      if (activeThreadId.current !== threadId || revision !== historyRevision.current || readSequence !== historyReadSequence.current) return false
+      const thread = liveTurnHistory.current.reconcile(received)
+      if (!thread) {
+        pendingThreadHistoryRefresh.current.add(threadId)
+        liveHistoryRefresh.current.dirty = true
+        return false
+      }
+      const unchangedContent = thread.historyContentRevision
+        && thread.historyContentRevision === (activeThreadRef.current as CodexThreadDetails | null)?.historyContentRevision
+      if (persistActiveThread) persistActiveThreadId(thread.id)
+      if (unchangedContent && !preserveRunningTurnId && !threadHistoryGaps.current.has(threadId)
+        && messagesRef.current.length > 0) {
+        setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
+        const cached = threadHistoryCache.current.get(threadId)
+        if (cached) cached.thread = { ...cached.thread, historyRevision: thread.historyRevision, updatedAt: thread.updatedAt }
+        pendingThreadHistoryRefresh.current.delete(threadId)
+        return true
+      }
+      const loadedMessages = messagesFromThread(thread)
+      for (const message of loadedMessages) {
+        if (message.role === 'assistant' && message.turnId) {
+          rememberTurnDisplayPreferences(turnDisplayPreferences.current, message.turnId, {
+            ...(message.model ? { model: message.model } : {}),
+            ...(message.effort ? { effort: message.effort } : {}),
+          })
+        }
+      }
+      const knownMessages = mergeObservedUserMessages(messagesRef.current, observedUserItems.current.values())
+      if (historyMissingCurrentUserMessages(
+        preserveCurrentImages(loadedMessages, knownMessages),
+        knownMessages,
+        streamingAssistantTurnId.current ?? activeTurnId.current ?? latestTurnState(thread).turnId,
+      )) {
+        pendingThreadHistoryRefresh.current.add(threadId)
+        liveHistoryRefresh.current.dirty = true
+        return false
+      }
+      observedUserItems.current = new Map(loadedMessages.filter((message) => message.role === 'user').slice(-256)
+        .map((message) => [message.id, { ...message, sourceItemId: message.sourceItemId ?? message.id }]))
+      setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
+      const waitingTurnId = queueRecoveryBarriers.current?.[thread.id]?.turnId ?? latestTurnState(thread).turnId
+      const mightBeLegacyDuplicate = mightBeLegacyDuplicateQueuedMessage(
+        queuedMessagesByThreadRef.current[thread.id] ?? [], messagesRef.current, waitingTurnId,
+      )
+      const legacyDuplicateId = legacyDuplicateQueuedMessageId(
+        queuedMessagesByThreadRef.current[thread.id] ?? [],
+        messagesRef.current,
+        loadedMessages,
+        waitingTurnId,
+      )
+      if (legacyDuplicateId) {
+        updateQueuedMessages(thread.id, (current) => current.filter((message) => message.id !== legacyDuplicateId))
+      }
+      const deliveredQueuedIds = reconcileQueuedHistory(thread.id, loadedMessages)
+      if (legacyDuplicateId) deliveredQueuedIds.add(legacyDuplicateId)
+      const cachedMessages = preserveCurrentImages(loadedMessages, threadHistoryCache.current.get(thread.id)?.messages ?? [])
+      const messagesWithLocalTiming = preserveCurrentImages(cachedMessages, messagesRef.current)
+      const snapshotTurnState = latestTurnState(thread)
+      const preservedFileChangeTurnId = preserveRunningTurnId
+        ?? (snapshotTurnState.running ? snapshotTurnState.turnId : null)
+      const historicalFileChangesByTurn = reconcileFileChangesFromThread(
+        threadHistoryCache.current.get(thread.id)?.fileChangesByTurn ?? {},
+        thread,
+        preservedFileChangeTurnId,
+      )
+      const currentOperations = threadHistoryCache.current.get(thread.id)?.operationsByTurn ?? {}
+      const historicalOperationsByTurn = mergeOperationsByTurn(
+        operationsFromThread(thread),
+        thread.id === activeThreadId.current ? operationsByTurnRef.current : currentOperations,
+      )
+      const historicalActivityTimelineByTurn = mergeActivityTimelineByTurn(
+        activityTimelineFromThread(thread),
+        thread.id === activeThreadId.current
+          ? activityTimelineByTurnRef.current
+          : threadHistoryCache.current.get(thread.id)?.activityTimelineByTurn ?? {},
+        preserveRunningTurnId ?? snapshotTurnState.turnId ?? activeTurnId.current,
+      )
+      if (persistActiveThread) persistActiveThreadCache(thread, messagesWithLocalTiming)
+      const historyTurnState = snapshotTurnState
+      const preserveStartedTurn = preserveRunningTurnId !== null && activeTurnId.current === preserveRunningTurnId
+      const running = historyTurnState.running || (!historyTurnState.hasTurn && threadIsRunning(thread)) || preserveStartedTurn
+      const latestTurnId = preserveStartedTurn
+        ? preserveRunningTurnId
+        : historyTurnState.turnId ?? (running ? activeTurnId.current : null)
+      // A reconnect may discover a newer turn without receiving turn/started.
+      // Never attach the previous turn's buffered text to that newer reply.
+      if (streamingAssistantTurnId.current && streamingAssistantTurnId.current !== latestTurnId) {
+        resetStreamingAssistant()
+      }
+      const streamSnapshot = running && latestTurnId ? assistantSnapshotItemsForStreamSegment(thread, latestTurnId) : null
+      if (streamSnapshot && latestTurnId) {
+        // History may discover a same-turn answer whose user event was missed.
+        if ([...streamingAssistantParts.current.keys()].some((itemId) => streamSnapshot.earlierItemIds.has(itemId))) {
+          streamingAssistantMessageId.current = null
+          streamingAssistantChoice.current = null
+        }
+        retireAssistantItems(latestTurnId, streamSnapshot.earlierItemIds)
+      }
+      // A history read can finish while a reply is streaming (for example
+      // after reconnecting). Give that partial server message the same stable
+      // bubble as the socket stream instead of rendering both versions.
+      const runningMessageId = running && latestTurnId
+        ? streamingAssistantMessageId.current ?? streamingMessageId(latestTurnId)
+        : null
+      if (runningMessageId && !streamingAssistantMessageId.current) {
+        streamingAssistantMessageId.current = runningMessageId
+      }
+      if (runningMessageId) streamingAssistantTurnId.current = latestTurnId
+      if (runningMessageId && streamSnapshot) {
+        const reconciled = reconcileAssistantStreamSnapshot(
+          streamSnapshot.snapshotItems,
+          streamingAssistantParts.current,
+          streamingCompletedItems.current,
+          retiredAssistantItems.current.ids,
+        )
+        // Ignore transitions that captured the partial text before this read.
+        streamingRenderGeneration.current += 1
+        streamingAssistantParts.current = reconciled.parts
+        streamingCompletedItems.current = reconciled.completed
+      }
+      const streamedText = streamingAssistantText(streamingAssistantParts.current)
+      const completedText = completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current)
+      cacheThreadSnapshot(thread, messagesWithLocalTiming, {
+        running,
+        turnId: latestTurnId,
+        complete: true,
+        fileChangesByTurn: historicalFileChangesByTurn,
+        operationsByTurn: historicalOperationsByTurn,
+        activityTimelineByTurn: historicalActivityTimelineByTurn,
+      })
+      setMessages((current) => {
+        // React may apply this update after another answer has been accepted.
+        if (activeThreadId.current !== threadId || revision !== historyRevision.current
+          || readSequence !== historyReadSequence.current) return current
+        const remainingLocalMessages = deliveredQueuedIds.size > 0
+          ? current.filter((message) => !deliveredQueuedIds.has(message.id))
+          : current
+        const loaded = preserveLocalQueuedMessages(preserveCurrentImages(messagesWithLocalTiming, remainingLocalMessages), remainingLocalMessages)
+        const loadedWithPreferences = runningMessageId
+          ? applyTurnDisplayPreferences(loaded, latestTurnId, turnDisplayPreferences.current.get(latestTurnId ?? ''))
+          : loaded
+        const next = runningMessageId
+          ? applyTurnDisplayPreferences(
+            collapseAssistantMessagesForTurn(
+              loadedWithPreferences,
+              latestTurnId,
+              runningMessageId,
+              streamedText,
+              undefined,
+              completedText,
+            ),
+            latestTurnId,
+            turnDisplayPreferences.current.get(latestTurnId ?? ''),
+          )
+          : loadedWithPreferences
+        return sameMessages(current, next) ? current : next
+      })
+      // Rebuild every turn's card from thread/read after a reconnect or hot
+      // update, rather than keeping only the last global file-change state.
+      setFileChangesByTurn(historicalFileChangesByTurn)
+      operationsByTurnRef.current = historicalOperationsByTurn
+      setOperationsByTurn(historicalOperationsByTurn)
+      activityTimelineByTurnRef.current = historicalActivityTimelineByTurn
+      setActivityTimelineByTurn(historicalActivityTimelineByTurn)
+      setActiveTurnId(running ? latestTurnId : null)
+      if (running) startTurnTimerForTurn(latestTurnId, historyTurnState.startedAt)
+      else {
+        if (historyTurnState.turnId) turnStartedAtById.current.delete(historyTurnState.turnId)
+        finishTurnTimer()
+      }
+      if (!running) {
+        resetStreamingAssistant()
+        activityItemId.current = null
+        setActivity(null)
+        if (interruptRequestedThreadId.current === threadId) {
+          interruptRequestedThreadId.current = null
+          interruptRequestedTurnId.current = null
+          setIsInterrupting(false)
+        }
+      }
+      setIsRunning(running)
+      const hasQueuedMessages = Boolean(queuedMessagesByThreadRef.current[thread.id]?.length)
+      const unverifiedAttempt = queuedMessagesByThreadRef.current[thread.id]?.[0]?.sendAttempt
+      const recoveryBarrier = !running && (unverifiedAttempt || (mightBeLegacyDuplicate && !legacyDuplicateId))
+        ? { turnId: latestTurnId, status: 'unverified' as const }
+        : reconcileQueueRecoveryBarrier(
+          queueRecoveryBarriers.current?.[thread.id],
+          { ...historyTurnState, running, turnId: latestTurnId },
+          hasQueuedMessages,
+        )
+      setQueueRecoveryBarrier(thread.id, recoveryBarrier)
+      setQueueRecoveryReadyThreadId(!running && !recoveryBarrier ? thread.id : null)
+      if (writerConflictRef.current) {
+        if (running) {
+          setActivity({ label: '此对话已有 Codex 任务在运行' })
+        } else {
+          writerConflictRef.current = false
+          setWriterConflict(false)
+          setActivity(null)
+          setError((current) => current === activeWriterError ? null : current)
+        }
+      } else if (activityItemId.current === null) {
+        const nextActivity = running ? { label: '正在思考' } : null
+        setActivity((current) => sameActivity(current, nextActivity) ? current : nextActivity)
+      }
+      if (threadHistoryGaps.current.delete(threadId)) pendingThreadHistoryRefresh.current.delete(threadId)
+      return true
+    } catch (reason) {
+      if (isBackground() || (reason instanceof Error && reason.name === 'AbortError')) return false
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
+      if (isActiveWriterError(reason)) {
+        writerConflictRef.current = true
+        setWriterConflict(true)
+        setIsRunning(true)
+        setActivity({ label: '此对话已有其他 Codex 实例在运行' })
+        setError(activeWriterError)
+      } else if (!silent) {
+        setError(reason instanceof Error ? reason.message : '无法读取对话内容')
+      }
+      return false
+    }
+  }, [cacheThreadSnapshot, finishTurnTimer, isBackground, onUnauthorized, persistActiveThread, reconcileQueuedHistory, resetStreamingAssistant, retireAssistantItems, setActiveTurnId, setQueueRecoveryBarrier, startTurnTimerForTurn, token, updateQueuedMessages])
+
+  const scheduleHistoryReconciliation = useCallback((): void => {
+    const state = liveHistoryRefresh.current
+    state.dirty = true
+    if (!state.mounted || isBackground() || state.inFlight || state.timer !== undefined) return
+    state.timer = window.setTimeout(() => {
+      state.timer = undefined
+      const threadId = activeThreadId.current
+      if (!state.mounted || isBackground() || !threadId) return
+      state.dirty = false
+      state.inFlight = true
+      const generation = state.generation
+      void loadThread(threadId, historyRevision.current, true).finally(() => {
+        if (generation !== state.generation) return
+        state.inFlight = false
+        // Changes during a read need a trailing read, not the same old promise.
+        if (state.mounted && state.dirty) scheduleHistoryReconciliation()
+      })
+    }, 900)
+  }, [isBackground, loadThread])
+
+  const refreshThreadForRemoteMessage = useCallback((threadId: string, turnId: string | null, messageItemId?: string, recoverImages = false) => {
+    if (!threadId || threadId !== activeThreadId.current) return
+    if ([...pendingTurnDeliveries.current.values()].some((delivery) => delivery.threadId === threadId)) return
+    const cachedMessages = threadHistoryCache.current.get(threadId)?.messages ?? []
+    if (!recoverImages && messageItemId && (messagesRef.current.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId)
+      || cachedMessages.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId))) return
+    if (!messageItemId && turnId && messagesRef.current.some((message) => message.role === 'user' && message.turnId === turnId)) return
+    const revision = ++historyRevision.current
+    void loadThread(threadId, revision, true, turnId)
+  }, [loadThread])
+
+  const applyActiveThreadMetadata = useCallback((latestThread: CodexThread) => {
+    if (!latestThread.id || latestThread.id !== activeThreadId.current) return
+    setActiveThread((current) => {
+      if (!current || current.id !== latestThread.id) return current
+      const merged = { ...current, ...latestThread }
+      if ((current as CodexThreadDetails).turns) {
+        merged.historyRevision = current.historyRevision
+        merged.status = current.status
+      }
+      const currentTimestamp = threadTimestamp(current)
+      const latestTimestamp = threadTimestamp(latestThread)
+      if (currentTimestamp > latestTimestamp && current.updatedAt !== undefined) {
+        merged.updatedAt = current.updatedAt
+      }
+      return sameActiveThread(current, merged) ? current : merged
+    })
+  }, [])
+
+  const refreshActiveThreadIfChanged = useCallback(async () => {
+    const threadId = activeThreadId.current
+    if (handedOffRef.current || isBackground()) return
+    const nextThreads = await refreshThreads()
+    if (!threadId || !nextThreads || activeThreadId.current !== threadId) return
+    const latestThread = nextThreads.find((thread) => thread.id === threadId)
+    if (!latestThread) return
+
+    const cached = threadHistoryCache.current.get(threadId)
+    const locallyRunning = isRunningRef.current || activeTurnId.current !== null
+    const serverIdle = ['idle', 'completed', 'interrupted', 'failed'].includes(latestThread.status?.type ?? '')
+    const hasHistoryGap = threadHistoryGaps.current.has(threadId)
+    const currentThread = cached?.thread ?? (activeThreadRef.current?.id === threadId ? activeThreadRef.current : null)
+    const needsHistoryRefresh = hasHistoryGap || (locallyRunning && serverIdle)
+      || pendingThreadHistoryRefresh.current.has(threadId)
+      || !currentThread
+      || threadHistoryVersionChanged(currentThread, latestThread)
+    if (needsHistoryRefresh) {
+      const loaded = await loadThread(threadId, historyRevision.current, true)
+      if (loaded) pendingThreadHistoryRefresh.current.delete(threadId)
+    } else {
+      applyActiveThreadMetadata(latestThread)
+    }
+  }, [applyActiveThreadMetadata, isBackground, loadThread, refreshThreads])
+
+  const scheduleMetadataRefresh = useCallback(() => {
+    if (isBackground() || writerRefreshTimer.current !== undefined) return
+    // File/WAL watchers emit continuously while Codex works. A debounce alone
+    // still downloads the entire list every second (or starves on a busy file).
+    // Keep a trailing refresh, bounded across bursts and shared across panes.
+    const delay = Math.max(1_000, threadListRefreshIntervalMs - (Date.now() - lastWriterRefreshAt.current))
+    writerRefreshTimer.current = window.setTimeout(() => {
+      writerRefreshTimer.current = undefined
+      if (isBackground()) return
+      lastWriterRefreshAt.current = Date.now()
+      void refreshActiveThreadIfChanged()
+    }, delay)
+  }, [isBackground, refreshActiveThreadIfChanged])
+
+  const cacheVisibleThread = useCallback(() => {
+    if (!activeThread || activeThread.id !== activeThreadId.current) return
+    if (threadHistoryGaps.current.has(activeThread.id)) return
+    // An unopened thread has no history to restore yet; keep its loading state truthful.
+    if (messages.length === 0 && !threadHistoryCache.current.has(activeThread.id)) return
+    cacheThreadSnapshot(activeThread, messages, {
+      running: isRunning,
+      turnId: activeTurnId.current,
+      fileChangesByTurn,
+      operationsByTurn,
+      activityTimelineByTurn: activityTimelineByTurnRef.current,
+    })
+  }, [activeThread, cacheThreadSnapshot, fileChangesByTurn, isRunning, messages, operationsByTurn])
+
+  useEffect(() => {
+    // Keep the in-memory/IndexedDB snapshot complete at idle. While a reply
+    // streams, every new chunk changes messages; scanning and scheduling a
+    // whole-thread snapshot for each chunk makes long conversations jank.
+    // Switching threads still calls cacheVisibleThread() explicitly.
+    if (!isRunning && !isBackground()) cacheVisibleThread()
+  }, [cacheVisibleThread, isBackground, isRunning])
+
+  const dispatchInterrupt = useCallback(async (threadId: string, turnId: string) => {
+    if (handedOffRef.current) return false
+    if (interruptRequestedThreadId.current !== threadId || interruptInFlightThreadId.current === threadId) return false
+    interruptInFlightThreadId.current = threadId
+    try {
+      const result = await devwispClient.interrupt(token, threadId, turnId)
+      if (!result.interrupted) throw new Error('Codex 没有接受停止请求')
+      if (result.stale) {
+        if (activeTurnId.current === turnId) {
+          const startedAt = turnStartedAtById.current.get(turnId) ?? Date.now()
+          finalizeVisibleStreamingTurn(turnId, startedAt, false)
+          setActiveTurnId(null)
+          interruptRequestedThreadId.current = null
+          interruptRequestedTurnId.current = null
+          setIsInterrupting(false)
+          setIsRunning(false)
+          setActivity(null)
+          clearTurnTimer()
+          setError(null)
+        }
+        return true
+      }
+      // The server has accepted the stop even though its completed
+      // notification may arrive a little later. Close the old visible bubble
+      // now, while keeping the running lock until that notification confirms
+      // the turn is actually over.
+      if (activeTurnId.current === turnId) finalizeVisibleStreamingTurn(turnId)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (interruptRequestedThreadId.current === threadId) {
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        setIsInterrupting(false)
+        setError(reason instanceof Error ? reason.message : '停止 Codex 任务失败')
+      }
+      return false
+    } finally {
+      if (interruptInFlightThreadId.current === threadId) interruptInFlightThreadId.current = null
+    }
+  }, [clearTurnTimer, finalizeVisibleStreamingTurn, onUnauthorized, setActiveTurnId, token])
+
+  const confirmedTurnDelivery = useCallback((requestId: string) => {
+    const delivery = pendingTurnDeliveries.current.get(requestId)
+    if (!delivery?.acknowledged) return null
+    return {
+      turn_id: delivery.turnId,
+      completed: delivery.turnId !== null && delivery.completedTurnIds.has(delivery.turnId),
+    }
+  }, [])
+
+  const applyTurnDelivery = useCallback((threadId: string, requestId: string, turnId: string | null) => {
+    const delivery = pendingTurnDeliveries.current.get(requestId)
+    if (delivery && delivery.threadId === threadId) {
+      delivery.acknowledged = true
+      delivery.turnId = turnId
+      rememberTurnDisplayPreferences(turnDisplayPreferences.current, turnId, {
+        ...(delivery.model ? { model: delivery.model } : {}),
+        ...(delivery.effort ? { effort: delivery.effort } : {}),
+      })
+      delivery.resolveReceipt?.({ turn_id: turnId, completed: turnId !== null && delivery.completedTurnIds.has(turnId) })
+    }
+    if (!turnId || activeThreadId.current !== threadId) return
+    const previousMessageIds = delivery?.previousMessageIds ?? new Set<string>()
+    setMessages((current) => {
+      const next = reconcileDeliveredLocalMessage(current, requestId, turnId, previousMessageIds)
+      return sameMessages(current, next) ? current : next
+    })
+  }, [])
+
+  const requestTurnDelivery = useCallback(async (
+    threadId: string,
+    requestId: string,
+    send: () => Promise<{ turn_id: string | null }>,
+    previousMessageIds: ReadonlySet<string> = new Set(messagesRef.current.flatMap((message) => message.sourceItemId
+      ? [message.id, message.sourceItemId] : [message.id])),
+    preferences: TurnDisplayPreferences = {},
+  ) => {
+    const delivery: PendingTurnDelivery = {
+      threadId,
+      turnId: null,
+      acknowledged: false,
+      completedTurnIds: new Set(),
+      previousMessageIds,
+      ...preferences,
+    }
+    const receipt = new Promise<{ turn_id: string | null; completed: boolean }>((resolve) => {
+      delivery.resolveReceipt = resolve
+    })
+    // Callers keep this entry until their history verification also ends, so
+    // a receipt arriving during that fallback can still confirm the send.
+    pendingTurnDeliveries.current.set(requestId, delivery)
+    try {
+      const response = send().then((result) => {
+        if (result.turn_id && pendingTurnDeliveries.current.get(requestId) === delivery) {
+          applyTurnDelivery(threadId, requestId, result.turn_id)
+        }
+        return { ...result, completed: result.turn_id !== null && delivery.completedTurnIds.has(result.turn_id) }
+      })
+      // The WebSocket receipt names this exact request. It can arrive while
+      // the HTTP response is still pending or has been lost on the way back.
+      return await Promise.race([response, receipt])
+    } catch (reason) {
+      // The receipt names the exact request, so it remains authoritative if
+      // the HTTP response (and a large history read) cannot reach the phone.
+      const receipt = confirmedTurnDelivery(requestId)
+      if (!isAmbiguousNetworkFailure(reason) || !receipt) throw reason
+      return receipt
+    }
+  }, [applyTurnDelivery, confirmedTurnDelivery])
+
+  const requestTurnStart = useCallback((threadId: string, payload: QueuedTurnPayload, previousMessageIds?: ReadonlySet<string>, direct = false) => requestTurnDelivery(threadId, payload.id, async () => {
+    const start = () => devwispClient.startTurn(token, threadId, {
+      prompt: payload.requestText,
+      ...(payload.originalText ? { originalText: payload.originalText, translatedText: payload.text } : {}),
+      ...(direct ? { direct: true } : {}),
+      images: payload.images,
+      documents: payload.documents,
+      model: payload.model,
+      effort: payload.effort,
+      approvalPolicy: payload.approvalPolicy,
+      claudeModel: payload.claudeModel,
+      claudeEffort: payload.claudeEffort,
+      claudePermissionMode: payload.claudePermissionMode,
+      requestId: payload.id,
+    })
+    if (resumedThreadId.current !== threadId) {
+      await devwispClient.resumeThread(token, threadId, payload.id)
+      resumedThreadId.current = threadId
+    }
+    try {
+      return await start()
+    } catch (reason) {
+      if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
+      resumedThreadId.current = null
+      // A cached acknowledgement from before an App Server restart cannot
+      // restore its new process. Give this recovery its own stable ID.
+      await devwispClient.resumeThread(token, threadId, `${payload.id}:recover`)
+      resumedThreadId.current = threadId
+      return start()
+    }
+  }, previousMessageIds, {
+    model: payload.model ?? payload.claudeModel ?? 'default',
+    effort: payload.effort ?? payload.claudeEffort ?? 'default',
+  }), [requestTurnDelivery, token])
+
+  const appendQueuedMessageToActiveThread = useCallback((threadId: string, payload: QueuedTurnPayload, turnId?: string | null) => {
+    if (activeThreadId.current !== threadId) return
+    const localMessage = localMessageFromQueuedPayload(payload, turnId)
+    const previousMessageIds = pendingTurnDeliveries.current.get(payload.id)?.previousMessageIds
+      ?? new Set(messagesRef.current.flatMap((message) => message.sourceItemId ? [message.id, message.sourceItemId] : [message.id]))
+    // An accepted user item can precede both the HTTP result and React's next render.
+    const knownMessages = mergeObservedUserMessages(messagesRef.current, observedUserItems.current.values())
+    const addingMessage = insertDeliveredLocalMessage(knownMessages, localMessage, previousMessageIds).length > knownMessages.length
+    // HTTP may confirm delivery before the socket supplies a turn ID. Close
+    // the visible stream without assigning a guessed turn ID to the answer.
+    const boundaryTurnId = turnId ?? streamingAssistantTurnId.current ?? activeTurnId.current
+    if (addingMessage && boundaryTurnId && knownMessages.some((message) => message.role === 'user' && message.turnId === boundaryTurnId)) {
+      historyRevision.current += 1
+      finalizeVisibleStreamingTurn(boundaryTurnId)
+    }
+    if (addingMessage) observedUserItems.current.set(localMessage.id, localMessage)
+    setMessages((current) => {
+      const next = insertDeliveredLocalMessage(current, localMessage, previousMessageIds)
+      return sameMessages(current, next) ? current : next
+    })
+  }, [finalizeVisibleStreamingTurn])
+
+  const removeQueuedMessageFromActiveThread = useCallback((threadId: string, messageId: string) => {
+    const cachedThread = threadHistoryCache.current.get(threadId)
+    if (cachedThread?.messages.some((message) => message.id === messageId)) {
+      const cachedMessages = cachedThread.messages.filter((message) => message.id !== messageId)
+      threadHistoryCache.current.set(threadId, {
+        ...cachedThread,
+        messages: cachedMessages,
+        characters: cachedHistoryCharacters(cachedMessages),
+      })
+    }
+    if (activeThreadId.current !== threadId) return
+    observedUserItems.current.delete(messageId)
+    setMessages((current) => {
+      const next = current.filter((message) => message.id !== messageId)
+      if (next.length === current.length) return current
+      const turnId = activeTurnId.current
+      const streamMessageId = streamingAssistantMessageId.current
+      const streamedText = streamingAssistantText(streamingAssistantParts.current)
+      if (!turnId || !streamMessageId || !streamedText) return next
+      return applyTurnDisplayPreferences(
+        collapseAssistantMessagesForTurn(next, turnId, streamMessageId, streamedText, undefined,
+          completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current)),
+        turnId,
+        turnDisplayPreferences.current.get(turnId),
+      )
+    })
+  }, [])
+
+  const beginEditQueuedMessage = useCallback((messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId || editingQueuedMessageByThread.current[threadId]) return false
+    const steerPrefix = `${threadId}:`
+    const steeringThreadMessage = [...queuedTurnSteersInFlight.current].some((requestKey) => requestKey.startsWith(steerPrefix))
+    if (queuedTurnStartsInFlight.current.has(threadId) || steeringThreadMessage) return false
+    if (!queuedMessagesByThreadRef.current[threadId]?.some((message) => message.id === messageId && !message.sendAttempt)) return false
+    editingQueuedMessageByThread.current[threadId] = messageId
+    editingQueuedMessageThreadById.current.set(messageId, threadId)
+    if (queueRecoveryReadyThreadId === threadId) deferredQueueAdvanceAfterEdit.current.add(threadId)
+    setQueueEditRevision((revision) => revision + 1)
+    return true
+  }, [queueRecoveryReadyThreadId])
+
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+    const threadId = editingQueuedMessageThreadById.current.get(messageId)
+    if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
+    const text = input.prompt.trim()
+    const images = [...input.images]
+    const documents = [...(input.documents ?? [])]
+    let updated = false
+    updateQueuedMessages(threadId, (current) => {
+      if (!current.some((message) => message.id === messageId)) return current
+      updated = true
+      return current.map((message) => message.id === messageId
+        ? {
+          ...message,
+          text,
+          originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
+          translation: input.translation,
+          translationStatus: input.translationStatus,
+          translationError: input.translationError,
+          requestText: queuedRequestText(text, documents),
+          images,
+          ...(documents.length > 0 ? { documents } : { documents: undefined }),
+          model: input.model,
+          effort: input.effort,
+          claudeModel: input.claudeModel,
+          claudeEffort: input.claudeEffort,
+        }
+        : message)
+    })
+    if (updated) setQueueRecoveryReadyThreadId((current) => current === threadId ? null : current)
+    return updated
+  }, [setQueueRecoveryReadyThreadId, updateQueuedMessages])
+
+  const endEditQueuedMessage = useCallback((messageId: string) => {
+    const threadId = editingQueuedMessageThreadById.current.get(messageId)
+    if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return
+    delete editingQueuedMessageByThread.current[threadId]
+    editingQueuedMessageThreadById.current.delete(messageId)
+    setQueueEditRevision((revision) => revision + 1)
+  }, [])
+
+  const startQueuedMessage = useCallback(async (threadId: string, messageId: string) => {
+    if (handedOffRef.current) return false
+    if (activeThreadId.current !== threadId
+      && (!persistActiveThread || threadHasAnotherActiveController(threadId, queueControllerId.current))) return false
+    if (editingQueuedMessageByThread.current[threadId]) return false
+    if (queuedTurnStartsInFlight.current.has(threadId)) return false
+    if ([...queuedTurnSteersInFlight.current].some((requestKey) => requestKey.startsWith(`${threadId}:`))) return false
+    const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
+    if (!payload || payload.sendAttempt) return false
+    if (payload.translationStatus === 'pending' || payload.translationStatus === 'failed') return false
+    if (activeThreadId.current === threadId
+      && mightBeLegacyDuplicateQueuedMessage([payload], messagesRef.current, queueRecoveryBarriers.current?.[threadId]?.turnId ?? null)) {
+      void loadThread(threadId, ++historyRevision.current, true)
+      return false
+    }
+    // Every automatic start is gated here as well as in the UI effect: stale
+    // completion events and hot-reload recovery must not bypass the persisted
+    // turn barrier.
+    const activeTurnForThread = activeThreadId.current === threadId ? activeTurnId.current : null
+    if (!canAutomaticallyAdvanceQueue(queueRecoveryBarriers.current?.[threadId], activeTurnForThread)) return false
+    queuedTurnStartsInFlight.current.add(threadId)
+    recordQueuedSendAttempt(threadId, payload.id)
+    const affectsActiveThread = activeThreadId.current === threadId
+    if (affectsActiveThread) historyRevision.current += 1
+    try {
+      const turnResult = await requestTurnStart(threadId, payload)
+      const alreadyReconciled = !queuedMessagesByThreadRef.current[threadId]?.some((message) => message.id === payload.id)
+      if (alreadyReconciled) {
+        if (activeThreadId.current === threadId) setError(null)
+        return true
+      }
+      updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
+      if (!turnResult.completed && queuedMessagesByThreadRef.current[threadId]?.length) {
+        const activeOrCachedTurnId = activeThreadId.current === threadId
+          ? activeTurnId.current
+          : threadHistoryCache.current.get(threadId)?.turnId ?? null
+        setQueueRecoveryBarrier(threadId, {
+          turnId: turnResult.turn_id ?? activeOrCachedTurnId ?? queueRecoveryBarriers.current?.[threadId]?.turnId ?? null,
+          status: 'running',
+        })
+      }
+      if (activeThreadId.current === threadId) {
+        if (turnResult.completed) {
+          setError(null)
+          void loadThread(threadId, ++historyRevision.current, true)
+          return true
+        }
+        const turnId = turnResult.turn_id
+        const previousTurnId = activeTurnId.current
+        if (previousTurnId && turnId && previousTurnId !== turnId) {
+          finalizeVisibleStreamingTurn(previousTurnId)
+          finalizeTurnOperations(
+            threadId,
+            previousTurnId,
+            interruptRequestedTurnId.current === previousTurnId ? 'stopped' : 'completed',
+          )
+        }
+        if (turnId) {
+          setActiveTurnId(turnId)
+          startTurnTimerForTurn(turnId)
+        }
+        appendQueuedMessageToActiveThread(threadId, payload, turnId)
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        interruptInFlightThreadId.current = null
+        setIsInterrupting(false)
+        setQueueRecoveryReadyThreadId(null)
+        setIsRunning(true)
+        setActivity({ label: '正在思考' })
+        writerConflictRef.current = false
+        setWriterConflict(false)
+      }
+      if (activeThreadId.current === threadId) setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
+      const definitelyRejected = reason instanceof RemoteApiError
+        && (reason.status < 500 || isActiveWriterError(reason))
+      if (definitelyRejected) {
+        setQueueRecoveryBarrier(threadId, {
+          turnId: activeThreadId.current === threadId ? activeTurnId.current : queueRecoveryBarriers.current?.[threadId]?.turnId ?? null,
+          status: 'unverified',
+        })
+        if (activeThreadId.current === threadId) setQueueRecoveryReadyThreadId(null)
+        updateQueuedMessages(threadId, (current) => current.map((message) => message.id === payload.id
+          ? { ...message, sendAttempt: undefined }
+          : message))
+      } else if (activeThreadId.current === threadId) {
+        // A lost response may mean Codex is already answering this request.
+        // Read history before this queue item can be sent again.
+        void loadThread(threadId, ++historyRevision.current, true)
+      }
+      if (activeThreadId.current === threadId) {
+        const message = reason instanceof Error ? reason.message : '发送排队消息失败'
+        if (isActiveWriterError(reason)) {
+          writerConflictRef.current = true
+          setWriterConflict(true)
+          setIsRunning(true)
+          setActivity({ label: '此对话已有其他 Codex 实例在运行' })
+          setError(activeWriterError)
+        } else {
+          setError(/thread not found/i.test(message)
+            ? '本机 Codex 已找不到这条对话。排队消息仍保留，请新建对话后重新发送。'
+            : message)
+        }
+      }
+      return false
+    } finally {
+      pendingTurnDeliveries.current.delete(payload.id)
+      queuedTurnStartsInFlight.current.delete(threadId)
+      if (activeThreadId.current === threadId && queuedMessagesByThreadRef.current[threadId]?.length) {
+        setQueueEditRevision((revision) => revision + 1)
+      }
+    }
+  }, [appendQueuedMessageToActiveThread, finalizeTurnOperations, finalizeVisibleStreamingTurn, loadThread, onUnauthorized, persistActiveThread, recordQueuedSendAttempt, requestTurnStart, setActiveTurnId, setQueueRecoveryBarrier, startTurnTimerForTurn, updateQueuedMessages])
+
+  const startNextQueuedMessage = useCallback(async (threadId: string) => {
+    if (isBackground()) return false
+    if (editingQueuedMessageByThread.current[threadId]) {
+      deferredQueueAdvanceAfterEdit.current.add(threadId)
+      return false
+    }
+    const activeTurnForThread = activeThreadId.current === threadId ? activeTurnId.current : null
+    if (!canAutomaticallyAdvanceQueue(queueRecoveryBarriers.current?.[threadId], activeTurnForThread)) return false
+    const next = queuedMessagesByThreadRef.current[threadId]?.[0]
+    if (!next) {
+      deferredQueueAdvanceAfterEdit.current.delete(threadId)
+      return false
+    }
+    if (next.scheduledAt && Date.parse(next.scheduledAt) > Date.now()) return false
+    return next ? startQueuedMessage(threadId, next.id) : false
+  }, [isBackground, startQueuedMessage])
+
+  const sendQueuedMessageNow = useCallback(async (messageId: string) => {
+    if (handedOffRef.current) {
+      setError('网页端已交还给本机 Codex，请先重新接管网页端。')
+      return false
+    }
+    const threadId = activeThreadId.current
+    if (!threadId || editingQueuedMessageByThread.current[threadId] || queuedTurnStartsInFlight.current.has(threadId)) return false
+    const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
+    if (!payload) return false
+    if (payload.translationStatus === 'pending' || payload.translationStatus === 'failed') {
+      setError(payload.translationStatus === 'failed'
+        ? '这条消息翻译失败，请先重试翻译或编辑后再发送。'
+        : '这条消息正在后台翻译，完成后才能发送。')
+      return false
+    }
+    if (payload.sendAttempt) {
+      setError('这条排队消息的送达状态尚未确认，请先核对聊天记录；需要重发时可移除后重新输入。')
+      return false
+    }
+    const requestKey = `${threadId}:${messageId}`
+    if (queuedTurnSteersInFlight.current.has(requestKey)) return false
+    queuedTurnSteersInFlight.current.add(requestKey)
+    const currentTurnId = activeTurnId.current
+    recordQueuedSendAttempt(threadId, payload.id, currentTurnId)
+    // Close the old visible reply and place the user's prompt before awaiting
+    // HTTP. App Server may accept the steer and emit its next deltas first.
+    if (currentTurnId) finalizeVisibleStreamingTurn(currentTurnId)
+    appendQueuedMessageToActiveThread(threadId, payload, currentTurnId)
+    try {
+      const result = await requestTurnDelivery(threadId, payload.id, () => devwispClient.steerTurn(token, threadId, {
+        prompt: payload.requestText,
+        images: payload.images,
+        documents: payload.documents,
+        requestId: payload.id,
+      }))
+      updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
+      if (activeThreadId.current === threadId) {
+        if (result.completed) void loadThread(threadId, ++historyRevision.current, true)
+        setError(null)
+      }
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
+      // The active reply may have completed in the interval before the click
+      // reached the server. Re-read the authoritative turn state first so a
+      // stale local turn ID cannot silently block the fallback start.
+      if (reason instanceof RemoteApiError && reason.status === 409 && /没有可立即发送的回复/.test(reason.message)) {
+        const refreshed = await loadThread(threadId, historyRevision.current)
+        if (!refreshed) {
+          removeQueuedMessageFromActiveThread(threadId, payload.id)
+          return false
+        }
+        if (!queuedMessagesByThreadRef.current[threadId]?.some((message) => message.id === payload.id)) return true
+        queuedTurnSteersInFlight.current.delete(requestKey)
+        updateQueuedMessages(threadId, (current) => current.map((message) => message.id === payload.id
+          ? { ...message, sendAttempt: undefined }
+          : message))
+        setQueueRecoveryBarrier(threadId, null)
+        const started = await startQueuedMessage(threadId, messageId)
+        if (!started) removeQueuedMessageFromActiveThread(threadId, payload.id)
+        return started
+      }
+      if (activeThreadId.current === threadId) {
+        setError(reason instanceof Error ? reason.message : '立即发送排队消息失败')
+      }
+      if (reason instanceof RemoteApiError && reason.status < 500) {
+        setQueueRecoveryBarrier(threadId, { turnId: activeTurnId.current, status: 'unverified' })
+        setQueueRecoveryReadyThreadId(null)
+        updateQueuedMessages(threadId, (current) => current.map((message) => message.id === payload.id
+          ? { ...message, sendAttempt: undefined }
+          : message))
+      } else {
+        void loadThread(threadId, ++historyRevision.current, true)
+      }
+      if (!isAmbiguousNetworkFailure(reason)) removeQueuedMessageFromActiveThread(threadId, payload.id)
+      return false
+    } finally {
+      pendingTurnDeliveries.current.delete(payload.id)
+      queuedTurnSteersInFlight.current.delete(requestKey)
+      if (activeThreadId.current === threadId && queuedMessagesByThreadRef.current[threadId]?.length) {
+        setQueueEditRevision((revision) => revision + 1)
+      }
+    }
+  }, [appendQueuedMessageToActiveThread, finalizeVisibleStreamingTurn, loadThread, onUnauthorized, recordQueuedSendAttempt, removeQueuedMessageFromActiveThread, requestTurnDelivery, setQueueRecoveryBarrier, startQueuedMessage, token, updateQueuedMessages])
+
+  const removeQueuedMessage = useCallback((messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId || editingQueuedMessageByThread.current[threadId]) return
+    updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== messageId))
+  }, [updateQueuedMessages])
+
+  const sharedQueueAction = useCallback(async (threadId: string, action: 'edit/begin' | 'edit/end' | 'remove' | 'send-now', messageId: string) => {
+    try {
+      const result = await devwispClient.queueAction(token, threadId, action, messageId, queueControllerId.current)
+      applyServerQueueResponse(threadId, result.queue)
+      if (action === 'send-now' && result.sent && activeThreadId.current === threadId) {
+        void loadThread(threadId, ++historyRevision.current, true)
+      }
+      if (action === 'send-now' && !result.sent) {
+        setError('电脑端未确认这条消息已送达；请先核对聊天记录，不要重复发送。')
+      } else {
+        setError(null)
+      }
+      return action === 'send-now' ? Boolean(result.sent) : true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '排队消息操作失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, loadThread, onUnauthorized, refreshServerQueue, token])
+
+  const sharedBeginQueuedEdit = useCallback(async (messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    const began = await sharedQueueAction(threadId, 'edit/begin', messageId)
+    if (began) editingQueuedMessageThreadById.current.set(messageId, threadId)
+    return began
+  }, [sharedQueueAction])
+
+  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+    const threadId = editingQueuedMessageThreadById.current.get(messageId)
+    const previous = threadId ? serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId) : undefined
+    if (!threadId || !previous) return false
+    const text = input.prompt.trim()
+    const documents = input.documents ?? []
+    try {
+      const result = await devwispClient.updateQueuedMessage(token, threadId, {
+        ...previous,
+        text,
+        originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
+        translation: input.translation,
+        translationStatus: input.translationStatus,
+        translationError: input.translationError,
+        requestText: queuedRequestText(text, documents),
+        images: input.images,
+        documents,
+        model: input.model,
+        effort: input.effort,
+        claudeModel: input.claudeModel,
+        claudeEffort: input.claudeEffort,
+        sendAttempt: undefined,
+        editing: undefined,
+      })
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '更新排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, token])
+
+  const retryQueuedTranslation = useCallback(async (messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    try {
+      const result = await devwispClient.retryQueuedTranslation(token, threadId, messageId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '重试翻译失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, token])
+
+  const sharedEndQueuedEdit = useCallback(async (messageId: string) => {
+    const threadId = editingQueuedMessageThreadById.current.get(messageId) ?? activeThreadId.current
+    if (!threadId) return false
+    const ended = await sharedQueueAction(threadId, 'edit/end', messageId)
+    if (ended) editingQueuedMessageThreadById.current.delete(messageId)
+    return ended
+  }, [sharedQueueAction])
+
+  const sharedRemoveQueuedMessage = useCallback(async (messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    const pending = pendingServerQueueRemovals.current.get(threadId) ?? new Set<string>()
+    if (pending.has(messageId)) return false
+    pending.add(messageId)
+    pendingServerQueueRemovals.current.set(threadId, pending)
+    // Invalidate older reads before hiding the item so they cannot restore it
+    // while a slow mobile request is still in flight.
+    serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
+    publishServerQueue(threadId, serverQueuedMessagesByThreadRef.current[threadId] ?? [])
+    try {
+      const result = await devwispClient.queueAction(token, threadId, 'remove', messageId, queueControllerId.current)
+      pending.delete(messageId)
+      if (pending.size === 0) pendingServerQueueRemovals.current.delete(threadId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      pending.delete(messageId)
+      if (pending.size === 0) pendingServerQueueRemovals.current.delete(threadId)
+      publishServerQueue(threadId, serverQueuedMessagesByThreadRef.current[threadId] ?? [])
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '移除排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, publishServerQueue, refreshServerQueue, token])
+
+  const sharedMoveQueuedMessage = useCallback(async (messageId: string, adjacentMessageId: string, direction: 'up' | 'down') => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    try {
+      const result = await devwispClient.moveQueuedMessage(token, threadId, messageId, adjacentMessageId, direction)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof RemoteApiError && reason.status === 404
+        ? '电脑端服务尚未加载排队排序接口，请重启 Dev Wisp 后端。'
+        : reason instanceof Error ? reason.message : '调整排队顺序失败')
+      await refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, token])
+
+  const sharedSendQueuedMessageNow = useCallback(async (messageId: string, mode: QueuedMessageSendMode = 'start') => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    const queued = serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
+    if (queued?.translationStatus === 'pending' || queued?.translationStatus === 'failed') {
+      setError(queued.translationStatus === 'failed'
+        ? '这条消息翻译失败，请先重试翻译或编辑后再发送。'
+        : '这条消息正在后台翻译，完成后才能发送。')
+      return false
+    }
+    // The clicked action determines whether to steer. Saved preferences apply
+    // to new turns; steering explicitly uses the current turn's settings.
+    if (mode === 'steer') return sharedQueueAction(threadId, 'send-now', messageId)
+    // Keep an idle send from becoming a steer if another client starts a turn.
+    try {
+      const result = await devwispClient.startQueuedIfIdle(token, threadId, messageId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return result.sent
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '发送排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, serverQueuedMessagesByThreadRef, sharedQueueAction, token])
+
+  useEffect(() => {
+    const threadId = activeThread?.id
+    const queued = threadId ? queuedMessagesByThread[threadId] : undefined
+    const deferredAdvance = threadId ? deferredQueueAdvanceAfterEdit.current.has(threadId) : false
+    if (
+      !threadId
+      || (!deferredAdvance && queueRecoveryReadyThreadId !== threadId)
+      || !queued?.length
+      || loadingHistory
+      || connection !== 'connected'
+      || handedOff
+      || isRunning
+      || isInterrupting
+      || writerConflict
+    ) return
+    if (editingQueuedMessageByThread.current[threadId]) {
+      deferredQueueAdvanceAfterEdit.current.add(threadId)
+      return
+    }
+    if (deferredAdvance) deferredQueueAdvanceAfterEdit.current.delete(threadId)
+    void startNextQueuedMessage(threadId)
+  }, [activeThread?.id, connection, handedOff, isInterrupting, isRunning, loadingHistory, queueEditRevision, queueRecoveryReadyThreadId, queuedMessagesByThread, startNextQueuedMessage, writerConflict])
+
+  const restoreActiveThread = useCallback(async () => {
+    if (handedOffRef.current || isBackground()) return
+    const threadId = activeThreadId.current
+    if (!threadId || restoringThreadId.current === threadId) return
+    restoringThreadId.current = threadId
+    if (messagesRef.current.length === 0) setLoadingHistory(true)
+    try {
+      const threadListRefresh = refreshThreads()
+      let cached = threadHistoryCache.current.get(threadId) ?? null
+      if (!cached?.complete) cached = await restorePersistentThreadCache(threadId) ?? cached
+      if (activeThreadId.current !== threadId) return
+
+      if (cached && messagesRef.current.length === 0) {
+        const mergedThread = threadListRef.current.find((candidate) => candidate.id === threadId)
+        const visibleThread = mergedThread ? { ...cached.thread, ...mergedThread } : cached.thread
+        setActiveThread(visibleThread)
+        setMessages(cached.messages)
+        setFileChangesByTurn(cached.fileChangesByTurn)
+        operationsByTurnRef.current = cached.operationsByTurn
+        setOperationsByTurn(cached.operationsByTurn)
+        activityTimelineByTurnRef.current = cached.activityTimelineByTurn
+        setActivityTimelineByTurn(cached.activityTimelineByTurn)
+        setIsRunning(Boolean(cached.running || (mergedThread && threadIsRunning(mergedThread))))
+        setActiveTurnId(cached.running ? cached.turnId : null)
+        setLoadingHistory(false)
+      }
+
+      await threadListRefresh
+      if (activeThreadId.current !== threadId) return
+      const latestThread = threadListRef.current.find((candidate) => candidate.id === threadId)
+      const hasQueuedMessages = Boolean(queuedMessagesByThreadRef.current[threadId]?.length)
+      const metadataIsFresh = (
+        (threadListLoadedRef.current && Date.now() - threadListFetchedAtRef.current <= threadMetadataFreshnessMs)
+        || (connectionRef.current === 'connected' && latestThread?.updatedAt !== undefined)
+      )
+      if (cached && cachedHistoryMatchesThreadMetadata(
+        cached,
+        latestThread,
+        metadataIsFresh,
+        hasQueuedMessages,
+      ) && !hasQueuedMessages && !pendingThreadHistoryRefresh.current.has(threadId)) {
+        setQueueRecoveryReadyThreadId(threadId)
+        return
+      }
+      if (await loadThread(threadId)) pendingThreadHistoryRefresh.current.delete(threadId)
+    } finally {
+      if (restoringThreadId.current !== threadId) return
+      restoringThreadId.current = null
+      if (activeThreadId.current === threadId) setLoadingHistory(false)
+    }
+  }, [isBackground, loadThread, refreshThreads, restorePersistentThreadCache, setActiveTurnId])
+
+  const verifyQueuedThreadAndAdvance = useCallback(async (threadId: string) => {
+    if (handedOffRef.current || isBackground() || !queuedMessagesByThreadRef.current[threadId]?.length) return false
+    if (activeThreadId.current !== threadId
+      && (!persistActiveThread || threadHasAnotherActiveController(threadId, queueControllerId.current))) return false
+    try {
+      const thread = await devwispClient.readThread(token, threadId)
+      if (activeThreadId.current !== threadId
+        && threadHasAnotherActiveController(threadId, queueControllerId.current)) return false
+      if (!queuedMessagesByThreadRef.current[threadId]?.length) return false
+      if (activeThreadId.current === threadId) {
+        await loadThread(threadId, historyRevision.current, true, null, thread)
+        return false
+      }
+      const historyMessages = messagesFromThread(thread)
+      const waitingTurnId = queueRecoveryBarriers.current?.[threadId]?.turnId ?? latestTurnState(thread).turnId
+      const cachedMessages = threadHistoryCache.current.get(threadId)?.messages ?? []
+      const mightBeLegacyDuplicate = mightBeLegacyDuplicateQueuedMessage(
+        queuedMessagesByThreadRef.current[threadId] ?? [], cachedMessages, waitingTurnId,
+      )
+      const legacyDuplicateId = legacyDuplicateQueuedMessageId(
+        queuedMessagesByThreadRef.current[threadId] ?? [], cachedMessages, historyMessages, waitingTurnId,
+      )
+      if (legacyDuplicateId) {
+        updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== legacyDuplicateId))
+      }
+      reconcileQueuedHistory(threadId, historyMessages)
+      const head = queuedMessagesByThreadRef.current[threadId]?.[0]
+      if (!head) {
+        setQueueRecoveryBarrier(threadId, null)
+        return false
+      }
+      const historyTurnState = latestTurnState(thread)
+      const running = historyTurnState.running || (!historyTurnState.hasTurn && threadIsRunning(thread))
+      const turnState = { ...historyTurnState, running }
+      const barrier = !running && (head.sendAttempt || (mightBeLegacyDuplicate && !legacyDuplicateId))
+        ? { turnId: historyTurnState.turnId, status: 'unverified' as const }
+        : reconcileQueueRecoveryBarrier(queueRecoveryBarriers.current?.[threadId], turnState, true)
+      setQueueRecoveryBarrier(threadId, barrier)
+      if (running || barrier) return false
+      return startNextQueuedMessage(threadId)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      return false
+    }
+  }, [isBackground, loadThread, onUnauthorized, persistActiveThread, reconcileQueuedHistory, setQueueRecoveryBarrier, startNextQueuedMessage, token, updateQueuedMessages])
+
+  const refreshClaudePermissions = useCallback(async () => {
+    if (refreshingClaudePermissions.current || isBackground()) return
+    refreshingClaudePermissions.current = true
+    const revision = claudePermissionRevision.current
+    try {
+      const response = await devwispClient.pendingClaudePermissions(token)
+      if (claudePermissionRevision.current === revision && Array.isArray(response.requests)) {
+        setClaudePermissions(response.requests)
+      }
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      // A network failure must retain any request already shown. Older servers
+      // may not have the recovery endpoint yet, so keep the event path usable.
+    } finally {
+      refreshingClaudePermissions.current = false
+    }
+  }, [isBackground, onUnauthorized, token])
+
+  useEffect(() => {
+    if (!enabled) return
+    const refresh = () => { void refreshClaudePermissions() }
+    refresh()
+    const timer = window.setInterval(refresh, 5_000)
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('devwisp:resume', refresh)
+    window.addEventListener('online', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('devwisp:resume', refresh)
+      window.removeEventListener('online', refresh)
+    }
+  }, [enabled, refreshClaudePermissions])
+
+  const handleEvent = useCallback((event: RemoteEvent) => {
+    if (handedOffRef.current && event.type !== 'connection'
+      && event.type !== 'claude/permission/request' && event.type !== 'claude/permission/resolved') return
+    if (event.type === 'remote.queue.changed') {
+      if (persistActiveThread) setQueueRevision((revision) => revision + 1)
+      if (event.threadId && event.threadId === activeThreadId.current) void refreshServerQueue(event.threadId)
+      return
+    }
+    if (event.type === 'remote.pins.changed') {
+      setPinRevision((revision) => revision + 1)
+      return
+    }
+    if (event.type === 'thread.history.changed') {
+      if (event.threadId === activeThreadId.current && event.revision !== activeThreadRef.current?.historyRevision) {
+        if (isBackground()) {
+          pendingThreadHistoryRefresh.current.add(event.threadId!)
+          threadHistoryGaps.current.add(event.threadId!)
+        } else scheduleHistoryReconciliation()
+      }
+      return
+    }
+    if (event.type === 'claude.threads.changed' || event.type === 'threads.changed') {
+      scheduleMetadataRefresh()
+      return
+    }
+    if (event.type === 'connection') {
+      if (!event.connected) resumedThreadId.current = null
+      const eventHandedOff = event.handedOff ?? handedOffRef.current
+      if (eventHandedOff) {
+        setHandoffState(true)
+        setConnectionState('disconnected')
+      }
+      setRuntime({
+        available: Boolean(event.available),
+        connected: Boolean(event.connected),
+        workspace: event.workspace ?? '',
+        handedOff: eventHandedOff,
+        runtimeMode: event.runtimeMode,
+        runtimeMessage: event.runtimeMessage ?? null,
+        fallbackReason: event.fallbackReason ?? null,
+        error: event.error ?? null,
+      })
+      if (eventHandedOff) setError(null)
+      else if (event.error) setError(event.error)
+      else if (event.connected) setError(null)
+      return
+    }
+    if (event.type === 'error') {
+      setError(event.message ?? 'Codex 请求失败')
+      return
+    }
+    if (event.type === 'server_request.resolved') {
+      const requestId = event.request_id
+      setApproval((current) => current && current.requestId === requestId ? null : current)
+      return
+    }
+    if (event.type === 'turn.delivery') {
+      const requestId = typeof event.request_id === 'string' ? event.request_id : null
+      const delivery = requestId ? pendingTurnDeliveries.current.get(requestId) : undefined
+      if (requestId && delivery && delivery.threadId === event.params?.threadId) {
+        applyTurnDelivery(
+          delivery.threadId,
+          requestId,
+          typeof event.params.turnId === 'string' ? event.params.turnId : null,
+        )
+      }
+      return
+    }
+    if (event.type === 'server_request') {
+      const requestMethod = event.method ?? ''
+      const supportedApproval = requestMethod === 'item/commandExecution/requestApproval'
+        || requestMethod === 'item/fileChange/requestApproval'
+        || requestMethod === 'item/tool/requestUserInput'
+        || requestMethod === 'mcpServer/elicitation/request'
+        || requestMethod === 'execCommandApproval'
+        || requestMethod === 'applyPatchApproval'
+      if (supportedApproval && (typeof event.request_id === 'string' || typeof event.request_id === 'number')) {
+        setApproval({ requestId: event.request_id, method: requestMethod, params: event.params ?? {}, approvalScope: event.approvalScope })
+      }
+      return
+    }
+    if (event.type === 'claude/permission/resolved') {
+      const permissionId = event.params?.permissionId
+      if (typeof permissionId === 'string') {
+        claudePermissionRevision.current += 1
+        setClaudePermissions((current) => current.filter((item) => item.permissionId !== permissionId))
+      }
+      return
+    }
+    if (event.type === 'claude/permission/request') {
+      const params = event.params ?? {}
+      const threadId = typeof params.threadId === 'string' ? params.threadId : ''
+      const permissionId = typeof params.permissionId === 'string' ? params.permissionId : ''
+      if (threadId && permissionId) {
+        claudePermissionRevision.current += 1
+        const request: ClaudePermissionRequest = {
+          threadId,
+          permissionId,
+          toolName: typeof params.toolName === 'string' ? params.toolName : '',
+          command: typeof params.command === 'string' ? params.command : '',
+          filePath: typeof params.filePath === 'string' ? params.filePath : '',
+          cwd: typeof params.cwd === 'string' ? params.cwd : '',
+          reason: typeof params.reason === 'string' ? params.reason : '',
+        }
+        setClaudePermissions((current) => current.some((item) => item.permissionId === permissionId)
+          ? current
+          : [...current, request])
+      }
+      return
+    }
+    if (event.type !== 'notification' || !event.method) return
+
+    if (event.method === 'nativeConfig/changed') {
+      if (loadModels) window.dispatchEvent(new CustomEvent('devwisp:native-config-changed', { detail: event.params }))
+      return
+    }
+
+    // A subscription update and in-flight events can cross on the wire. Keep
+    // lightweight lifecycle notifications, but defer rendering missed details
+    // to the single history reconciliation on foreground recovery.
+    if (isBackground() && event.method !== 'turn/started' && event.method !== 'turn/completed'
+      && event.method !== 'thread/name/updated' && event.method !== 'thread/deleted') return
+
+    const params = event.params ?? {}
+    const eventTurn = params.turn as Record<string, unknown> | undefined
+    const eventThreadId = typeof params.threadId === 'string'
+      ? params.threadId
+      : typeof eventTurn?.threadId === 'string' ? eventTurn.threadId : null
+    const eventTurnId = typeof eventTurn?.id === 'string'
+      ? eventTurn.id
+      : typeof params.turnId === 'string' ? params.turnId : null
+    rememberTurnDisplayPreferences(turnDisplayPreferences.current, eventTurnId, {
+      ...(typeof eventTurn?.model === 'string' && eventTurn.model ? { model: eventTurn.model } : {}),
+      ...(typeof eventTurn?.effort === 'string' && eventTurn.effort
+        ? { effort: eventTurn.effort }
+        : typeof eventTurn?.reasoningEffort === 'string' && eventTurn.reasoningEffort ? { effort: eventTurn.reasoningEffort } : {}),
+    })
+    const applyRemoteUserItem = (item: Record<string, unknown> | undefined, turnId: string | null) => {
+      if (!activeThreadId.current) return
+      const itemId = typeof item?.id === 'string' ? item.id : undefined
+      const pendingLocalDelivery = [...pendingTurnDeliveries.current.values()]
+        .some((delivery) => delivery.threadId === activeThreadId.current)
+      const remoteUserMessage = userMessageFromEventItem(item, turnId)
+      const knownMessages = mergeObservedUserMessages(messagesRef.current, observedUserItems.current.values())
+      const alreadyVisible = itemId ? knownMessages.some((message) =>
+        message.id === itemId || message.sourceItemId === itemId,
+      ) : false
+      if (remoteUserMessage && !alreadyVisible) {
+        if (startsNewAssistantStreamSegment(knownMessages, remoteUserMessage)) {
+          historyRevision.current += 1
+          finalizeVisibleStreamingTurn(turnId)
+        }
+        const observed = insertRemoteUserMessage([...observedUserItems.current.values()], remoteUserMessage)
+        observedUserItems.current = new Map(observed.slice(-256).map((message) => [message.id, message]))
+        setMessages((current) => {
+          const next = insertRemoteUserMessage(current, remoteUserMessage)
+          return sameMessages(current, next) ? current : next
+        })
+      }
+      const hasUnresolvedImages = Array.isArray(item?.content) && item.content.some((part: unknown) => {
+        if (!part || typeof part !== 'object') return false
+        const content = part as Record<string, unknown>
+        return content.type === 'localImage' && (typeof content.data !== 'string' || !content.data)
+      })
+      if (hasUnresolvedImages && !pendingLocalDelivery) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId, true)
+      } else if (!remoteUserMessage) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
+      }
+    }
+    if (event.method === 'thread/name/updated') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : null
+      if (threadId && (typeof params.threadName === 'string' || params.threadName === null)) {
+        devwispClient.updateThreadListEntry(token, threadId, { name: params.threadName })
+        applyThreadName(threadId, params.threadName)
+      }
+      return
+    }
+    if (event.method === 'thread/deleted') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : null
+      if (threadId) {
+        devwispClient.updateThreadListEntry(token, threadId, null)
+        removeDeletedThread(threadId)
+        void refreshThreads()
+      }
+      return
+    }
+    if (event.method === 'turn/completed') {
+      const completedThreadId = eventThreadId ?? activeThreadId.current
+      const completedTurnId = eventTurnId ?? activeTurnId.current
+      if (completedThreadId && completedTurnId) {
+        for (const delivery of pendingTurnDeliveries.current.values()) {
+          if (delivery.threadId === completedThreadId) delivery.completedTurnIds.add(completedTurnId)
+        }
+      }
+    }
+    const routedThreadId = eventThreadId ?? activeThreadId.current
+    if (routedThreadId && liveTurnHistory.current.isFinished(routedThreadId, eventTurnId)
+      && event.method !== 'turn/completed' && event.method !== 'turn/workspaceChanges') {
+      // Reconcile late items through history; they must never reopen streaming.
+      if (routedThreadId === activeThreadId.current) scheduleHistoryReconciliation()
+      return
+    }
+    const eventItem = params.item as Record<string, unknown> | undefined
+    const eventItemType = typeof eventItem?.type === 'string' ? eventItem.type.replace(/[-_]/g, '').toLowerCase() : ''
+    const assistantItemId = event.method === 'item/agentMessage/delta' ? params.itemId
+      : eventItemType === 'agentmessage' ? eventItem?.id : null
+    if (retiredAssistantItems.current.turnId === (eventTurnId ?? activeTurnId.current)
+      && typeof assistantItemId === 'string' && retiredAssistantItems.current.ids.has(assistantItemId)) return
+    if (eventThreadId && (event.method === 'turn/started' || event.method === 'turn/completed')) {
+      const status = { type: event.method === 'turn/started' ? 'active' : 'idle' }
+      devwispClient.updateThreadListEntry(token, eventThreadId, {
+        status,
+      })
+      if (loadThreads && threadListRef.current.some((thread) => thread.id === eventThreadId)) {
+        const next = threadListRef.current.map((thread) => thread.id === eventThreadId ? { ...thread, status } : thread)
+        threadListRef.current = next
+        setThreads(next)
+      }
+    }
+    // Older app-server notifications can omit threadId on item deltas. When
+    // that happens, use the active turn as the second routing key so a second
+    // pane does not render another pane's stream.
+    if (!eventThreadId && eventTurnId && eventTurnId !== activeTurnId.current) return
+    if (eventThreadId && eventThreadId !== activeThreadId.current) {
+      const manageBackgroundQueue = persistActiveThread
+        && !threadHasAnotherActiveController(eventThreadId, queueControllerId.current)
+      if (event.method === 'turn/started') {
+        if (manageBackgroundQueue && queuedMessagesByThreadRef.current[eventThreadId]?.length) {
+          setQueueRecoveryBarrier(eventThreadId, { turnId: eventTurnId, status: 'running' })
+        }
+        updateCachedThreadRunState(eventThreadId, true, eventTurnId)
+        clearThreadCompletion(eventThreadId)
+        void refreshThreads()
+      } else if (event.method === 'turn/completed') {
+        const cachedTurnId = threadHistoryCache.current.get(eventThreadId)?.turnId ?? null
+        const completedTurnId = typeof eventTurn?.id === 'string' ? eventTurn.id : eventTurnId ?? cachedTurnId
+        const turnStatus = normalizedOperationStatus(eventTurn?.status, 'completed')
+        finalizeTurnOperations(eventThreadId, completedTurnId, turnStatus === 'running' ? 'completed' : turnStatus)
+        if (completedTurnId) turnStartedAtById.current.delete(completedTurnId)
+        updateCachedThreadRunState(eventThreadId, false, null)
+        markThreadCompletion(eventThreadId)
+        if (manageBackgroundQueue && queuedMessagesByThreadRef.current[eventThreadId]?.length) {
+          const completedStatus = normalizedOperationStatus(eventTurn?.status, 'completed')
+          if (completedStatus !== 'completed') {
+            setQueueRecoveryBarrier(eventThreadId, {
+              turnId: completedTurnId ?? queueRecoveryBarriers.current?.[eventThreadId]?.turnId ?? null,
+              status: 'interrupted',
+            })
+          } else {
+            void verifyQueuedThreadAndAdvance(eventThreadId)
+          }
+        }
+        void prefetchThread({ id: eventThreadId }, true)
+        void refreshThreads()
+      } else if (event.method === 'item/started' || event.method === 'item/completed') {
+        const item = params.item as Record<string, unknown> | undefined
+        const turnId = typeof params.turnId === 'string' ? params.turnId : eventTurnId ?? threadHistoryCache.current.get(eventThreadId)?.turnId ?? null
+        const operation = operationForItem(item, event.method === 'item/started'
+          ? 'running'
+          : normalizedOperationStatus(item?.status, 'completed') === 'running' ? 'completed' : undefined)
+        if (operation) commitTurnOperation(eventThreadId, turnId, operation)
+      } else if (event.method === 'item/fileChange/patchUpdated') {
+        const itemId = typeof params.itemId === 'string' ? params.itemId : null
+        const turnId = typeof params.turnId === 'string' ? params.turnId : eventTurnId ?? threadHistoryCache.current.get(eventThreadId)?.turnId ?? null
+        const operation = itemId ? operationForItem({
+          id: itemId,
+          type: 'fileChange',
+          status: 'inProgress',
+          changes: params.changes,
+        }, 'running') : null
+        if (operation) commitTurnOperation(eventThreadId, turnId, operation)
+      } else if (event.method === 'turn/workspaceChanges') {
+        const turnId = typeof params.turnId === 'string' ? params.turnId : null
+        const fileChange = turnId ? workspaceFileChange(turnId, params.changes) : null
+        const cachedThread = threadHistoryCache.current.get(eventThreadId)
+        if (turnId && fileChange && cachedThread) {
+          cacheThreadSnapshot(cachedThread.thread, cachedThread.messages, {
+            running: cachedThread.running,
+            turnId: cachedThread.turnId,
+            fileChangesByTurn: mergeFileChangesByTurn(cachedThread.fileChangesByTurn, { [turnId]: [fileChange] }),
+            operationsByTurn: cachedThread.operationsByTurn,
+          })
+        } else if (turnId && fileChange) {
+          void prefetchThread({ id: eventThreadId }, true)
+        }
+      }
+      return
+    }
+
+    if (event.method === 'turn/started') {
+      const turn = eventTurn
+      const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
+      if (turnThreadId && turnThreadId !== activeThreadId.current) return
+      historyRevision.current += 1
+      const turnId = typeof turn?.id === 'string'
+        ? turn.id
+        : typeof params.turnId === 'string' ? params.turnId : null
+      const startedAt = eventTimestamp(turn?.startedAt) ?? Date.now()
+      if (turnThreadId && turnId) liveTurnHistory.current.start(turnThreadId, turnId)
+      if (turnThreadId && queuedMessagesByThreadRef.current[turnThreadId]?.length) {
+        setQueueRecoveryBarrier(turnThreadId, { turnId, status: 'running' })
+      }
+      const previousTurnId = activeTurnId.current
+      if (previousTurnId && turnId && previousTurnId !== turnId) {
+        finalizeVisibleStreamingTurn(previousTurnId)
+        finalizeTurnOperations(
+          turnThreadId ?? activeThreadId.current,
+          previousTurnId,
+          interruptRequestedTurnId.current === previousTurnId ? 'stopped' : 'completed',
+        )
+      }
+      if (turnId) {
+        setActiveTurnId(turnId)
+        const requestedTurnId = interruptRequestedTurnId.current
+        if (turnThreadId && interruptRequestedThreadId.current === turnThreadId && (!requestedTurnId || requestedTurnId === turnId)) {
+          void dispatchInterrupt(turnThreadId, turnId)
+        } else if (turnThreadId && interruptRequestedThreadId.current === turnThreadId && requestedTurnId && requestedTurnId !== turnId) {
+          // A new turn has begun after the requested stop. Do not carry the
+          // old stop intent into the new turn.
+          interruptRequestedThreadId.current = null
+          interruptRequestedTurnId.current = null
+          setIsInterrupting(false)
+        }
+      }
+      setQueueRecoveryReadyThreadId(null)
+      resetStreamingAssistant()
+      writerConflictRef.current = false
+      setWriterConflict(false)
+      setError((current) => current === activeWriterError ? null : current)
+      setIsRunning(true)
+      startTurnTimerForTurn(turnId, startedAt)
+      setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
+      activityItemId.current = null
+      scheduleHistoryReconciliation()
+      return
+    }
+    if (event.method === 'turn/completed') {
+      const turn = eventTurn
+      const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
+      if (turnThreadId && turnThreadId !== activeThreadId.current) return
+      const completedTurnId = typeof turn?.id === 'string'
+        ? turn.id
+        : typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      const completedAt = eventTimestamp(turn?.completedAt) ?? Date.now()
+      const staleCompletion = params.stale === true
+      const completedStatus = normalizedOperationStatus(turn?.status, 'completed')
+      const replyError = turnThreadId?.startsWith('claude:') && completedStatus === 'failed'
+        && typeof turn?.error === 'string' ? turn.error : null
+      if (turnThreadId && completedTurnId) {
+        liveTurnHistory.current.finish(turnThreadId, completedTurnId,
+          completedStatus === 'running' ? 'completed' : completedStatus === 'stopped' ? 'interrupted' : completedStatus,
+          completedAt)
+      }
+      if (turnThreadId && isBackground()) markThreadCompletion(turnThreadId)
+      finalizeTurnOperations(turnThreadId ?? activeThreadId.current, completedTurnId, completedStatus === 'running' ? 'completed' : completedStatus)
+      const currentTurnId = activeTurnId.current
+      if (completedTurnId && currentTurnId && completedTurnId !== currentTurnId) {
+        // A delayed completion for the previous turn must not terminate a
+        // newer turn that is already visible in this thread.
+        finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion, replyError ?? undefined)
+        if (interruptRequestedTurnId.current === completedTurnId) {
+          interruptRequestedThreadId.current = null
+          interruptRequestedTurnId.current = null
+          setIsInterrupting(false)
+        }
+        return
+      }
+      setActiveTurnId(null)
+      if (!turnThreadId || interruptRequestedThreadId.current === turnThreadId) {
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        setIsInterrupting(false)
+      }
+      writerConflictRef.current = false
+      setWriterConflict(false)
+      setError((current) => current === activeWriterError ? null : current)
+      if (replyError) setError(replyError)
+      setIsRunning(false)
+      const queuedThreadId = turnThreadId ?? activeThreadId.current
+      const hasQueuedMessages = Boolean(queuedThreadId && queuedMessagesByThreadRef.current[queuedThreadId]?.length)
+      const existingBarrier = queuedThreadId ? queueRecoveryBarriers.current?.[queuedThreadId] : undefined
+      const canReleaseQueue = completionReleasesQueueBarrier(
+        existingBarrier,
+        completedTurnId,
+        completedStatus === 'completed',
+      ) && (!existingBarrier || currentTurnId === completedTurnId)
+      const needsHistoryCheck = Boolean(canReleaseQueue && queuedThreadId && (
+        queuedMessagesByThreadRef.current[queuedThreadId]?.[0]?.sendAttempt
+        || mightBeLegacyDuplicateQueuedMessage(
+          queuedMessagesByThreadRef.current[queuedThreadId] ?? [], messagesRef.current, completedTurnId,
+        )
+      ))
+      if (queuedThreadId && hasQueuedMessages && completedStatus !== 'completed') {
+        setQueueRecoveryBarrier(queuedThreadId, {
+          turnId: completedTurnId ?? existingBarrier?.turnId ?? null,
+          status: 'interrupted',
+        })
+      } else if (queuedThreadId && canReleaseQueue) {
+        setQueueRecoveryBarrier(queuedThreadId, needsHistoryCheck
+          ? { turnId: completedTurnId, status: 'unverified' }
+          : null)
+      }
+      setQueueRecoveryReadyThreadId(canReleaseQueue && !needsHistoryCheck ? queuedThreadId : null)
+      // Commit the accumulated text before finalizing the turn. This avoids a
+      // trailing timer/transition from recreating a stale streaming message.
+      finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion, replyError ?? undefined)
+      finishTurnTimer()
+      setActivity(null)
+      activityItemId.current = null
+      const refreshThreadId = activeThreadId.current
+      const refreshRevision = ++historyRevision.current
+      // Start only one queued item for each completed turn. Starting it bumps
+      // the history revision, so the just-completed snapshot cannot overwrite
+      // the optimistic queued user message while its new turn is starting.
+      if (queuedThreadId && canReleaseQueue && !needsHistoryCheck) void startNextQueuedMessage(queuedThreadId)
+      if (refreshThreadId) {
+        if (!isBackground() && !threadHistoryGaps.current.has(refreshThreadId)) pendingThreadHistoryRefresh.current.delete(refreshThreadId)
+        void refreshThreads().then((nextThreads) => {
+          if (!nextThreads || activeThreadId.current !== refreshThreadId || historyRevision.current !== refreshRevision) return
+          const latestThread = nextThreads.find((thread) => thread.id === refreshThreadId)
+          if (latestThread) applyActiveThreadMetadata(latestThread)
+        })
+        scheduleHistoryReconciliation()
+      }
+      return
+    }
+    if (event.method === 'turn/workspaceChanges') {
+      const turnId = typeof params.turnId === 'string' ? params.turnId : null
+      const fileChange = turnId ? workspaceFileChange(turnId, params.changes) : null
+      if (fileChange) addFileChangeToTurn(turnId, fileChange)
+      return
+    }
+    if (event.method === 'turn/plan/updated') {
+      setActivity({ label: '正在整理执行计划' })
+      return
+    }
+    if (event.method === 'reasoning/summaryTextDelta') {
+      setActivity({ label: '正在思考' })
+      return
+    }
+    if (event.method === 'item/started') {
+      const item = params.item as Record<string, unknown> | undefined
+      const fileChange = fileChangeForItem(item)
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
+      const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType === 'usermessage' && activeThreadId.current) {
+        applyRemoteUserItem(item, turnId)
+      }
+      if (fileChange) addFileChangeToTurn(turnId, fileChange)
+      const operation = operationForItem(item, 'running')
+      if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
+      if (itemType === 'agentmessage' && turnId && typeof item?.id === 'string') {
+        commitTurnActivityMessage(activeThreadId.current, turnId, item.id, assistantItemText(item.text).length)
+      }
+      activityItemId.current = typeof item?.id === 'string' ? item.id : null
+      setIsRunning(true)
+      startTurnTimerForTurn(turnId)
+      setActivity(activityForItem(item))
+      return
+    }
+    if (event.method === 'item/fileChange/patchUpdated') {
+      const itemId = typeof params.itemId === 'string' ? params.itemId : `file-change-${Date.now()}`
+      const fileChange = fileChangeForItem({
+        type: 'fileChange',
+        id: itemId,
+        status: 'inProgress',
+        changes: params.changes,
+      })
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
+      if (fileChange) addFileChangeToTurn(turnId, fileChange)
+      const operation = operationForItem({
+        id: itemId,
+        type: 'fileChange',
+        status: 'inProgress',
+        changes: params.changes,
+      }, 'running')
+      if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
+      setIsRunning(true)
+      startTurnTimerForTurn(turnId)
+      setActivity({ label: '正在修改文件', detail: fileChange ? `${fileChange.changes.length} 个文件` : undefined })
+      return
+    }
+    if (event.method === 'item/agentMessage/delta') {
+      const itemId = typeof params.itemId === 'string' ? params.itemId : `stream-${Date.now()}`
+      const delta = typeof params.delta === 'string' ? params.delta : ''
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (streamingAssistantTurnId.current && turnId && streamingAssistantTurnId.current !== turnId) {
+        finalizeVisibleStreamingTurn(streamingAssistantTurnId.current)
+      }
+      if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
+      const part = streamingAssistantParts.current.get(itemId) ?? ''
+      streamingAssistantParts.current.set(itemId, part + delta)
+      if (turnId) commitTurnActivityMessage(activeThreadId.current, turnId, itemId, part.length + delta.length, false)
+      const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
+      streamingAssistantMessageId.current = messageId
+      activityItemId.current = itemId
+      setActivity((current) => current?.label === '正在回复' && !current.detail ? current : { label: '正在回复' })
+      scheduleStreamingAssistantRender()
+      return
+    }
+    if (event.method === 'item/completed') {
+      const item = params.item as Record<string, unknown> | undefined
+      const fileChange = fileChangeForItem(item)
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (fileChange) addFileChangeToTurn(turnId, { ...fileChange, status: 'completed' })
+      const operationStatus = normalizedOperationStatus(item?.status, 'completed')
+      const operation = operationForItem(item, operationStatus === 'running' ? 'completed' : operationStatus)
+      if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
+      const itemId = typeof item?.id === 'string' ? item.id : null
+      const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType === 'usermessage') {
+        applyRemoteUserItem(item, turnId)
+      }
+      if (itemType === 'agentmessage' && itemId && turnId) {
+        const text = assistantItemText(item?.text)
+        commitTurnActivityMessage(activeThreadId.current, turnId, itemId, text.length || streamingAssistantParts.current.get(itemId)?.length || 0)
+      }
+      if (itemType !== 'agentmessage') {
+        if (itemId && activityItemId.current === itemId) {
+          activityItemId.current = null
+          setActivity({ label: '正在思考' })
+        }
+        return
+      }
+      const text = assistantItemText(item?.text)
+      if (!itemId) return
+      const questions = parseStructuredAssistantQuestions(item?.questions)
+      if (questions.length > 0) {
+        streamingAssistantChoice.current = {
+          questions,
+          choiceItemId: itemId,
+          choicePromptText: text,
+          choiceDelivery: typeof item?.delivery === 'string' ? item.delivery : undefined,
+        }
+      }
+      if (streamingAssistantTurnId.current && turnId && streamingAssistantTurnId.current !== turnId) {
+        finalizeVisibleStreamingTurn(streamingAssistantTurnId.current)
+      }
+      if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
+      streamingAssistantParts.current.set(itemId, text || streamingAssistantParts.current.get(itemId) || '')
+      streamingCompletedItems.current.add(itemId)
+      const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
+      streamingAssistantMessageId.current = messageId
+      scheduleStreamingAssistantRender()
+      return
+    }
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadModels, loadThread, loadThreads, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  const handleEventRef = useRef(handleEvent)
+  handleEventRef.current = handleEvent
+
+  useEffect(() => {
+    if (!enabled) {
+      setConnectionState('disconnected')
+      setLoadingHistory(false)
+      return
+    }
+    let disposed = false
+    let retryTimer: number | undefined
+    let stableTimer: number | undefined
+    let retryDelay = 500
+    let socketGeneration = 0
+
+    const connect = (force = false) => {
+      if (disposed || handedOffRef.current || isBackground()) return
+      if (!force && socketRef.current && connectionRef.current === 'connected') return
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer)
+        retryTimer = undefined
+      }
+      const currentGeneration = ++socketGeneration
+      socketRef.current?.close()
+      socketRef.current = devwispClient.connect(token, (event) => {
+        if (!disposed && currentGeneration === socketGeneration) handleEventRef.current(event)
+      }, (nextState) => {
+        if (disposed || currentGeneration !== socketGeneration) return
+        if (handedOffRef.current) {
+          setConnectionState('disconnected')
+          return
+        }
+        const wasConnected = connectionRef.current === 'connected'
+        setConnectionState(nextState)
+        if (nextState !== 'connected') {
+          if (wasConnected && activeThreadId.current) {
+            threadHistoryGaps.current.add(activeThreadId.current)
+            pendingThreadHistoryRefresh.current.add(activeThreadId.current)
+          }
+          resumedThreadId.current = null
+          if (stableTimer !== undefined) window.clearTimeout(stableTimer)
+          stableTimer = undefined
+        }
+        if (nextState === 'connected') {
+          socketRef.current?.subscribeThread(isBackground() ? null : activeThreadId.current)
+          void refreshClaudePermissions()
+          if (wasConnected) return
+          stableTimer = window.setTimeout(() => { retryDelay = 500 }, 30_000)
+          void restoreActiveThread()
+          if (activeThreadId.current) void refreshServerQueue(activeThreadId.current)
+          if (loadThreads) void refreshThreads()
+          if (loadModels) void refreshModels()
+        } else if (nextState === 'disconnected' || nextState === 'unavailable') {
+          if (retryTimer !== undefined || isBackground()) return
+          retryTimer = window.setTimeout(() => {
+            retryTimer = undefined
+            connect()
+          }, Math.round(retryDelay * (0.8 + Math.random() * 0.4)))
+          retryDelay = Math.min(10_000, retryDelay * 2)
+        }
+      }, activeThreadId.current)
+    }
+    reconnectRef.current = connect
+
+    let wasHidden = isBackground()
+    let lastBackgroundReconnectAt = 0
+    let lastRecoveryAt = 0
+    let recoveryInFlight = false
+    const resumeFromBackground = (force = false) => {
+      if (disposed || handedOffRef.current || isBackground()) return
+      // Mobile browsers can fire visibilitychange and pageshow back-to-back.
+      // Avoid replacing a healthy socket (and reloading the whole history)
+      // merely because the page returned to the foreground.
+      if (!force && connectionRef.current !== 'disconnected' && connectionRef.current !== 'unavailable') return
+      const now = Date.now()
+      if (now - lastBackgroundReconnectAt < 800) return
+      lastBackgroundReconnectAt = now
+      retryDelay = 500
+      connect(force)
+    }
+    const recoverConnection = async () => {
+      if (disposed || handedOffRef.current || isBackground() || recoveryInFlight) return
+      devwispClient.resumeHistorySync(token)
+      socketRef.current?.subscribeThread(activeThreadId.current)
+      const now = Date.now()
+      if (now - lastRecoveryAt < 800) return
+      lastRecoveryAt = now
+      const socket = socketRef.current
+      if (!socket || connectionRef.current !== 'connected') {
+        resumeFromBackground(true)
+        return
+      }
+      recoveryInFlight = true
+      const generation = socketGeneration
+      try {
+        const healthy = await socket.checkConnection()
+        if (disposed || generation !== socketGeneration || socketRef.current !== socket || isBackground()) return
+        if (!healthy) {
+          resumeFromBackground(true)
+          return
+        }
+        const threadId = activeThreadId.current
+        if (threadId) void refreshServerQueue(threadId)
+        const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
+        if (hasQueuedMessages || isRunningRef.current || activeTurnId.current || (threadId && pendingThreadHistoryRefresh.current.has(threadId))) void restoreActiveThread()
+        else void refreshActiveThreadIfChanged()
+      } finally {
+        recoveryInFlight = false
+      }
+    }
+    const suspendHistorySync = () => {
+      wasHidden = true
+      devwispClient.pauseHistorySync(token)
+      if (activeThreadId.current) {
+        pendingThreadHistoryRefresh.current.add(activeThreadId.current)
+        threadHistoryGaps.current.add(activeThreadId.current)
+      }
+      // The socket retains turn completion/approval notifications. Removing
+      // the detail subscription stops hidden token, patch and image traffic.
+      socketRef.current?.subscribeThread(null)
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      retryTimer = undefined
+      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
+      if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
+      threadPrefetchTimer.current = undefined
+      if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
+    const handleAppBackground = () => {
+      appBackgroundRef.current = true
+      suspendHistorySync()
+    }
+    const handleAppResume = () => {
+      appBackgroundRef.current = false
+      if (document.visibilityState !== 'hidden') wasHidden = false
+      void recoverConnection()
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        suspendHistorySync()
+        return
+      }
+      if (!wasHidden) return
+      wasHidden = false
+      appBackgroundRef.current = false
+      void recoverConnection()
+    }
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) handleAppResume()
+    }
+    const handleOnline = () => { void recoverConnection() }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pageshow', handlePageShow)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('devwisp:resume', handleAppResume)
+    window.addEventListener('devwisp-app-background', handleAppBackground)
+    if (isBackground()) suspendHistorySync()
+    else devwispClient.resumeHistorySync(token)
+
+    void (async () => {
+      try {
+        const nextRuntime = await devwispClient.status(token)
+        if (disposed) return
+        setRuntime(nextRuntime)
+        setHandoffState(nextRuntime.handedOff)
+        if (nextRuntime.handedOff) {
+          setConnectionState('disconnected')
+          setLoadingHistory(false)
+          return
+        }
+        connect()
+        void restoreActiveThread()
+        if (loadThreads) void refreshThreads()
+        if (loadModels) void refreshModels()
+      } catch (reason) {
+        if (disposed) return
+        if (reason instanceof RemoteApiError && reason.status === 401) {
+          onUnauthorized()
+          return
+        }
+        setError(reason instanceof Error ? reason.message : '无法连接本机服务')
+        setConnectionState('unavailable')
+        connect()
+        setLoadingHistory(false)
+      }
+    })()
+
+    return () => {
+      disposed = true
+      socketGeneration += 1
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      if (stableTimer !== undefined) window.clearTimeout(stableTimer)
+      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
+      if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
+      if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      if (streamingRenderTimer.current !== undefined) {
+        window.clearTimeout(streamingRenderTimer.current)
+        streamingRenderTimer.current = undefined
+      }
+      socketRef.current?.close()
+      socketRef.current = null
+      if (reconnectRef.current === connect) reconnectRef.current = () => {}
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pageshow', handlePageShow)
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('devwisp:resume', handleAppResume)
+      window.removeEventListener('devwisp-app-background', handleAppBackground)
+    }
+  }, [enabled, isBackground, loadModels, loadThreads, onUnauthorized, refreshActiveThreadIfChanged, refreshClaudePermissions, refreshModels, refreshServerQueue, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+
+  const selectThread = useCallback(async (thread: CodexThread, options: SelectThreadOptions = {}) => {
+    if (handedOffRef.current) return
+    if (!thread.id) return
+    const refreshHistory = options.refreshHistory ?? false
+    if (thread.id === activeThreadId.current) {
+      clearThreadCompletion(thread.id)
+      if (!refreshHistory) return
+      const threadRevision = ++historyRevision.current
+      if (messagesRef.current.length === 0) setLoadingHistory(true)
+      try {
+        const loaded = await loadThread(thread.id, threadRevision)
+        if (loaded) setError(null)
+      } finally {
+        if (activeThreadId.current === thread.id && historyRevision.current === threadRevision) setLoadingHistory(false)
+      }
+      return
+    }
+    if (cachedActiveThreadRefreshTimer.current !== undefined) {
+      window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
+    const previousThread = activeThread
+    cacheVisibleThread()
+    const requestId = ++loadRequest.current
+    const threadRevision = ++historyRevision.current
+    clearThreadCompletion(thread.id)
+    activeThreadId.current = thread.id
+    if (persistActiveThread) persistActiveThreadId(thread.id)
+    setQueueRecoveryReadyThreadId(null)
+    resetStreamingAssistant()
+    setActiveTurnId(null)
+    interruptRequestedThreadId.current = null
+    interruptRequestedTurnId.current = null
+    interruptInFlightThreadId.current = null
+    resumedThreadId.current = null
+    let cachedThread = threadHistoryCache.current.get(thread.id) ?? null
+    if (cachedThread) {
+      threadHistoryCache.current.delete(thread.id)
+      threadHistoryCache.current.set(thread.id, cachedThread)
+    } else if (persistActiveThread) {
+      const persistedCache = readPersistedActiveThreadCache(thread.id)
+      if (persistedCache) {
+        cachedThread = {
+          thread: persistedCache.thread,
+          messages: persistedCache.messages,
+          fileChangesByTurn: {},
+          operationsByTurn: {},
+          activityTimelineByTurn: {},
+          running: false,
+          turnId: null,
+          characters: cachedHistoryCharacters(persistedCache.messages),
+          complete: false,
+        }
+        cacheThreadSnapshot(persistedCache.thread, persistedCache.messages, {
+          fileChangesByTurn: {},
+          operationsByTurn: {},
+          activityTimelineByTurn: {},
+          running: false,
+          turnId: null,
+          complete: false,
+        })
+      }
+    }
+
+    const showCachedThread = (entry: ThreadCacheEntry) => {
+      const latest = threadListRef.current.find((candidate) => candidate.id === thread.id) ?? thread
+      const cachedRunning = Boolean(entry.running || threadIsRunning(latest))
+      setActiveThread({ ...entry.thread, ...latest })
+      setMessages(entry.messages)
+      setFileChangesByTurn(entry.fileChangesByTurn)
+      operationsByTurnRef.current = entry.operationsByTurn
+      setOperationsByTurn(entry.operationsByTurn)
+      activityTimelineByTurnRef.current = entry.activityTimelineByTurn
+      setActivityTimelineByTurn(entry.activityTimelineByTurn)
+      setIsRunning(cachedRunning)
+      setActiveTurnId(cachedRunning ? entry.turnId : null)
+      setLoadingHistory(false)
+    }
+
+    if (cachedThread) showCachedThread(cachedThread)
+    else {
+      setActiveThread(thread)
+      setMessages([])
+      setFileChangesByTurn({})
+      operationsByTurnRef.current = {}
+      setOperationsByTurn({})
+      activityTimelineByTurnRef.current = {}
+      setActivityTimelineByTurn({})
+      setIsRunning(threadIsRunning(thread))
+      setActiveTurnId(null)
+    }
+    setIsInterrupting(false)
+    clearTurnTimer()
+    setActivity(null)
+    writerConflictRef.current = false
+    setWriterConflict(false)
+    activityItemId.current = null
+    setLoadingHistory(!cachedThread)
+    if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
+
+    if (loadThreads && (connectionRef.current !== 'connected' || Date.now() - threadListFetchedAtRef.current > threadMetadataFreshnessMs)) {
+      const metadataRefresh = refreshThreads()
+      if (engineOfThread(thread) === 'claude-code') {
+        void metadataRefresh
+      } else {
+        await metadataRefresh
+        if (requestId !== loadRequest.current || activeThreadId.current !== thread.id) return
+      }
+    }
+
+    const hasQueuedMessages = Boolean(queuedMessagesByThreadRef.current[thread.id]?.length)
+    let latestThread = threadListRef.current.find((candidate) => candidate.id === thread.id) ?? thread
+    const threadMetadataIsFresh = () => (
+      (threadListLoadedRef.current && Date.now() - threadListFetchedAtRef.current <= threadMetadataFreshnessMs)
+      || latestThread.updatedAt !== undefined
+    )
+    const cachedIsFresh = () => Boolean(
+      !refreshHistory
+      && cachedThread
+      && !threadHistoryGaps.current.has(thread.id)
+      && cachedHistoryMatchesThreadMetadata(
+        cachedThread,
+        latestThread,
+        threadMetadataIsFresh(),
+        hasQueuedMessages,
+      ),
+    )
+    const scheduleBackgroundRefresh = () => {
+      cachedActiveThreadRefreshTimer.current = window.setTimeout(() => {
+        cachedActiveThreadRefreshTimer.current = undefined
+        void (async () => {
+          const loaded = await loadThread(thread.id, threadRevision, true)
+          if (requestId === loadRequest.current && loaded) setError(null)
+        })()
+      }, cachedActiveThreadRefreshDelayMs)
+    }
+
+    if (!cachedIsFresh() && !cachedThread?.complete) {
+      const restoredCache = await restorePersistentThreadCache(thread.id)
+      if (requestId !== loadRequest.current || activeThreadId.current !== thread.id) return
+      if (restoredCache) {
+        cachedThread = restoredCache
+        latestThread = threadListRef.current.find((candidate) => candidate.id === thread.id) ?? thread
+        showCachedThread(restoredCache)
+      }
+    }
+
+    if (cachedIsFresh() && !hasQueuedMessages) {
+      setQueueRecoveryReadyThreadId(thread.id)
+      setLoadingHistory(false)
+      return
+    }
+
+    if (cachedThread && !refreshHistory) {
+      scheduleBackgroundRefresh()
+      return
+    }
+
+    try {
+      const loaded = await loadThread(thread.id, threadRevision)
+      if (requestId !== loadRequest.current) return
+      if (loaded) setError(null)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (requestId === loadRequest.current) setError(reason instanceof Error ? reason.message : '恢复对话失败')
+    } finally {
+      if (requestId === loadRequest.current) setLoadingHistory(false)
+    }
+  }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, loadThreads, onUnauthorized, persistActiveThread, prefetchThread, refreshThreads, resetStreamingAssistant, restorePersistentThreadCache, setActiveTurnId])
+
+  const createThread = useCallback(async (
+    model?: string,
+    approvalPolicy?: CodexApprovalPolicy,
+    requestId = queuedMessageId(),
+    cwd?: string,
+    engine: ChatEngine = activeEngine,
+    pendingPayload?: QueuedTurnPayload,
+  ) => {
+    if (handedOffRef.current) {
+      setError('网页端已交还给本机 Codex，请先重新接管网页端。')
+      return null
+    }
+    if (cachedActiveThreadRefreshTimer.current !== undefined) {
+      window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
+    const previousThread = activeThread
+    const pendingMessage = pendingPayload ? localMessageFromQueuedPayload(pendingPayload) : null
+    const creationRequest = ++loadRequest.current
+    cacheVisibleThread()
+    historyRevision.current += 1
+    setLoadingHistory(true)
+    if (pendingMessage) setMessages([pendingMessage])
+    try {
+      const thread = await devwispClient.createThread(token, model, approvalPolicy, requestId, cwd, engine)
+      if (creationRequest === loadRequest.current) {
+        activeThreadId.current = thread.id
+        if (persistActiveThread) persistActiveThreadId(thread.id)
+        setQueueRecoveryReadyThreadId(null)
+        if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
+        resetStreamingAssistant()
+        setActiveTurnId(null)
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        interruptInFlightThreadId.current = null
+        resumedThreadId.current = thread.id
+        setActiveThread(thread)
+        setMessages(pendingMessage ? [pendingMessage] : [])
+        setIsRunning(false)
+        setIsInterrupting(false)
+        clearTurnTimer()
+        setActivity(null)
+        setFileChangesByTurn({})
+        operationsByTurnRef.current = {}
+        setOperationsByTurn({})
+        activityTimelineByTurnRef.current = {}
+        setActivityTimelineByTurn({})
+        writerConflictRef.current = false
+        setWriterConflict(false)
+        activityItemId.current = null
+        setError(null)
+      }
+      upsertThread(thread)
+      return thread
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (pendingMessage) setMessages((current) => current.filter((message) => message.id !== pendingMessage.id))
+      if (creationRequest === loadRequest.current) setError(reason instanceof Error ? reason.message : '创建对话失败')
+      return null
+    } finally {
+      if (creationRequest === loadRequest.current) setLoadingHistory(false)
+    }
+  }, [activeEngine, activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token, upsertThread])
+
+  const sendMessage = useCallback(async (input: SendMessageInput) => {
+    if (handedOffRef.current) {
+      setError('网页端已交还给本机 Codex，请先重新接管网页端。')
+      return false
+    }
+    if (input.scheduledAt && (!Number.isFinite(Date.parse(input.scheduledAt)) || Date.parse(input.scheduledAt) <= Date.now())) {
+      setError('请选择一个未来的发送时间。')
+      return false
+    }
+    if (input.sendDirectly && input.scheduledAt) {
+      setError('定时消息不能同时立即发送。')
+      return false
+    }
+    if (input.continuePaused) {
+      const threadId = activeThread?.id
+      if (!threadId || isRunning || isInterrupting) return false
+      setIsRunning(true)
+      setActivity({ label: '正在继续回复' })
+      setError(null)
+      try {
+        const result = await devwispClient.continuePausedThread(
+          token, threadId, activeEngine === 'claude-code' ? queuedPayloadFromInput(input) : undefined,
+        )
+        applyServerQueueResponse(threadId, result.queue)
+        if (!result.continued) throw new Error('Codex 没有接受续接请求')
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        if (activeThreadId.current === threadId && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+        if (isAmbiguousNetworkFailure(reason)) void loadThread(threadId, ++historyRevision.current, true)
+        setError(reason instanceof Error ? reason.message : '继续回复失败')
+        return false
+      }
+    }
+    let payload = queuedPayloadFromInput(input)
+    if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
+    let thread = activeThread
+    let createdThread = false
+    if (!thread) {
+      thread = input.scheduledAt || input.sendDirectly
+        ? await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine)
+        : await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine, payload)
+      createdThread = Boolean(thread)
+      if (thread) input.onThreadCreated?.(thread)
+    }
+    if (!thread) return false
+    if (payload.translationStatus === 'pending' && payload.translation && !input.sendDirectly) {
+      try {
+        const result = await devwispClient.enqueueTranslatingMessage(token, thread.id, payload)
+        applyServerQueueResponse(thread.id, result.queue)
+        if (!result.queue.some((message) => message.id === payload.id) && activeThreadId.current === thread.id) {
+          void loadThread(thread.id, ++historyRevision.current, true)
+        }
+        setError(null)
+        input.onDeliveryStatus?.('queued')
+        return true
+      } catch (reason) {
+        if (!(reason instanceof RemoteApiError && reason.status === 404)) {
+          if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+          setError(isAmbiguousNetworkFailure(reason)
+            ? '连接中断，暂时无法确认消息是否进入后台翻译队列。请先检查排队消息，避免重复发送。'
+            : reason instanceof Error ? reason.message : '消息加入后台翻译队列失败')
+          void refreshServerQueue(thread.id)
+          return false
+        }
+        // Older paired servers do not understand translation-pending queue
+        // items. Translate synchronously before falling back to their send API.
+        try {
+          const sourceText = payload.text
+          const translatedText = (await devwispClient.translateText(token, {
+            provider: payload.translation.provider,
+            profileId: payload.translation.profileId,
+            source: 'zh',
+            target: 'en',
+            style: payload.translation.style,
+            text: sourceText,
+          })).text.trim()
+          if (!translatedText) throw new Error('翻译结果为空，消息没有发送。')
+          payload = {
+            ...payload,
+            text: translatedText,
+            originalText: sourceText,
+            requestText: queuedRequestText(translatedText, payload.documents),
+            translation: undefined,
+            translationStatus: undefined,
+            translationError: undefined,
+          }
+        } catch (translationError) {
+          setError(translationError instanceof Error ? translationError.message : '翻译失败，消息没有发送。')
+          return false
+        }
+      }
+    }
+    if (input.sendDirectly) {
+      const steering = !createdThread && thread.id === activeThreadId.current
+        && (isRunningRef.current || activeTurnId.current !== null || messagesRef.current.at(-1)?.streaming === true)
+      const previousMessageIds = new Set(messagesRef.current.flatMap((message) => message.sourceItemId
+        ? [message.id, message.sourceItemId] : [message.id]))
+      const previousTurnIds = new Set(messagesRef.current.flatMap((message) => message.turnId ? [message.turnId] : []))
+      const currentTurnId = steering ? activeTurnId.current : null
+      const request = steering
+        ? requestTurnDelivery(thread.id, payload.id, () => devwispClient.steerTurn(token, thread.id, {
+          prompt: payload.requestText,
+          ...(payload.originalText ? { originalText: payload.originalText, translatedText: payload.text } : {}),
+          direct: true,
+          images: payload.images,
+          documents: payload.documents,
+          claudeModel: payload.claudeModel,
+          claudeEffort: payload.claudeEffort,
+          claudePermissionMode: payload.claudePermissionMode,
+          requestId: payload.id,
+        }), previousMessageIds)
+        : requestTurnStart(thread.id, payload, previousMessageIds, true)
+      if (currentTurnId) finalizeVisibleStreamingTurn(currentTurnId)
+      appendQueuedMessageToActiveThread(thread.id, payload, currentTurnId)
+      if (!steering && activeThreadId.current === thread.id) {
+        historyRevision.current += 1
+        setActiveTurnId(null)
+        setQueueRecoveryReadyThreadId(null)
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        interruptInFlightThreadId.current = null
+        setIsRunning(true)
+        setIsInterrupting(false)
+        setActivity({ label: '正在发送' })
+      }
+      try {
+        const result = await request
+        if (result.turn_id) {
+          applyTurnDelivery(thread.id, payload.id, result.turn_id)
+          if (!steering && !result.completed && activeThreadId.current === thread.id) {
+            setActiveTurnId(result.turn_id)
+            startTurnTimerForTurn(result.turn_id)
+            if (interruptRequestedThreadId.current === thread.id
+              && (!interruptRequestedTurnId.current || interruptRequestedTurnId.current === result.turn_id)) {
+              void dispatchInterrupt(thread.id, result.turn_id)
+            }
+          }
+        }
+        if ((!result.turn_id || result.completed) && activeThreadId.current === thread.id) void loadThread(thread.id, ++historyRevision.current, true)
+        setError(null)
+        input.onDeliveryStatus?.('sent')
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        if (isAmbiguousNetworkFailure(reason)) {
+          try {
+            const recovered = await devwispClient.readThread(token, thread.id)
+            if (threadContainsNewPayload(recovered, previousMessageIds, steering ? new Set() : previousTurnIds, payload)) {
+              if (activeThreadId.current === thread.id) void loadThread(thread.id, ++historyRevision.current, true, null, recovered)
+              setError(null)
+              input.onDeliveryStatus?.('sent')
+              return true
+            }
+          } catch {
+            // Keep the draft and explicitly report an unconfirmed delivery.
+          }
+          const receipt = confirmedTurnDelivery(payload.id)
+          if (receipt) {
+            if (!steering && receipt.turn_id && !receipt.completed && activeThreadId.current === thread.id) {
+              setActiveTurnId(receipt.turn_id)
+              startTurnTimerForTurn(receipt.turn_id)
+            }
+            setError(null)
+            input.onDeliveryStatus?.('sent')
+            return true
+          }
+          reconnectRef.current(true)
+        }
+        removeQueuedMessageFromActiveThread(thread.id, payload.id)
+        if (!steering && activeThreadId.current === thread.id && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+        setError(isAmbiguousNetworkFailure(reason)
+          ? '消息送达尚未确认，请先核对聊天记录再重试。'
+          : reason instanceof RemoteApiError && reason.status === 409 && steering
+            ? 'Codex 当前回复已结束，请重新发送。'
+            : reason instanceof Error ? reason.message : '立即发送失败，草稿已保留。')
+        if (isAmbiguousNetworkFailure(reason)) input.onDeliveryStatus?.('unverified')
+        return false
+      } finally {
+        pendingTurnDeliveries.current.delete(payload.id)
+      }
+    }
+    if (input.scheduledAt) {
+      try {
+        const result = await devwispClient.scheduleMessage(token, thread.id, payload)
+        applyServerQueueResponse(thread.id, result.queue)
+        setError(null)
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        setError(reason instanceof Error ? reason.message : '定时消息加入排队失败')
+        void refreshServerQueue(thread.id)
+        return false
+      }
+    }
+    if (sharedQueueAuthoritative) {
+      const delivery: PendingTurnDelivery = {
+        threadId: thread.id,
+        turnId: null,
+        acknowledged: false,
+        completedTurnIds: new Set(),
+        previousMessageIds: new Set(messagesRef.current.flatMap((message) => message.sourceItemId
+          ? [message.id, message.sourceItemId] : [message.id])),
+      }
+      pendingTurnDeliveries.current.set(payload.id, delivery)
+      const optimistic = activeThreadId.current === thread.id && !isRunning && !activeTurnId.current
+        && !(serverQueuedMessagesByThreadRef.current[thread.id]?.length)
+      if (optimistic) {
+        historyRevision.current += 1
+        appendQueuedMessageToActiveThread(thread.id, payload)
+        setIsRunning(true)
+        setActivity({ label: '正在发送' })
+      } else {
+        setPendingSubmittedByThread((current) => ({
+          ...current,
+          [thread.id]: [...(current[thread.id] ?? []), { ...payload, deliveryState: 'submitting' }],
+        }))
+      }
+      const retractPendingMessage = () => {
+        if (!optimistic) return
+        removeQueuedMessageFromActiveThread(thread.id, payload.id)
+        if (activeThreadId.current === thread.id && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+      }
+      try {
+        const result = await devwispClient.submitMessage(token, thread.id, payload)
+        let queue = result.queue
+        let sent = result.sent
+        let immediateAttemptUnverified = false
+        if (!sent && !delivery.acknowledged && input.sendImmediately && activeEngine !== 'claude-code') {
+          try {
+            const immediate = await devwispClient.queueAction(token, thread.id, 'send-now', payload.id)
+            queue = immediate.queue
+            sent = Boolean(immediate.sent)
+          } catch (reason) {
+            if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+            immediateAttemptUnverified = !(reason instanceof RemoteApiError && reason.status === 409)
+            void refreshServerQueue(thread.id)
+          }
+        }
+        applyServerQueueResponse(thread.id, delivery.acknowledged
+          ? queue.filter((message) => message.id !== payload.id)
+          : queue)
+        const pendingResult = queue.find((message) => message.id === payload.id)
+        setError(!sent && !delivery.acknowledged && pendingResult?.sendAttempt
+          ? '消息送达未确认，请先核对聊天记录和排队消息，避免重复发送。'
+          : null)
+        if (sent || delivery.acknowledged) {
+          appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
+          if (delivery.turnId) applyTurnDelivery(thread.id, payload.id, delivery.turnId)
+          // A receipt and streamed events are enough to show our own message.
+          // Only recover history when the receipt was lost, not on every send.
+          if (!delivery.turnId && activeThreadId.current === thread.id) {
+            void loadThread(thread.id, ++historyRevision.current, true)
+          }
+        } else {
+          retractPendingMessage()
+        }
+        input.onDeliveryStatus?.(sent || delivery.acknowledged ? 'sent'
+          : !immediateAttemptUnverified && pendingResult && !pendingResult.sendAttempt ? 'queued' : 'unverified')
+        return true
+      } catch (reason) {
+        if (delivery.acknowledged) {
+          appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
+          applyTurnDelivery(thread.id, payload.id, delivery.turnId)
+          void refreshServerQueue(thread.id)
+          setError(null)
+          input.onDeliveryStatus?.('sent')
+          return true
+        }
+        retractPendingMessage()
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        setError(reason instanceof RemoteApiError && reason.status === 404
+          ? '电脑端服务尚未加载新的发送接口，请重启 Dev Wisp 后端。'
+          : isAmbiguousNetworkFailure(reason)
+            ? '连接中断，发送结果尚未确认。请先核对聊天记录和排队消息，避免重复发送。'
+            : reason instanceof Error ? reason.message : '消息发送失败')
+        void refreshServerQueue(thread.id)
+        return false
+      } finally {
+        if (!optimistic) {
+          setPendingSubmittedByThread((current) => {
+            const remaining = current[thread.id]?.filter((message) => message.id !== payload.id) ?? []
+            const next = { ...current }
+            if (remaining.length > 0) next[thread.id] = remaining
+            else delete next[thread.id]
+            return next
+          })
+        }
+        pendingTurnDeliveries.current.delete(payload.id)
+      }
+    }
+    const threadIsReplying = thread.id === activeThreadId.current && (isRunning || activeTurnId.current !== null)
+    const hasQueuedMessages = (queuedMessagesByThreadRef.current[thread.id]?.length ?? 0) > 0
+    if (threadIsReplying || hasQueuedMessages) {
+      updateQueuedMessages(thread.id, (current) => [...current, payload])
+      if (threadIsReplying) {
+        setQueueRecoveryBarrier(thread.id, {
+          turnId: activeTurnId.current ?? runningTurnId,
+          status: 'running',
+        })
+        setQueueRecoveryReadyThreadId(null)
+      }
+      setError(null)
+      // A failed automatic start leaves the queue intact. A later normal
+      // submission is a useful retry that still preserves message order.
+      if (threadIsReplying && input.sendImmediately && activeEngine !== 'claude-code') void sendQueuedMessageNow(payload.id)
+      else if (!threadIsReplying) void startNextQueuedMessage(thread.id)
+      input.onDeliveryStatus?.('queued')
+      return true
+    }
+    const localId = payload.id
+    const previousMessages = messagesRef.current
+    const previousMessageIds = new Set(previousMessages.map((message) => message.id))
+    const previousTurnIds = new Set(previousMessages.flatMap((message) => message.turnId ? [message.turnId] : []))
+    const rememberStartedTurn = (turnId: string | null) => {
+      if (!turnId || activeThreadId.current !== thread.id) return
+      setActiveTurnId(turnId)
+      startTurnTimerForTurn(turnId)
+      setMessages((current) => current.map((message) => message.id === localId && !message.turnId
+        ? { ...message, turnId }
+        : message))
+      if (interruptRequestedThreadId.current === thread.id
+        && (!interruptRequestedTurnId.current || interruptRequestedTurnId.current === turnId)) {
+        void dispatchInterrupt(thread.id, turnId)
+      }
+    }
+    historyRevision.current += 1
+    setMessages((current) => [...current, localMessageFromQueuedPayload(payload)])
+    setActiveTurnId(null)
+    setQueueRecoveryReadyThreadId(null)
+    interruptRequestedThreadId.current = null
+    interruptRequestedTurnId.current = null
+    interruptInFlightThreadId.current = null
+    setIsRunning(true)
+    setIsInterrupting(false)
+    setActivity({ label: '正在思考' })
+    writerConflictRef.current = false
+    setWriterConflict(false)
+    setError(null)
+    try {
+      const turnResult = await requestTurnStart(thread.id, payload, previousMessageIds)
+      if (!turnResult.completed) rememberStartedTurn(turnResult.turn_id)
+      input.onDeliveryStatus?.('sent')
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (isAmbiguousNetworkFailure(reason) && activeThreadId.current === thread.id) {
+        try {
+          const recoveryRevision = historyRevision.current
+          const recoveredThread = await devwispClient.readThread(token, thread.id)
+          if (threadContainsNewPayload(recoveredThread, previousMessageIds, previousTurnIds, payload)) {
+            if (activeThreadId.current !== thread.id) {
+              input.onDeliveryStatus?.('sent')
+              return true
+            }
+            if (historyRevision.current !== recoveryRevision) {
+              void loadThread(thread.id, historyRevision.current, true)
+              input.onDeliveryStatus?.('sent')
+              return true
+            }
+            const recoveredTurnState = latestTurnState(recoveredThread)
+            const running = recoveredTurnState.running || (!recoveredTurnState.hasTurn && threadIsRunning(recoveredThread))
+            const turnId = recoveredTurnState.turnId
+            applyTurnDelivery(thread.id, payload.id, turnId)
+            setActiveThread(recoveredThread)
+            setActiveTurnId(running ? turnId : null)
+            setIsRunning(running)
+            setIsInterrupting(false)
+            setActivity(running ? { label: '正在思考' } : null)
+            if (running) {
+              startTurnTimerForTurn(turnId, recoveredTurnState.startedAt)
+            } else {
+              finishTurnTimer()
+              resetStreamingAssistant()
+            }
+            setQueueRecoveryReadyThreadId(running ? null : thread.id)
+            setError(null)
+            void loadThread(thread.id, ++historyRevision.current, true, null, recoveredThread)
+            void refreshThreads()
+            input.onDeliveryStatus?.('sent')
+            return true
+          }
+        } catch {
+          // Keep the draft and report an uncertain delivery state if history
+          // cannot be read while the mobile connection is still interrupted.
+        }
+      }
+      const receipt = isAmbiguousNetworkFailure(reason) ? confirmedTurnDelivery(payload.id) : null
+      if (receipt) {
+        if (!receipt.completed) rememberStartedTurn(receipt.turn_id)
+        if (activeThreadId.current === thread.id) setError(null)
+        input.onDeliveryStatus?.('sent')
+        return true
+      }
+      if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
+      if (activeThreadId.current !== thread.id) return false
+      historyRevision.current += 1
+      setMessages((current) => current.filter((message) => message.id !== localId))
+      setIsRunning(false)
+      setActiveTurnId(null)
+      interruptRequestedThreadId.current = null
+      interruptRequestedTurnId.current = null
+      interruptInFlightThreadId.current = null
+      setIsInterrupting(false)
+      clearTurnTimer()
+      setActivity(null)
+      const message = sendFailureMessage(reason)
+      if (isActiveWriterError(reason)) {
+        writerConflictRef.current = true
+        setWriterConflict(true)
+        setIsRunning(true)
+        setActivity({ label: '此对话已有其他 Codex 实例在运行' })
+        setError(activeWriterError)
+      } else {
+        setError(/thread not found/i.test(message)
+          ? '本机 Codex 已找不到这条对话。草稿仍保留，请新建对话后重新发送。'
+          : message)
+      }
+      return false
+    } finally {
+      pendingTurnDeliveries.current.delete(payload.id)
+    }
+  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finalizeVisibleStreamingTurn, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnDelivery, requestTurnStart, resetStreamingAssistant, runningTurnId, sendQueuedMessageNow, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+
+  const interrupt = useCallback(async () => {
+    if (handedOffRef.current) return false
+    const threadId = activeThread?.id ?? activeThreadId.current
+    if (!threadId || !isRunning || isInterrupting) return false
+    interruptRequestedThreadId.current = threadId
+    interruptRequestedTurnId.current = activeTurnId.current
+    setIsInterrupting(true)
+    setActivity({ label: '正在停止…' })
+    const turnId = activeTurnId.current
+    if (!turnId) return true
+    return dispatchInterrupt(threadId, turnId)
+  }, [activeThread, dispatchInterrupt, isInterrupting, isRunning])
+
+  const stopInterruptedThread = useCallback(async (threadId: string) => {
+    try {
+      await devwispClient.stopInterruptedThread(token, threadId)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '停止回复失败')
+      return false
+    }
+  }, [onUnauthorized, token])
+
+  const handoffToLocalCodex = useCallback(async () => {
+    if (handoffInProgress || handedOffRef.current) return false
+    const hasQueuedMessages = Object.values(queuedMessagesByThreadRef.current).some((messages) => messages.length > 0)
+    if (isRunning || isInterrupting || hasQueuedMessages) {
+      setError('当前网页端任务或排队消息尚未结束，不能交还给本机 Codex。')
+      return false
+    }
+    setHandoffInProgress(true)
+    try {
+      await devwispClient.handoffToLocalCodex(token)
+      resumedThreadId.current = null
+      setActiveTurnId(null)
+      interruptRequestedThreadId.current = null
+      interruptRequestedTurnId.current = null
+      interruptInFlightThreadId.current = null
+      setApproval(null)
+      setHandoffState(true)
+      setRuntime((current) => ({ ...current, connected: false, handedOff: true, error: null }))
+      setConnectionState('disconnected')
+      setError(null)
+      socketRef.current?.close()
+      socketRef.current = null
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '交还给本机 Codex 失败')
+      return false
+    } finally {
+      setHandoffInProgress(false)
+    }
+  }, [handoffInProgress, isInterrupting, isRunning, onUnauthorized, setConnectionState, setHandoffState, token])
+
+  const reclaimForRemote = useCallback(async () => {
+    if (handoffInProgress || !handedOffRef.current) return false
+    setHandoffInProgress(true)
+    try {
+      const nextRuntime = await devwispClient.reclaimForRemote(token)
+      setHandoffState(false)
+      setRuntime(nextRuntime)
+      setConnectionState('connecting')
+      setError(null)
+      reconnectRef.current()
+      void restoreActiveThread()
+      void refreshThreads()
+      void refreshModels()
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '重新接管网页端失败')
+      return false
+    } finally {
+      setHandoffInProgress(false)
+    }
+  }, [handoffInProgress, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+
+  const respondToApproval = useCallback((response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>, remember?: 'tool' | 'server') => {
+    if (!approval) return false
+    const sent = socketRef.current?.respondToApproval(approval.requestId, response, remember) ?? false
+    if (!sent) setError('连接断开，审批没有送达')
+    return sent
+  }, [approval])
+
+  const respondToClaudePermission = useCallback(async (allow: boolean) => {
+    const request = claudePermissions[0]
+    if (!request) return false
+    try {
+      await devwispClient.claudePermissionDecision(token, request.threadId, request.permissionId, allow)
+      claudePermissionRevision.current += 1
+      setClaudePermissions((current) => current.filter((item) => item.permissionId !== request.permissionId))
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '权限决定没有送达')
+      return false
+    }
+  }, [claudePermissions, token, onUnauthorized])
+
+  const refreshActiveThread = useCallback(() => {
+    if (handedOffRef.current) return
+    if (activeThreadId.current) void loadThread(activeThreadId.current)
+  }, [loadThread])
+
+  const updateApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
+    const threadId = activeThreadId.current
+    if (!threadId || handedOffRef.current) return false
+    setUpdatingApprovalPolicy(true)
+    setError(null)
+    try {
+      await devwispClient.updateThreadApprovalPolicy(token, threadId, approvalPolicy)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '更新会话权限失败')
+      return false
+    } finally {
+      setUpdatingApprovalPolicy(false)
+    }
+  }, [onUnauthorized, token])
+
+  const uploadPdfAttachment = useCallback(async (file: File) => {
+    try {
+      return await devwispClient.uploadPdfAttachment(token, file)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      throw reason
+    }
+  }, [onUnauthorized, token])
+
+  const serverQueuedMessages = activeThread ? serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages
+  const pendingSubmittedMessages = activeThread ? pendingSubmittedByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages
+  const queuedMessages = useMemo(() => mergePendingQueuedMessages(serverQueuedMessages, pendingSubmittedMessages), [serverQueuedMessages, pendingSubmittedMessages])
+
+  // These hooks share a page component across panes. Preserve the controller
+  // identity when only another pane received a streaming update.
+  return useMemo(() => ({
+    connection,
+    runtime,
+    threads,
+    models,
+    activeThread,
+    activeEngine,
+    messages,
+    queuedMessages,
+    queueRevision,
+    pinRevision,
+    isRunning,
+    runningTurnId,
+    isInterrupting,
+    turnStartedAt,
+    activity,
+    fileChangesByTurn,
+    operationsByTurn,
+    activityTimelineByTurn,
+    writerConflict,
+    handedOff,
+    handoffInProgress,
+    loadingHistory,
+    error,
+    updatingApprovalPolicy,
+    approval,
+    claudePermission,
+    completedThreadIds,
+    latestThreadCompletion,
+    refreshThreads,
+    upsertThread,
+    removeDeletedThread,
+    renameThread,
+    bindThreadWorkspace,
+    refreshModels,
+    selectThread,
+    createThread,
+    sendMessage,
+    stopInterruptedThread,
+    uploadPdfAttachment,
+    sendQueuedMessageNow: sharedQueueAuthoritative ? sharedSendQueuedMessageNow : sendQueuedMessageNow,
+    retryQueuedTranslation,
+    beginEditQueuedMessage: sharedQueueAuthoritative ? sharedBeginQueuedEdit : beginEditQueuedMessage,
+    updateQueuedMessage: sharedQueueAuthoritative ? sharedUpdateQueuedMessage : updateQueuedMessage,
+    endEditQueuedMessage: sharedQueueAuthoritative ? sharedEndQueuedEdit : endEditQueuedMessage,
+    removeQueuedMessage: sharedQueueAuthoritative ? sharedRemoveQueuedMessage : removeQueuedMessage,
+    moveQueuedMessage: sharedMoveQueuedMessage,
+    interrupt,
+    handoffToLocalCodex,
+    reclaimForRemote,
+    respondToApproval,
+    respondToClaudePermission,
+    clearThreadCompletion,
+    refreshActiveThread,
+    updateApprovalPolicy,
+  }), [
+    connection, runtime, threads, models, activeThread, activeEngine, messages,
+    queuedMessages, queueRevision, pinRevision, isRunning, runningTurnId,
+    isInterrupting, turnStartedAt, activity, fileChangesByTurn, operationsByTurn,
+    activityTimelineByTurn, writerConflict, handedOff, handoffInProgress,
+    loadingHistory, error, updatingApprovalPolicy, approval, claudePermission, completedThreadIds,
+    latestThreadCompletion, refreshThreads, upsertThread, removeDeletedThread,
+    renameThread, bindThreadWorkspace, refreshModels, selectThread, createThread,
+    sendMessage, stopInterruptedThread, uploadPdfAttachment,
+    sharedSendQueuedMessageNow, sendQueuedMessageNow, sharedBeginQueuedEdit,
+    retryQueuedTranslation,
+    beginEditQueuedMessage, sharedUpdateQueuedMessage, updateQueuedMessage,
+    sharedEndQueuedEdit, endEditQueuedMessage, sharedRemoveQueuedMessage,
+    removeQueuedMessage, sharedMoveQueuedMessage, interrupt, handoffToLocalCodex, reclaimForRemote,
+    respondToApproval, respondToClaudePermission, clearThreadCompletion, refreshActiveThread, updateApprovalPolicy,
+  ])
+}
+
+export type DevWispController = ReturnType<typeof useDevWisp>

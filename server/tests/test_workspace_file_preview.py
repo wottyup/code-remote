@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from code_remote.app import (
+from devwisp.app import (
     WORKSPACE_FILE_PREVIEW_MAX_BYTES,
     WORKSPACE_FILE_PREVIEW_MAX_LINES,
     WORKSPACE_TREE_MAX_ENTRIES,
@@ -206,8 +206,8 @@ class WorkspaceFileSaveApiTests(unittest.IsolatedAsyncioTestCase):
         image_directory = root / "temporary-images"
         image_directory.mkdir()
         with (
-            patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(root / "auth.json")}),
-            patch("code_remote.app.tempfile.mkdtemp", return_value=str(image_directory)),
+            patch.dict(os.environ, {"DEVWISP_AUTH_FILE": str(root / "auth.json")}),
+            patch("devwisp.app.tempfile.mkdtemp", return_value=str(image_directory)),
         ):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)

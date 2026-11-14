@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from code_remote.app import ThreadNameRequest, create_app
-from code_remote.codex_app_server import CodexRuntimeError
+from devwisp.app import ThreadNameRequest, create_app
+from devwisp.codex_app_server import CodexRuntimeError
 
 
 class ThreadRenameApiTests(unittest.IsolatedAsyncioTestCase):
@@ -20,8 +20,8 @@ class ThreadRenameApiTests(unittest.IsolatedAsyncioTestCase):
         images = workspace / "images"
         images.mkdir()
         with (
-            patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(workspace / "auth.json")}),
-            patch("code_remote.app.tempfile.mkdtemp", return_value=str(images)),
+            patch.dict(os.environ, {"DEVWISP_AUTH_FILE": str(workspace / "auth.json")}),
+            patch("devwisp.app.tempfile.mkdtemp", return_value=str(images)),
         ):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)

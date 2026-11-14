@@ -55,7 +55,7 @@
 <body>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">C</span><span data-copy="brand">Code Remote · 呼吸演示</span></div>
+      <div class="brand"><span class="brand-mark">C</span><span data-copy="brand">Dev Wisp · 呼吸演示</span></div>
       <h2 data-copy="chats">对话列表</h2>
       <div class="thread-row thread-row--active thread-row--replying" data-thread="a">
         <span class="thread-row__breath" data-reply-breath-layer aria-hidden="true"></span>
@@ -94,14 +94,14 @@
     const running = new Map([['a', true], ['b', false], ['c', false]])
     const copy = {
       'zh-CN': {
-        title: '侧边栏与输入框呼吸同步演示', brand: 'Code Remote · 呼吸演示', chats: '对话列表',
+        title: '侧边栏与输入框呼吸同步演示', brand: 'Dev Wisp · 呼吸演示', chats: '对话列表',
         heading: '侧边栏跟随输入框呼吸', description: '点击“错时启动”，观察后来开始回复的话题是否与当前话题的输入框一起变亮、变暗。点击左侧话题可切换当前输入框。',
         stagger: '错时启动其他话题', stopAll: '全部停止', composer: '当前话题的输入框', placeholder: '这个演示不会发送消息',
         titles: { a: '当前正在回复的话题', b: '稍后开始的话题', c: '第三个并发话题' },
         replying: '回复中', idle: '待命', stop: '停止', start: '开始', current: '当前话题：', running: '正在回复', stopped: '未回复',
       },
       en: {
-        title: 'Sidebar and composer breathing demo', brand: 'Code Remote · Breathing demo', chats: 'Chats',
+        title: 'Sidebar and composer breathing demo', brand: 'Dev Wisp · Breathing demo', chats: 'Chats',
         heading: 'Sidebar and composer breathing in sync', description: 'Start the other chats at intervals to see their animations follow the current composer. Select a chat on the left to switch composers.',
         stagger: 'Start other chats at intervals', stopAll: 'Stop all', composer: 'Current chat composer', placeholder: 'This demo does not send messages',
         titles: { a: 'Chat currently replying', b: 'Chat starting later', c: 'Third concurrent chat' },
@@ -204,7 +204,7 @@
       render()
     })
     function updateLanguage() {
-      try { language = localStorage.getItem('code-remote-ui-language') === 'en' ? 'en' : 'zh-CN' } catch { language = 'zh-CN' }
+      try { language = localStorage.getItem('devwisp-ui-language') === 'en' ? 'en' : 'zh-CN' } catch { language = 'zh-CN' }
       const text = copy[language]
       document.documentElement.lang = language
       document.title = text.title
@@ -213,7 +213,7 @@
       render()
     }
     window.addEventListener('storage', (event) => {
-      if (event.key === 'code-remote-ui-language' || event.key === null) updateLanguage()
+      if (event.key === 'devwisp-ui-language' || event.key === null) updateLanguage()
     })
     updateLanguage()
   </script>

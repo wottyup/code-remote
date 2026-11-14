@@ -1,4 +1,4 @@
-import { codexRemoteClient, RemoteApiError } from './codexRemoteClient'
+import { devwispClient, RemoteApiError } from './devwispClient'
 
 export type CPAUsageSource = 'cpamp' | 'codex-proxy' | 'new-api'
 
@@ -89,7 +89,7 @@ interface CPAUsageRequestOptions extends CPAUsageAnalyticsRequestOptions {
   connectionProbe?: boolean
 }
 
-const settingsStorageKey = 'codex-remote.cpa-usage-settings'
+const settingsStorageKey = 'devwisp.cpa-usage-settings'
 const analyticsPath = '/v0/management/monitoring/analytics'
 
 export const emptyCPAUsageSettings: CPAUsageSettings = {
@@ -330,7 +330,7 @@ function codexProxyCredentials(settings: CPAUsageSettings) {
 }
 
 export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings, token: string): Promise<{ clientKeysError?: string }> {
-  const summary = await codexRemoteClient.codexProxyUsage<CodexProxySummary>(token, 'summary', codexProxyCredentials(settings))
+  const summary = await devwispClient.codexProxyUsage<CodexProxySummary>(token, 'summary', codexProxyCredentials(settings))
   finiteUsageNumber(summary?.total_request_count, '累计请求')
   try {
     await fetchCodexProxyClientKeys(settings, token)
@@ -343,9 +343,9 @@ export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings,
 export async function fetchCodexProxyClientKeys(settings: CPAUsageSettings, token: string, signal?: AbortSignal): Promise<CodexProxyClientKeyStat[]> {
   let response: { keys: CodexProxyClientKeyStat[] }
   try {
-    response = await codexRemoteClient.codexProxyUsage(token, 'client-keys', codexProxyCredentials(settings), signal)
+    response = await devwispClient.codexProxyUsage(token, 'client-keys', codexProxyCredentials(settings), signal)
   } catch (reason) {
-    if (reason instanceof RemoteApiError && reason.status === 422) throw new Error('Code Remote 后端可能尚未更新，请重启服务，并检查连接配置。')
+    if (reason instanceof RemoteApiError && reason.status === 422) throw new Error('Dev Wisp 后端可能尚未更新，请重启服务，并检查连接配置。')
     throw reason
   }
   if (!Array.isArray(response?.keys)) throw new Error('Codex Proxy 未返回有效的 Client Key 列表。')
@@ -373,8 +373,8 @@ export async function fetchCodexProxyUsageAnalytics(
   const { fromMs, toMs } = analyticsRangeBounds(range, now)
   const hours = Math.min(744, Math.max(2, Math.ceil((now.getTime() - fromMs) / 3_600_000) + 2))
   const [summary, history] = await Promise.all([
-    codexRemoteClient.codexProxyUsage<CodexProxySummary>(token, 'summary', credentials, signal),
-    codexRemoteClient.codexProxyUsage<CodexProxyHistory>(token, 'history', { ...credentials, hours }, signal),
+    devwispClient.codexProxyUsage<CodexProxySummary>(token, 'summary', credentials, signal),
+    devwispClient.codexProxyUsage<CodexProxyHistory>(token, 'history', { ...credentials, hours }, signal),
   ])
   finiteUsageNumber(summary?.total_request_count, '累计请求')
   const totalAccounts = finiteUsageNumber(summary.total_accounts, '账号总数')
@@ -480,7 +480,7 @@ export async function fetchNewAPIUsageAnalytics(
 ): Promise<CPAUsageAnalyticsResponse> {
   const now = new Date()
   const { fromMs, toMs } = analyticsRangeBounds(range, now)
-  const response = await codexRemoteClient.newAPIUsage<NewAPIUsageData>(token, {
+  const response = await devwispClient.newAPIUsage<NewAPIUsageData>(token, {
     ...newAPICredentials(settings),
     startTimestamp: Math.floor(fromMs / 1000),
     endTimestamp: Math.floor(toMs / 1000),

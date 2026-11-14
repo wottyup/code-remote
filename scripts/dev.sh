@@ -34,7 +34,7 @@ else
 
   (
     cd "$project_root/server"
-    exec "$python_bin" -m code_remote.main
+    exec "$python_bin" -m devwisp.main
   ) &
   engine_pid=$!
 

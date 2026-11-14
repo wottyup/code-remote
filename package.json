@@ -1,6 +1,6 @@
 {
-  "name": "code-remote",
-  "version": "0.121.5-dev.1",
+  "name": "devwisp",
+  "version": "0.128.0-dev.1",
   "private": true,
   "type": "module",
   "scripts": {

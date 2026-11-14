@@ -1,4 +1,4 @@
-import type { CodexMessage, CodexThread } from './codexRemoteClient'
+import type { CodexMessage, CodexThread } from './devwispClient'
 
 export const threadTranscriptTruncationMarker = '\n\n---\n\n> 对话记录过长，已截断；这里保留了开头和结尾。\n\n---\n\n'
 

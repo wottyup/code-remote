@@ -331,7 +331,7 @@ export function CPAUsageStatsPanel({
               ? ui('时间段汇总来自 Codex Proxy 的历史快照；各 Client Key 显示上游累计值。上游未提供按 Key 的时间段明细，已删除或重置前的 Key 用量无法在列表中恢复。')
               : isNewAPI
                 ? ui('总 Token、请求数和模型明细来自 New API 的小时汇总；缓存明细在接口提供时显示，金额按额度单位换算成美元。当前小时可能延后写入；该接口不提供输入、输出及失败请求明细。')
-              : ui('Token 数量直接显示 CPAMP 收到的用量统计，不在 Code Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。')}</p>
+              : ui('Token 数量直接显示 CPAMP 收到的用量统计，不在 Dev Wisp 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。')}</p>
           </>
         )}
       </div>

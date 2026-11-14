@@ -1,4 +1,4 @@
-const paneLayoutStorageKey = 'codex-remote.pane-layout'
+const paneLayoutStorageKey = 'devwisp.pane-layout'
 const layoutStorageNames = ['sessionStorage', 'localStorage'] as const
 export const maxConcurrentPaneCount = 5
 

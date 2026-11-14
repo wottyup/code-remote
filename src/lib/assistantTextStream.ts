@@ -1,4 +1,4 @@
-import type { CodexMessage } from './codexRemoteClient'
+import type { CodexMessage } from './devwispClient'
 
 export function streamingAssistantText(parts: ReadonlyMap<string, string>) {
   // Keep the same paragraph boundaries as restored history when a turn

@@ -8,9 +8,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from fastapi import HTTPException
 
-from code_remote.app import PinRequest, PinsInitializeRequest, QueueMessageIdRequest, QueuedMessageRequest, create_app
-from code_remote.codex_app_server import CodexAppServer, CodexExternalTurnError, CodexRuntimeError
-from code_remote.shared_state import QueueConflictError, SharedQueueService, SharedStateStore
+from devwisp.app import PinRequest, PinsInitializeRequest, QueueMessageIdRequest, QueuedMessageRequest, create_app
+from devwisp.codex_app_server import CodexAppServer, CodexExternalTurnError, CodexRuntimeError
+from devwisp.shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
 
 def message(message_id: str, text: str) -> dict[str, object]:
@@ -50,7 +50,7 @@ class SharedStateStoreTests(unittest.TestCase):
 
     def test_sqlite_permissions_follow_the_host_platform(self) -> None:
         self.store.close()
-        with patch("code_remote.shared_state.os.chmod") as chmod:
+        with patch("devwisp.shared_state.os.chmod") as chmod:
             self.store = SharedStateStore(self.path)
         self.addCleanup(self.store.close)
         if os.name == "nt":
@@ -204,7 +204,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.store.enqueue("thread", message("queued-first", "first"))
         self.codex.read_thread.return_value = {"turns": []}
         self.send.side_effect = RuntimeError("connection lost after send")
-        with self.assertLogs("code_remote.shared_state", level="ERROR"):
+        with self.assertLogs("devwisp.shared_state", level="ERROR"):
             await self.service.advance("thread")
         await self.service.advance("thread")
         self.assertEqual(self.send.await_count, 1)
@@ -342,7 +342,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_delivery_is_visible_and_blocks_later_submission(self) -> None:
         self.codex.read_thread.return_value = {"status": {"type": "idle"}}
         self.send.side_effect = RuntimeError("lost acknowledgement")
-        with self.assertLogs("code_remote.shared_state", level="ERROR"):
+        with self.assertLogs("devwisp.shared_state", level="ERROR"):
             self.assertFalse(await self.service.submit("thread", message("first", "may have arrived")))
         self.assertFalse(await self.service.submit("thread", message("second", "must not overtake")))
         queue = self.store.queue("thread")
@@ -392,8 +392,8 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         with patch.dict(os.environ, {
-            "CODE_REMOTE_AUTH_FILE": str(root / "auth.json"),
-            "CODE_REMOTE_STATE_FILE": str(root / "state.sqlite3"),
+            "DEVWISP_AUTH_FILE": str(root / "auth.json"),
+            "DEVWISP_STATE_FILE": str(root / "state.sqlite3"),
         }):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)

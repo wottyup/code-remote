@@ -6,23 +6,23 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from code_remote.app import PairingAuth
+from devwisp.app import PairingAuth
 
 
 class PairingAuthTests(unittest.TestCase):
     def test_windows_default_state_uses_local_app_data_or_configured_home(self) -> None:
         with (
-            patch("code_remote.app.os.name", "nt"),
+            patch("devwisp.app.os.name", "nt"),
             patch.dict(os.environ, {"LOCALAPPDATA": "C:/Users/test/AppData/Local"}, clear=False),
-            patch.dict(os.environ, {"CODE_REMOTE_HOME": "", "CODE_REMOTE_AUTH_FILE": ""}, clear=False),
+            patch.dict(os.environ, {"DEVWISP_HOME": "", "DEVWISP_AUTH_FILE": ""}, clear=False),
         ):
             self.assertEqual(
-                Path("C:/Users/test/AppData/Local/CodexRemote/trusted-devices.json"),
+                Path("C:/Users/test/AppData/Local/DevWisp/trusted-devices.json"),
                 PairingAuth._default_state_path(),
             )
         with (
-            patch("code_remote.app.os.name", "nt"),
-            patch.dict(os.environ, {"CODE_REMOTE_HOME": "C:/UserWritable/RemoteData", "CODE_REMOTE_AUTH_FILE": ""}, clear=False),
+            patch("devwisp.app.os.name", "nt"),
+            patch.dict(os.environ, {"DEVWISP_HOME": "C:/UserWritable/RemoteData", "DEVWISP_AUTH_FILE": ""}, clear=False),
         ):
             self.assertEqual(
                 Path("C:/UserWritable/RemoteData/trusted-devices.json"),
@@ -81,9 +81,9 @@ class PairingAuthTests(unittest.TestCase):
             auth = PairingAuth(state_path)
 
             with (
-                patch("code_remote.app.os.name", "nt"),
-                patch("code_remote.app.tempfile.mkstemp", side_effect=AssertionError("must not use mkstemp")),
-                patch("code_remote.app.os.replace", side_effect=AssertionError("must not replace state file")),
+                patch("devwisp.app.os.name", "nt"),
+                patch("devwisp.app.tempfile.mkstemp", side_effect=AssertionError("must not use mkstemp")),
+                patch("devwisp.app.os.replace", side_effect=AssertionError("must not replace state file")),
             ):
                 token = auth.pair(auth.code)
 

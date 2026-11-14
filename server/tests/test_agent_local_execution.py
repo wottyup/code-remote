@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from code_remote.app import create_app
-from code_remote.mcp_approvals import MCPApprovalStore
-from code_remote.retired_features import remove_retired_ssh_state
+from devwisp.app import create_app
+from devwisp.mcp_approvals import MCPApprovalStore
+from devwisp.retired_features import remove_retired_ssh_state
 
 
 class RetiredSSHStateTests(unittest.TestCase):
@@ -25,8 +25,8 @@ class RetiredSSHStateTests(unittest.TestCase):
             retained = root / "shared-state.sqlite3"
             retained.write_bytes(b"keep")
             approvals = MCPApprovalStore(root / "mcp-approvals.json")
-            approvals.add("code_remote_ssh", "execute_command", "server")
-            approvals.add("code_remote_ssh", "list_servers", "tool")
+            approvals.add("devwisp_ssh", "execute_command", "server")
+            approvals.add("devwisp_ssh", "list_servers", "tool")
             other_grant = approvals.add("filesystem", "read_file", "tool")
 
             remove_retired_ssh_state(root, approvals)
@@ -64,10 +64,10 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name).resolve()
         self.enterContext(patch.dict(os.environ, {
             "CODEX_HOME": str(self.root / "codex-home"),
-            "CODE_REMOTE_APP_SERVER_HOME": "",
+            "DEVWISP_APP_SERVER_HOME": "",
             "CLAUDE_CONFIG_DIR": str(self.root / "claude-home"),
-            "CODE_REMOTE_AUTH_FILE": str(self.root / "state" / "auth.json"),
-            "CODE_REMOTE_STATE_FILE": str(self.root / "state" / "shared-state.sqlite3"),
+            "DEVWISP_AUTH_FILE": str(self.root / "state" / "auth.json"),
+            "DEVWISP_STATE_FILE": str(self.root / "state" / "shared-state.sqlite3"),
         }))
         # App creation must work without bubblewrap and with state inside the workspace.
         with patch("shutil.which", return_value=None):
@@ -96,7 +96,7 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
         await server.resume_thread("existing-thread", cwd=self.root)
 
         self.assertEqual(server.request.await_args_list[0].args, (
-            "thread/start", {"cwd": str(self.root), "serviceName": "code_remote_web"},
+            "thread/start", {"cwd": str(self.root), "serviceName": "devwisp_web"},
         ))
         self.assertEqual(server.request.await_args_list[1].args, (
             "thread/resume", {"threadId": "existing-thread", "cwd": str(self.root)},
@@ -108,7 +108,7 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
         server._request = AsyncMock(return_value={})
         server._write = AsyncMock()
         child = Mock(returncode=0, stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader())
-        with patch("code_remote.codex_app_server.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn:
+        with patch("devwisp.codex_app_server.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn:
             await server._start_runtime("codex")
 
         self.assertEqual(("codex", "app-server", "--listen", "stdio://"), spawn.await_args.args)
@@ -125,7 +125,7 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
             child = Mock(returncode=0, stdin=None, stdout=output, wait=AsyncMock(return_value=0))
             with (
                 patch.object(server, "_executable", return_value="claude"),
-                patch("code_remote.claude_code.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn,
+                patch("devwisp.claude_code.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn,
             ):
                 await server.start_turn(thread["id"], "hello")
                 await asyncio.gather(*tuple(server._tasks.values()))

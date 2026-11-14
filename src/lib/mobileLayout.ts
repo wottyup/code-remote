@@ -1,5 +1,5 @@
 export const mobileLayoutMediaQuery = '(max-width: 700px), (pointer: coarse)'
-export const mobileLayoutChangedEvent = 'codex-remote:layout-change'
+export const mobileLayoutChangedEvent = 'devwisp:layout-change'
 
 export function isCompactLandscape() {
   if (typeof window === 'undefined' || !window.matchMedia('(pointer: coarse)').matches) return false

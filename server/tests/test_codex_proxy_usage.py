@@ -11,8 +11,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from unittest.mock import patch
 
-from code_remote.app import CodexProxyUsageRequest, create_app
-from code_remote.codex_proxy_usage import CodexProxyUsageError, fetch_usage, normalize_base_url
+from devwisp.app import CodexProxyUsageRequest, create_app
+from devwisp.codex_proxy_usage import CodexProxyUsageError, fetch_usage, normalize_base_url
 
 
 class _Response(io.BytesIO):
@@ -40,7 +40,7 @@ class CodexProxyUsageTests(unittest.TestCase):
                 self.assertions = []
 
         opener = Opener()
-        with patch("code_remote.codex_proxy_usage.build_opener", return_value=opener):
+        with patch("devwisp.codex_proxy_usage.build_opener", return_value=opener):
             result = fetch_usage("http://127.0.0.1:8080/", "private-key", "history", 48)
         self.assertEqual(result, {"data_points": []})
         self.assertEqual(opener.assertions, [
@@ -52,7 +52,7 @@ class CodexProxyUsageTests(unittest.TestCase):
             def open(self, request, timeout):
                 raise HTTPError(request.full_url, 401, "private-key", {}, io.BytesIO(b"private-key"))
 
-        with patch("code_remote.codex_proxy_usage.build_opener", return_value=Opener()):
+        with patch("devwisp.codex_proxy_usage.build_opener", return_value=Opener()):
             with self.assertRaises(CodexProxyUsageError) as raised:
                 fetch_usage("http://127.0.0.1:8080", "private-key", "summary")
         self.assertNotIn("private-key", str(raised.exception))
@@ -69,7 +69,7 @@ class CodexProxyUsageTests(unittest.TestCase):
                 }]}).encode())
 
         opener = Opener()
-        with patch('code_remote.codex_proxy_usage.build_opener', return_value=opener):
+        with patch('devwisp.codex_proxy_usage.build_opener', return_value=opener):
             result = fetch_usage('https://example.com/proxy', 'admin-secret', 'client-keys')
         self.assertEqual(opener.request.full_url, 'https://example.com/proxy/admin/client-keys')
         self.assertEqual(opener.request.get_header('Authorization'), 'Bearer admin-secret')
@@ -83,7 +83,7 @@ class CodexProxyUsageTests(unittest.TestCase):
             def open(self, request, timeout):
                 return _Response(json.dumps({'keys': [{'id': 'ck_1', 'used_tokens': None, 'used_cost_usd': 0.1, 'request_count': 2}]}).encode())
 
-        with patch('code_remote.codex_proxy_usage.build_opener', return_value=Opener()):
+        with patch('devwisp.codex_proxy_usage.build_opener', return_value=Opener()):
             with self.assertRaisesRegex(CodexProxyUsageError, 'Client Key 用量'):
                 fetch_usage('https://example.com', 'admin-secret', 'client-keys')
 
@@ -92,7 +92,7 @@ class CodexProxyUsageTests(unittest.TestCase):
             def open(self, request, timeout):
                 raise HTTPError(request.full_url, 404, 'missing', {}, io.BytesIO())
 
-        with patch('code_remote.codex_proxy_usage.build_opener', return_value=Opener()):
+        with patch('devwisp.codex_proxy_usage.build_opener', return_value=Opener()):
             with self.assertRaisesRegex(CodexProxyUsageError, '未提供 Client Key 统计接口'):
                 fetch_usage('https://example.com', 'admin-secret', 'client-keys')
 
@@ -158,8 +158,8 @@ class CodexProxyUsageEndpointTests(unittest.IsolatedAsyncioTestCase):
         runtime = root / 'runtime'
         runtime.mkdir()
         with (
-            patch.dict(os.environ, {'CODE_REMOTE_AUTH_FILE': str(root / 'auth.json')}),
-            patch('code_remote.app.tempfile.mkdtemp', return_value=str(runtime)),
+            patch.dict(os.environ, {'DEVWISP_AUTH_FILE': str(root / 'auth.json')}),
+            patch('devwisp.app.tempfile.mkdtemp', return_value=str(runtime)),
         ):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)
@@ -175,7 +175,7 @@ class CodexProxyUsageEndpointTests(unittest.IsolatedAsyncioTestCase):
                                                        'used_cost_usd': 0.1, 'request_count': 2, 'key': 'secret-client-key'}]}).encode())
 
         body = CodexProxyUsageRequest(baseUrl='https://example.com', apiKey='admin-secret')
-        with patch('code_remote.codex_proxy_usage.build_opener', return_value=Opener()):
+        with patch('devwisp.codex_proxy_usage.build_opener', return_value=Opener()):
             result = await self.endpoint('client-keys', body)
         self.assertEqual(result['keys'][0]['used_tokens'], 25)
         self.assertNotIn('secret-client-key', json.dumps(result))

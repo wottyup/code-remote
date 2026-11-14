@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from code_remote.claude_code import ClaudeCodeServer
+from devwisp.claude_code import ClaudeCodeServer
 
 
 @unittest.skipUnless(os.name == "posix", "requires an executable fake Claude CLI")
@@ -55,8 +55,8 @@ print(json.dumps({"type": "result", "result": "finished", "is_error": False}), f
                 return await create_subprocess(*args, **kwargs)
 
             try:
-                with patch("code_remote.claude_code.CLAUDE_DRAIN_GRACE_SECONDS", 0.2), patch(
-                    "code_remote.claude_code.asyncio.create_subprocess_exec", side_effect=start_with_small_pipe,
+                with patch("devwisp.claude_code.CLAUDE_DRAIN_GRACE_SECONDS", 0.2), patch(
+                    "devwisp.claude_code.asyncio.create_subprocess_exec", side_effect=start_with_small_pipe,
                 ):
                     await server.start_turn(thread["id"], "hello")
                     task = server._tasks[thread["id"]]

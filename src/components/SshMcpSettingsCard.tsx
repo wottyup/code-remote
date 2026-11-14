@@ -2,10 +2,10 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { ChevronDown, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react'
 import { ui, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import {
-  codexRemoteClient,
+  devwispClient,
   type SshMcpProfile,
   type SshMcpSettings,
-} from '../lib/codexRemoteClient'
+} from '../lib/devwispClient'
 
 interface ProfileDraft {
   id: number
@@ -50,7 +50,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
     let cancelled = false
     setLoading(true)
     setMessage(null)
-    void codexRemoteClient.sshMcpSettings(token).then((result) => {
+    void devwispClient.sshMcpSettings(token).then((result) => {
       if (cancelled) return
       setSettings(result)
       setProfiles(result.profiles.length ? draftsFor(result.profiles) : [emptyDraft()])
@@ -96,7 +96,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
     setSaving(true)
     setMessage(null)
     try {
-      const result = await codexRemoteClient.saveSshMcpSettings(token, profiles.map(({ value }) => {
+      const result = await devwispClient.saveSshMcpSettings(token, profiles.map(({ value }) => {
         const profile = { ...value }
         delete profile.hasPassword
         return {
@@ -127,7 +127,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
     <div className="native-config__body">
       {loading ? <p className="native-config__message" role="status">{ui('正在读取 SSH MCP 配置…')}</p> : null}
       {!loading && settings && !settings.available ? <p className="native-config__message native-config__message--error" role="status">
-        {ui('SSH MCP 运行依赖不可用。请确认 Code Remote 工作区已安装 pnpm 依赖。')}
+        {ui('SSH MCP 运行依赖不可用。请确认 Dev Wisp 工作区已安装 pnpm 依赖。')}
       </p> : null}
       {profiles.length === 0 && !loading ? <p className="native-config__message">{ui('尚未配置 SSH 服务器。')}</p> : null}
       <form className="native-config__form" onSubmit={(event) => { void save(event) }}>
@@ -159,7 +159,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
             <label className="native-config__field"><span>{ui('IP 地址 / 主机名')}</span><input value={value.host} onChange={(event) => update(id, { host: event.target.value })} placeholder="192.168.1.10" maxLength={255} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /></label>
             <label className="native-config__field"><span>{ui('端口')}</span><input type="number" min={1} max={65535} value={value.port} onChange={(event) => update(id, { port: Number(event.target.value) })} required disabled={disabled} /></label>
             <label className="native-config__field"><span>{ui('用户名')}</span><input value={value.user} onChange={(event) => update(id, { user: event.target.value })} maxLength={128} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /></label>
-            <label className="native-config__field"><span>{ui('密码')}</span><input type="password" autoComplete="new-password" maxLength={4096} value={value.password ?? ''} onChange={(event) => update(id, { password: event.target.value, ...(event.target.value ? { auth: 'password' } : {}) })} placeholder={value.hasPassword ? ui('已保存，留空则保持不变') : ui('输入 SSH 登录密码')} required={value.auth === 'password' && !value.hasPassword} disabled={disabled} /><small>{value.hasPassword ? ui('密码已保存；留空会继续使用。') : ui('密码保存在 Code Remote 主机，不会在设置中显示。')}</small></label>
+            <label className="native-config__field"><span>{ui('密码')}</span><input type="password" autoComplete="new-password" maxLength={4096} value={value.password ?? ''} onChange={(event) => update(id, { password: event.target.value, ...(event.target.value ? { auth: 'password' } : {}) })} placeholder={value.hasPassword ? ui('已保存，留空则保持不变') : ui('输入 SSH 登录密码')} required={value.auth === 'password' && !value.hasPassword} disabled={disabled} /><small>{value.hasPassword ? ui('密码已保存；留空会继续使用。') : ui('密码保存在 Dev Wisp 主机，不会在设置中显示。')}</small></label>
           </div>
           </fieldset>
         </section>
@@ -172,7 +172,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
         </div>
         {message ? <p className={message.error ? 'native-config__message native-config__message--error' : 'native-config__message'} role={message.error ? 'alert' : 'status'}>{uiMessage(message.text)}</p> : null}
       </form>
-      <p className="native-config__hint">{ui('配置保存在运行 Code Remote 的电脑上。保存后，新建或重新打开的 Codex 对话使用最新设置；正在运行的对话不受影响。')}</p>
+      <p className="native-config__hint">{ui('配置保存在运行 Dev Wisp 的电脑上。保存后，新建或重新打开的 Codex 对话使用最新设置；正在运行的对话不受影响。')}</p>
       <p className="native-config__hint">{ui('Claude Code 暂不支持此功能，因为它的命令审批还不能转发到网页。')}</p>
     </div>
   </section>

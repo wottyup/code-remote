@@ -1,7 +1,7 @@
 import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
-import { codexRemoteClient, RemoteApiError } from '../lib/codexRemoteClient'
+import { devwispClient, RemoteApiError } from '../lib/devwispClient'
 
 function normalizePairingCode(value: string): string {
   return value.normalize('NFKC').toUpperCase().replace(/[\s_\-\u200b\ufeff]+/g, '').slice(0, 8)
@@ -43,7 +43,7 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
     setBusy(true)
     setError(null)
     try {
-      const result = await codexRemoteClient.pair(normalizedCode)
+      const result = await devwispClient.pair(normalizedCode)
       onPaired(result.token)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 429) {
@@ -66,10 +66,10 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
   return (
     <main className="pair-page">
       <section className="pair-card">
-        <img className="pair-card__logo" src="/code-remote-robot.svg" alt="Code Remote" />
-        <p className="pair-eyebrow">CODE REMOTE</p>
-        <h1>{ui("连接你的 Code Remote")}</h1>
-        <p className="pair-description">{ui("在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。")}</p>
+        <img className="pair-card__logo" src="/devwisp-robot.svg" alt="Dev Wisp" />
+        <p className="pair-eyebrow">DEV WISP</p>
+        <h1>{ui("连接你的 Dev Wisp")}</h1>
+        <p className="pair-description">{ui("在运行 Dev Wisp 的电脑终端里找到配对码，然后在这里输入。")}</p>
         <form onSubmit={(event) => void submit(event)}>
           <label htmlFor="pair-code">{ui("8 位配对码")}</label>
           <div className="pair-input-wrap"><KeyRound size={17} /><input

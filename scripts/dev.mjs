@@ -10,8 +10,8 @@ const production = !process.argv.includes('--development')
 const serverRoot = join(projectRoot, 'server')
 const viteEntrypoint = join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const isWindows = process.platform === 'win32'
-const configuredPython = process.env.CODE_REMOTE_PYTHON
-const configuredCodex = process.env.CODE_REMOTE_COMMAND
+const configuredPython = process.env.DEVWISP_PYTHON
+const configuredCodex = process.env.DEVWISP_COMMAND
 const managedDaemonCodex = isWindows
   ? join(process.env.USERPROFILE || '', '.codex', 'packages', 'app-server-daemon', 'current', 'bin', 'codex.exe')
   : ''
@@ -62,7 +62,7 @@ function sleep(milliseconds) {
 
 function cleanCodexEnvironment() {
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'CODE_REMOTE_APP_SERVER_HOME', 'CODE_REMOTE_COMMAND', 'CODE_REMOTE_PYTHON', 'CODE_REMOTE_WORKSPACE', 'CODE_REMOTE_AUTH_FILE', 'CODE_REMOTE_STATE_FILE'].includes(key)) {
+    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'DEVWISP_APP_SERVER_HOME', 'DEVWISP_COMMAND', 'DEVWISP_PYTHON', 'DEVWISP_WORKSPACE', 'DEVWISP_AUTH_FILE', 'DEVWISP_STATE_FILE'].includes(key)) {
       delete process.env[key]
     }
   }
@@ -106,7 +106,7 @@ async function waitForEngine() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (await engineReady()) return
     if (engine?.exitCode !== null) {
-      throw new Error('Code Remote 后端启动失败，请检查上面的 Python/Codex 错误。')
+      throw new Error('DevWisp 后端启动失败，请检查上面的 Python/Codex 错误。')
     }
     await sleep(100)
   }
@@ -187,7 +187,7 @@ function scheduleEngineRestart(reason) {
 function startEngine() {
   if (shuttingDown) return
   ownsEngine = true
-  const child = spawn(python, ['-m', 'code_remote.main'], {
+  const child = spawn(python, ['-m', 'devwisp.main'], {
     cwd: serverRoot,
     env: process.env,
     stdio: 'inherit',
@@ -220,7 +220,7 @@ function startEngine() {
 
 async function main() {
   if (!python) {
-    throw new Error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 CODE_REMOTE_PYTHON 指向 Python。`)
+    throw new Error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 DEVWISP_PYTHON 指向 Python。`)
   }
   if (!existsSync(viteEntrypoint)) {
     throw new Error(`找不到 Vite 启动文件：${viteEntrypoint}。请先在 workspace 根目录完成依赖安装。`)
@@ -230,7 +230,7 @@ async function main() {
   }
 
   if (!configuredCodex && windowsCodexCandidates.some((candidate) => existsSync(candidate))) {
-    process.env.CODE_REMOTE_COMMAND = windowsCodexCandidates.find((candidate) => existsSync(candidate))
+    process.env.DEVWISP_COMMAND = windowsCodexCandidates.find((candidate) => existsSync(candidate))
   }
   cleanCodexEnvironment()
 

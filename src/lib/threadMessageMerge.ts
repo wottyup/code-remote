@@ -1,4 +1,4 @@
-import type { CodexDocumentAttachment, CodexMessage } from './codexRemoteClient'
+import type { CodexDocumentAttachment, CodexMessage } from './devwispClient'
 
 export function queuedRequestText(text: string, documents: CodexDocumentAttachment[] = []) {
   const documentText = documents

@@ -4,13 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from code_remote.app import resolve_default_workspace
+from devwisp.app import resolve_default_workspace
 
 
 class DefaultWorkspaceTests(unittest.TestCase):
     def test_defaults_to_the_project_parent_for_sibling_repositories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project_root = Path(directory) / "code-remote"
+            project_root = Path(directory) / "devwisp"
 
             self.assertEqual(Path(directory), resolve_default_workspace(project_root))
 

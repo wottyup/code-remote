@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.128.0-dev.1] - Let Replace All cover complete workspace scans beyond the result preview cap
+
+## [0.127.0-dev.1] - Migrate remaining project identifiers, source paths, and Android identity to DevWisp
+
+## [0.126.0-dev.1] - Rename the project and repository to DevWisp
+
+## [0.125.0-dev.1] - Add directory-wide search and replace at the top of the workspace file tree
+
+## [0.124.0-dev.1] - Add find and replace to the workspace file editor
+
+## Android [0.119.0-dev.1] - Add Claude permission approvals and user-message resend; stabilize model/reasoning controls
+
+## [0.123.0-dev.1] - Add a refresh button to resend user messages
+
+## [0.122.0-dev.4] - Show assistant choices once and explain Claude's root-user restriction when bypass startup fails
+
+## [0.122.0-dev.3] - Recover pending Claude approvals after missed events or reconnects and clear resolved requests
+
+## [0.122.0-dev.2] - Route headless Claude Code permission prompts through web approvals
+
+## [0.122.0-dev.1] - Route Claude Code's local permission requests to the page for approval
+
+## [0.121.6-dev.1] - Translate the assistant's multiple-choice questions along with its reply
+
 ## [0.121.5-dev.1] - Tolerate prose, fenced blocks, and object-wrapped text in AI translation results and retry malformed ones
 
 ## [0.121.4-dev.1] - Auto-retry incomplete AI reply translations by splitting them into smaller batches
@@ -140,7 +164,7 @@
 
 ## [0.107.2-dev.5] - Fix conversation unable to continue when Claude background task holds output
 
-## [0.107.2-dev.4] - Clear system-visible codex name residue, unify to code-remote (keep engine/Android/storage compat identifiers)
+## [0.107.2-dev.4] - Clear system-visible codex name residue, unify to devwisp (keep engine/Android/storage compat identifiers)
 
 ## [0.107.2-dev.3] - Fix conversation permanently stuck after Claude reply: auto-wrap-up when process exits without closing stdout
 
@@ -484,11 +508,11 @@
 
 ## [0.66.0-dev.1] - Support running scripts in terminal from file tree
 
-## [0.65.1-dev.1] - Unify Code Remote product name
+## [0.65.1-dev.1] - Unify DevWisp product name
 
 ## [0.65.0-dev.1] - Show Codex and Claude Code status in web sidebar
 
-## [0.64.0-dev.1] - Rename project directory and GitHub/Gitea repos to code-remote
+## [0.64.0-dev.1] - Rename project directory and GitHub/Gitea repos to devwisp
 
 ## [0.62.0-dev.19] - Restore Android terminal screen content before closing
 
@@ -1096,7 +1120,7 @@
 
 ## [0.15.0-dev.4] - Fix file type icons in workspace file tree
 
-## [0.15.0-dev.2] - Fix Codex Remote backend startup failure
+## [0.15.0-dev.2] - Fix DevWisp backend startup failure
 
 ## [0.15.0-dev.1] - Support create, rename, delete, copy, cut, and paste in workspace file tree; support Windows background resident and login autostart
 
@@ -1322,9 +1346,9 @@
 
 ## [0.0.177] - Restore imported local Codex history sessions
 
-## [0.0.176] - Ignore Vite file watching of Codex Remote run directory
+## [0.0.176] - Ignore Vite file watching of DevWisp run directory
 
-## [0.0.175] - Isolate Codex remote engine running state
+## [0.0.175] - Isolate DevWisp engine running state
 
 ## [0.0.174] - Restore local Codex model config reading
 
@@ -1508,7 +1532,7 @@
 
 ## [0.0.84] - Fix background service missing Codex credentials causing no reply
 
-## [0.0.83] - Add Codex Remote systemd background resident running
+## [0.0.83] - Add DevWisp systemd background resident running
 
 ## [0.0.82] - Let Android back gesture close by UI layer
 

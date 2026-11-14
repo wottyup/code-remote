@@ -2,7 +2,7 @@ import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Check, CircleCheck, CircleX, LoaderCircle, PlugZap, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import {
-  codexRemoteClient,
+  devwispClient,
   RemoteApiError,
   type ClaudeModelRole,
   type NativeConfigApplyStatus,
@@ -11,7 +11,7 @@ import {
   type NativeEngineConnectionResult,
   type NativeEngineProfile,
   type NativeEngineProfileInput,
-} from '../lib/codexRemoteClient'
+} from '../lib/devwispClient'
 import { TranslationSelect } from './TranslationSelect'
 
 const roles: ClaudeModelRole[] = ['sonnet', 'opus', 'fable', 'haiku']
@@ -89,7 +89,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
     const controller = new AbortController()
     setLoading(true)
     setMessage(null)
-    void codexRemoteClient.nativeEngineConfig(token, engine, controller.signal).then((response) => {
+    void devwispClient.nativeEngineConfig(token, engine, controller.signal).then((response) => {
       if (!controller.signal.aborted) receive(response)
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setMessage({ text: loadError(reason), error: true })
@@ -122,7 +122,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
     setBusy('refresh')
     setMessage(null)
     try {
-      receive(await codexRemoteClient.nativeEngineConfig(token, engine), profileId)
+      receive(await devwispClient.nativeEngineConfig(token, engine), profileId)
     } catch (reason) {
       setMessage({ text: loadError(reason), error: true })
     } finally { setBusy(null) }
@@ -143,10 +143,10 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
     setMessage(null)
     setTestResult(null)
     try {
-      const result = await codexRemoteClient.saveNativeEngineProfile(token, engine, { ...input(), apply })
+      const result = await devwispClient.saveNativeEngineProfile(token, engine, { ...input(), apply })
       receive(result.config, result.profileId)
       setMessage({ text: result.applyError ?? applyMessage(result.applyStatus, engine), error: result.applyStatus === 'failed' })
-      if (result.applied) window.dispatchEvent(new CustomEvent('codex-remote:native-config-changed', { detail: { engine, model: result.config.model } }))
+      if (result.applied) window.dispatchEvent(new CustomEvent('devwisp:native-config-changed', { detail: { engine, model: result.config.model } }))
     } catch (reason) {
       setMessage({ text: reason instanceof Error ? reason.message : '保存配置失败。', error: true })
     } finally { setBusy(null) }
@@ -158,7 +158,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
     setBusy('delete')
     setMessage(null)
     try {
-      receive(await codexRemoteClient.deleteNativeEngineProfile(token, engine, profileId, config.profilesRevision))
+      receive(await devwispClient.deleteNativeEngineProfile(token, engine, profileId, config.profilesRevision))
       setMessage({ text: '配置已删除。', error: false })
     } catch (reason) {
       setMessage({ text: reason instanceof Error ? reason.message : '删除配置失败。', error: true })
@@ -173,7 +173,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
     setMessage(null)
     setTestResult(null)
     try {
-      const result = await codexRemoteClient.testNativeEngineProfile(token, engine, input(), controller.signal)
+      const result = await devwispClient.testNativeEngineProfile(token, engine, input(), controller.signal)
       if (!controller.signal.aborted) setTestResult(result)
     } catch (reason) {
       if (!controller.signal.aborted) setMessage({ text: reason instanceof Error ? reason.message : '测试失败。', error: true })
@@ -188,7 +188,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
     setBusy('reload')
     setMessage(null)
     try {
-      const result = await codexRemoteClient.reloadNativeCodexConfig(token)
+      const result = await devwispClient.reloadNativeCodexConfig(token)
       setConfig((current) => current ? { ...current, reloadPending: result.reloadPending } : current)
       setMessage({ text: applyMessage(result.applyStatus, engine), error: result.applyStatus === 'failed' })
     } catch (reason) {
@@ -226,7 +226,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
                 { value: 'anthropic', label: 'Anthropic Messages' },
                 { value: 'chat', label: 'OpenAI Chat Completions' },
               ]} />
-              <small>{usesGateway ? ui('自动适配所选接口；使用期间需保持 Code Remote 后端运行。') : ui('直接使用所选协议连接接口。')}</small>
+              <small>{usesGateway ? ui('自动适配所选接口；使用期间需保持 Dev Wisp 后端运行。') : ui('直接使用所选协议连接接口。')}</small>
             </div>
             <div className="native-config__field">
               <TranslationSelect label={ui("密钥传递方式")} value={draft.authMode} disabled={disabled} onChange={(value) => edit({ authMode: value as Draft['authMode'] })} options={[

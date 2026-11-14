@@ -1,4 +1,5 @@
-const databaseName = 'codex-remote-thread-history'
+const databaseName = 'devwisp-thread-history'
+const legacyDatabaseName = 'codex-remote-thread-history'
 const databaseVersion = 2
 type CacheStore = 'threads' | 'transport'
 
@@ -82,7 +83,7 @@ function openDatabase() {
         database.close()
         databasePromise = null
       }
-      finish(database)
+      void migrateLegacyDatabase(database).finally(() => finish(database))
     }
     request.onerror = () => finish(null)
     request.onblocked = () => finish(null)
@@ -104,6 +105,85 @@ function validRecord<T>(value: unknown): value is ThreadHistoryCacheRecord<T> {
     && Number.isFinite(record.sizeBytes)
     && record.sizeBytes > 0
     && 'snapshot' in record
+}
+
+function openLegacyDatabase(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    let request: IDBOpenDBRequest
+    try {
+      request = indexedDB.open(legacyDatabaseName)
+    } catch {
+      resolve(null)
+      return
+    }
+    request.onupgradeneeded = () => {
+      if (request.result.objectStoreNames.length === 0) request.transaction?.abort()
+    }
+    request.onsuccess = () => {
+      const database = request.result
+      if (!database.objectStoreNames.contains('threads') && !database.objectStoreNames.contains('transport')) {
+        database.close()
+        resolve(null)
+        return
+      }
+      resolve(database)
+    }
+    request.onerror = () => resolve(null)
+    request.onblocked = () => resolve(null)
+  })
+}
+
+function readAllRecords(database: IDBDatabase, storeName: CacheStore): Promise<ThreadHistoryCacheRecord<unknown>[]> {
+  if (!database.objectStoreNames.contains(storeName)) return Promise.resolve([])
+  return new Promise((resolve) => {
+    try {
+      const request = database.transaction(storeName, 'readonly').objectStore(storeName).getAll()
+      request.onsuccess = () => resolve(Array.isArray(request.result)
+        ? request.result.filter((record): record is ThreadHistoryCacheRecord<unknown> => validRecord(record))
+        : [])
+      request.onerror = () => resolve([])
+    } catch {
+      resolve([])
+    }
+  })
+}
+
+async function migrateLegacyDatabase(database: IDBDatabase): Promise<void> {
+  const legacy = await openLegacyDatabase()
+  if (!legacy) return
+  try {
+    for (const storeName of ['threads', 'transport'] as const) {
+      const [currentRecords, legacyRecords] = await Promise.all([
+        readAllRecords(database, storeName),
+        readAllRecords(legacy, storeName),
+      ])
+      if (legacyRecords.length === 0) continue
+      const byThread = new Map<string, ThreadHistoryCacheRecord<unknown>>()
+      for (const record of [...legacyRecords, ...currentRecords]) {
+        const previous = byThread.get(record.threadId)
+        if (!previous || record.lastAccessedAt > previous.lastAccessedAt) byThread.set(record.threadId, record)
+      }
+      const { retained } = retainThreadHistoryCacheRecords([...byThread.values()])
+      await new Promise<void>((resolve) => {
+        try {
+          const transaction = database.transaction(storeName, 'readwrite')
+          const store = transaction.objectStore(storeName)
+          const retainedIds = new Set(retained.map((record) => record.threadId))
+          for (const record of currentRecords) {
+            if (!retainedIds.has(record.threadId)) store.delete(record.threadId)
+          }
+          for (const record of retained) store.put(record)
+          transaction.oncomplete = () => resolve()
+          transaction.onerror = () => resolve()
+          transaction.onabort = () => resolve()
+        } catch {
+          resolve()
+        }
+      })
+    }
+  } finally {
+    legacy.close()
+  }
 }
 
 async function writeRecord<T>(threadId: string, snapshot: T, sizeBytes: number, objectStoreName: CacheStore) {

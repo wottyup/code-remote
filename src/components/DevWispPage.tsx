@@ -1,0 +1,8776 @@
+import { getUiLanguage, setUiLanguage, ui, uiFormat, uiMessage, useUiLanguage, type UiLanguage } from '../lib/uiLanguage'
+import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ChangeEvent, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from 'react'
+import { createPortal } from 'react-dom'
+import { createContext, useContext } from 'react'
+import { ClaudeReplyText } from './ClaudeReplyText'
+import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Bell,
+  BellOff,
+  BookOpen,
+  CalendarClock,
+  ChartNoAxesColumnIncreasing,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsUpDown,
+  ClipboardPaste,
+  Copy,
+  Download,
+  Eye,
+  FilePlus2,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  ImagePlus,
+  Info,
+  Keyboard,
+  Languages,
+  Link2,
+  LoaderCircle,
+  LogOut,
+  Menu,
+  Monitor,
+  MessageSquarePlus,
+  MessagesSquare,
+  Palette,
+  Pause,
+  Pencil,
+  Pin,
+  PinOff,
+  Play,
+  Plus,
+  Quote,
+  RefreshCw,
+  ReplaceAll,
+  RotateCcw,
+  Search,
+  Scissors,
+  Server,
+  Settings2,
+  ShieldCheck,
+  Square,
+  Terminal as TerminalIcon,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react'
+import { threadIsRunning, useDevWisp, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type DevWispController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useDevWisp'
+import { useStreamingTextReveal } from '../hooks/useStreamingTextReveal'
+import { devwispClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type QueuedTranslationConfig } from '../lib/devwispClient'
+import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
+import { isRunnableScriptPath } from '../lib/terminalPathCommand'
+import { forgetOpenTerminalThread, isOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
+import { clipboardTableToMarkdown } from '../lib/clipboardTable'
+import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
+import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
+import { assistantChoiceStartIndex, formatAssistantChoiceReply, parseAssistantChoiceContent, type MessageChoiceGroup } from '../lib/messageChoices'
+import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
+import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
+import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
+import { composerKeyAction } from '../lib/composerShortcuts'
+import { ComposerDraftRecoveries, mergeComposerDocuments, prependComposerDraft, type ComposerDraftRecovery } from '../lib/composerDraftRecovery'
+import { composerMenuPosition } from '../lib/composerMenuPosition'
+import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
+import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, isSvgDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
+import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { earlierTurnMessageWindow, recentTurnMessageWindow, visibleTurnMessageStart } from '../lib/messageWindow'
+import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
+import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeModuleTransparency, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { readActiveSettingsSection, saveActiveSettingsSection, type SettingsSectionId } from '../lib/settingsSectionState'
+import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
+import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
+import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
+import { workspaceFileType } from '../lib/workspaceFileTypes'
+import { WorkspaceFileEditor, type WorkspaceFileEditorSearchHandle } from './WorkspaceFileEditor'
+import { WorkspaceSearch, type WorkspaceSearchMode } from './WorkspaceSearch'
+import type { WorkspaceSearchMatch } from '../lib/devwispClient'
+import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { SshMcpSettingsCard } from './SshMcpSettingsCard'
+import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
+import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
+import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
+import { ImagePreviewButton } from './ImagePreviewButton'
+import { PastedTablePreview } from './PastedTablePreview'
+import { ServerRequestCard } from './ServerRequestCard'
+import { ClaudePermissionCard } from './ClaudePermissionCard'
+import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
+import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
+import { containsChinese, containsEnglish, readTranslationPreferences, readTranslationPreferencesIfAvailable, saveTranslationPreferences, selectedTranslationProfileId, translationPreferencesStorageKey, type TranslationPreferences } from '../lib/translationPreferences'
+import { TranslationSettingsCard } from './TranslationSettingsCard'
+import { TranslationSelect } from './TranslationSelect'
+import { NativeEngineConfigCard } from './NativeEngineConfigCard'
+
+interface Props {
+  token: string
+  onUnauthorized: () => void
+  onUnpair: () => void | Promise<void>
+  themePreferences: ThemePreferences
+  onThemePreferencesChange: (next: ThemePreferences) => void
+}
+
+declare global {
+  interface Window {
+    DevWispAndroid?: AndroidNotificationBridge
+    DevWispOpenThread?: (threadId: string) => void
+    __devwispPendingThreadId?: string
+    DevWispHandleBack?: () => boolean
+  }
+}
+
+const connectionLabel = {
+  get connecting() { return ui('正在连接') },
+  get connected() { return ui('Codex 已连接') },
+  get disconnected() { return ui('连接已断开') },
+  get unavailable() { return ui('Codex 不可用') },
+}
+
+let replyBreathSyncFrame: number | null = null
+const pendingReplyBreathAnimations = new WeakSet<Animation>()
+
+function replyBreathAnimation(element: Element | null): Animation | null {
+  const matchesReplyBreath = (animation: Animation) => ['composer-fill-breathe', 'thread-row-reply-breathe'].includes((animation as CSSAnimation).animationName)
+  const elementAnimation = element?.getAnimations().find(matchesReplyBreath)
+  if (elementAnimation) return elementAnimation
+  const layer = element?.querySelector<HTMLElement>(':scope > [data-reply-breath-layer]')
+  return layer?.getAnimations().find(matchesReplyBreath) ?? null
+}
+
+function paneBorderBreathAnimation(): Animation | null {
+  const layer = document.querySelector<HTMLElement>('.conversation-pane--active.conversation-pane--replying > [data-pane-border-breath-layer]')
+  return layer?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'pane-border-breathe') ?? null
+}
+
+function syncReplyBreatheWhenReady(animation: Animation) {
+  if (pendingReplyBreathAnimations.has(animation)) return
+  pendingReplyBreathAnimations.add(animation)
+  void animation.ready.then(() => {
+    pendingReplyBreathAnimations.delete(animation)
+    scheduleReplyBreatheSync()
+  }, () => { pendingReplyBreathAnimations.delete(animation) })
+}
+
+function syncReplyBreathe() {
+  replyBreathSyncFrame = null
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('.thread-row--replying'))
+  const rowAnimations = rows.map(replyBreathAnimation).filter((animation): animation is Animation => animation !== null)
+  const borderAnimation = paneBorderBreathAnimation()
+  const syncedAnimations = borderAnimation ? [...rowAnimations, borderAnimation] : rowAnimations
+  if (syncedAnimations.length === 0) return
+  const composerAnimation = replyBreathAnimation(document.querySelector('.message-composer--running'))
+  if (composerAnimation?.currentTime === null) syncReplyBreatheWhenReady(composerAnimation)
+  for (const animation of syncedAnimations) {
+    if (animation.currentTime === null) syncReplyBreatheWhenReady(animation)
+  }
+  const source = composerAnimation?.currentTime != null
+    ? composerAnimation
+    : syncedAnimations.find((animation) => animation.currentTime !== null)
+  if (!source) return
+  const phase = source.currentTime
+  if (phase === null) return
+  for (const animation of syncedAnimations) {
+    if (animation === source) continue
+    if (animation.currentTime === null) {
+      syncReplyBreatheWhenReady(animation)
+      continue
+    }
+    if (source.startTime !== null) animation.startTime = source.startTime
+    else animation.currentTime = phase
+  }
+}
+
+function scheduleReplyBreatheSync() {
+  if (replyBreathSyncFrame !== null) return
+  replyBreathSyncFrame = requestAnimationFrame(syncReplyBreathe)
+}
+
+function syncReplyBreatheOnMount(element: HTMLElement | null) {
+  if (element) scheduleReplyBreatheSync()
+}
+
+const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
+
+function openSettingsSelectMenu() {
+  if (typeof HTMLElement === 'undefined' || typeof HTMLElement.prototype.showPopover !== 'function') return null
+  return document.querySelector<HTMLElement>('.theme-settings-panel .translation-select__menu:popover-open')
+}
+
+type ChatEngine = 'codex' | 'claude-code'
+type ChoiceReplyDelivery = 'sent' | 'queued' | 'unverified'
+type ComposerHeightMemory = Partial<Record<ChatEngine, { height: number; manuallyResized: boolean }>>
+
+function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: number }) {
+  return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
+}
+
+function ShortcutContextMenuButton({ shortcut, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { shortcut: number | 'Del' }) {
+  return <button {...props} type="button" role="menuitem" data-context-menu-key={shortcut}>
+    {children}<kbd className="context-menu-shortcut" aria-hidden="true">{shortcut}</kbd>
+  </button>
+}
+
+function useContextMenuShortcuts(menuRef: RefObject<HTMLDivElement | null>, activeMenu: object | null) {
+  useEffect(() => {
+    if (!activeMenu) return
+    menuRef.current?.focus({ preventScroll: true })
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.repeat) return
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229
+        || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')) return
+      const shortcut = event.key === 'Delete' ? 'Del' : /^[0-9]$/.test(event.key) ? event.key : null
+      if (!shortcut) return
+      const menu = menuRef.current
+      if (!menu?.isConnected) return
+      const button = [...menu.querySelectorAll<HTMLButtonElement>('button[data-context-menu-key]')]
+        .find((item) => item.dataset.contextMenuKey === shortcut)
+      if (!button) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (!button.disabled) button.click()
+    }
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+    }
+  }, [activeMenu, menuRef])
+}
+
+type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification' | 'about'
+
+function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppTheme }) {
+  if (theme === 'pixel') return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
+  if (theme === 'chinese-retro') return <img className="chinese-retro-theme-icon" src={`/chinese-retro/icons/${name}-cool.png`} alt="" aria-hidden="true" />
+  return null
+}
+
+function WelcomeTypingTitle({ text }: { text: string }) {
+  useUiLanguage()
+  const localizedText = ui(text)
+  const [visibleText, setVisibleText] = useState('')
+  const [cursorVisible, setCursorVisible] = useState(true)
+
+  useEffect(() => {
+    const characters = Array.from(localizedText)
+    let index = 0
+    let completedBlinks = 0
+    let showCursor = true
+    let timer = 0
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setVisibleText(localizedText)
+      setCursorVisible(false)
+      return
+    }
+
+    setVisibleText('')
+    setCursorVisible(true)
+    const typeNext = () => {
+      if (index < characters.length) {
+        index += 1
+        setVisibleText(characters.slice(0, index).join(''))
+        timer = window.setTimeout(typeNext, index === characters.length ? 440 : 72)
+        return
+      }
+
+      if (completedBlinks < 3) {
+        showCursor = !showCursor
+        setCursorVisible(showCursor)
+        if (showCursor) completedBlinks += 1
+        timer = window.setTimeout(typeNext, 320)
+        return
+      }
+
+      index = 0
+      completedBlinks = 0
+      showCursor = true
+      setVisibleText('')
+      setCursorVisible(true)
+      timer = window.setTimeout(typeNext, 220)
+    }
+
+    timer = window.setTimeout(typeNext, 160)
+    return () => window.clearTimeout(timer)
+  }, [localizedText])
+
+  return (
+    <h1 aria-label={localizedText}>
+      <span aria-hidden="true">{visibleText}</span>
+      <span className="welcome-state__cursor" aria-hidden="true">{cursorVisible ? '_' : '\u00a0'}</span>
+    </h1>
+  )
+}
+
+function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
+  if (preferences.theme === 'light' || preferences.theme === 'warm' || preferences.theme === 'retro' || preferences.theme === 'chinese-retro') return true
+  if (preferences.theme === 'dark') return false
+
+  const hex = preferences.customBackgroundColor.slice(1)
+  const channels = [0, 2, 4].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255)
+  const linearChannels = channels.map((channel) => channel <= 0.04045
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4)
+  const relativeLuminance = 0.2126 * linearChannels[0] + 0.7152 * linearChannels[1] + 0.0722 * linearChannels[2]
+  return relativeLuminance >= 0.179
+}
+
+const dateFormatters = Object.fromEntries((['zh-CN', 'en'] as const).map((locale) => [locale, {
+  threadTime: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }),
+  threadDate: new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric' }),
+  messageTimestamp: new Intl.DateTimeFormat(locale, {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }),
+}])) as Record<UiLanguage, { threadTime: Intl.DateTimeFormat; threadDate: Intl.DateTimeFormat; messageTimestamp: Intl.DateTimeFormat }>
+const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const imageMediaTypesByExtension: Record<string, CodexImageAttachment['mediaType']> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+const maxImageSize = 8 * 1024 * 1024
+const maxThemeImageUploadSize = 20 * 1024 * 1024
+const maxThemeImageEdge = 1_920
+const longPasteThreshold = 4_000
+
+function formatMessageTimestamp(value: string | undefined) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : dateFormatters[getUiLanguage()].messageTimestamp.format(date)
+}
+
+function formatTurnDuration(durationMs: number) {
+  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return uiFormat('{0}小时{1}分{2}秒', hours, minutes, seconds)
+  if (minutes > 0) return uiFormat('{0}分{1}秒', minutes, seconds)
+  return uiFormat('{0}秒', seconds)
+}
+const workspaceTreeMaxEntries = 400
+const workspaceExplorerWidthStorageKey = 'devwisp.workspace-explorer-width'
+const workspaceExplorerCollapsedStorageKey = 'devwisp.workspace-explorer-collapsed'
+const retroSidePanelWidthStorageKey = 'devwisp.retro-side-panel-width'
+const workspaceExplorerRootStorageKey = 'devwisp.workspace-explorer-root'
+const settingsHistoryStateKey = '__devwispSettingsOpen'
+const legacyPanelRouteQueryKey = 'panel'
+const panelRoutePaths: Record<PanelHistoryEntry, string> = {
+  settings: '/settings',
+  'usage-stats': '/usage-stats',
+}
+const workspaceExplorerDefaultWidth = 340
+const workspaceExplorerMinWidth = 220
+const workspaceExplorerMaxWidth = 2_400
+const workspaceChatMinWidth = 240
+const retroSidePanelMinWidth = 144
+const retroSidePanelDefaultWidth = 174.4
+const minComposerHeight = 45
+const maxComposerHeight = 260
+const defaultComposerHeight = 72
+const compactLandscapeComposerHeight = 50
+const composerPreferencesStorageKey = 'devwisp.composer-preferences'
+const threadComposerPreferencesStorageKey = 'devwisp.thread-composer-preferences'
+const legacyComposerDraftStorageKey = 'devwisp.composer-draft'
+const composerDraftStoragePrefix = 'devwisp.composer-draft.'
+const composerTableDraftStoragePrefix = 'devwisp.composer-table-draft.'
+const maxComposerTableDraftStorageLength = 2_000_000
+const composerFocusRestoreStorageKey = 'devwisp.composer-focus-restore'
+const pinnedThreadIdsStorageKey = 'devwisp.pinned-thread-ids'
+const newThreadComposerDraftScope = 'new'
+const deletedTableDraftScopes = new Set<string>()
+
+function readPinnedThreadIds() {
+  if (typeof window === 'undefined') return new Set<string>()
+  try {
+    const value = window.localStorage.getItem(pinnedThreadIdsStorageKey)
+    if (!value) return new Set<string>()
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed)) return new Set<string>()
+    return new Set(parsed.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 512))
+  } catch {
+    return new Set<string>()
+  }
+}
+
+type PanelHistoryEntry = 'settings' | 'usage-stats'
+
+function getPanelRouteEntry(href = window.location.href): PanelHistoryEntry | null {
+  try {
+    const url = new URL(href)
+    const pathname = url.pathname.replace(/\/+$/, '') || '/'
+    if (pathname === panelRoutePaths.settings) return 'settings'
+    if (pathname === panelRoutePaths['usage-stats']) return 'usage-stats'
+    // Keep links created by the previous query-based build opening correctly.
+    const legacyPanel = url.searchParams.get(legacyPanelRouteQueryKey)
+    return legacyPanel === 'settings' || legacyPanel === 'usage-stats' ? legacyPanel : null
+  } catch {
+    return null
+  }
+}
+
+function panelRouteHref(panel: PanelHistoryEntry | null) {
+  const url = new URL(window.location.href)
+  url.pathname = panel ? panelRoutePaths[panel] : '/'
+  url.searchParams.delete(legacyPanelRouteQueryKey)
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
+function panelState(state: unknown, panel: PanelHistoryEntry | null) {
+  const previousState = state && typeof state === 'object' && !Array.isArray(state)
+    ? { ...(state as Record<string, unknown>) }
+    : {}
+  if (panel) previousState[settingsHistoryStateKey] = panel
+  else delete previousState[settingsHistoryStateKey]
+  return previousState
+}
+
+function getPanelHistoryEntry(state: unknown): PanelHistoryEntry | null {
+  if (!state || typeof state !== 'object') return null
+  const panel = (state as Record<string, unknown>)[settingsHistoryStateKey]
+  if (panel === 'settings' || panel === 'usage-stats') return panel
+  // Older builds stored `true` for both panels. Keep its original settings meaning.
+  return panel === true ? 'settings' : null
+}
+
+function openPanelHistoryEntry(panel: PanelHistoryEntry) {
+  const currentState = window.history.state
+  const statePanel = getPanelHistoryEntry(currentState)
+  const currentPanel = statePanel ?? getPanelRouteEntry()
+  const nextState = panelState(currentState, panel)
+  const nextUrl = panelRouteHref(panel)
+  if (currentPanel === panel) {
+    if (statePanel !== panel || `${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
+      window.history.replaceState(nextState, '', nextUrl)
+    }
+    return
+  }
+  if (currentPanel) window.history.replaceState(nextState, '', nextUrl)
+  else window.history.pushState(nextState, '', nextUrl)
+}
+
+interface ComposerPreferences {
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
+}
+
+type ThreadComposerPreferences = Record<string, ComposerPreferences>
+type TemporaryModelPreferences = Pick<ComposerPreferences, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+
+function workspacePanelsWidthLimit() {
+  if (typeof window !== 'undefined' && isMobileLayout()) {
+    return workspaceExplorerMaxWidth
+  }
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  const sidebarWidth = Math.round(Math.max(180, Math.min(284, viewportWidth * 0.22)))
+  const availableWorkspaceWidth = viewportWidth - sidebarWidth - 8
+  const chatMinimumLimit = availableWorkspaceWidth - workspaceChatMinWidth
+  return Math.max(0, Math.min(workspaceExplorerMaxWidth, chatMinimumLimit))
+}
+
+function workspaceExplorerMinimumWidth() {
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return viewportWidth <= 900 ? 160 : workspaceExplorerMinWidth
+}
+
+function workspaceExplorerWidthLimit() {
+  return Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerMaxWidth, workspacePanelsWidthLimit()))
+}
+
+function clampWorkspaceExplorerWidth(value: number) {
+  return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(), value)))
+}
+
+function retroSidePanelWidthLimit() {
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return Math.max(retroSidePanelMinWidth, Math.min(viewportWidth * 0.4, (viewportWidth - 248) / 2))
+}
+
+function clampRetroSidePanelWidth(value: number) {
+  return Math.round(Math.max(retroSidePanelMinWidth, Math.min(retroSidePanelWidthLimit(), value)))
+}
+
+function defaultRetroSidePanelWidth() {
+  return clampRetroSidePanelWidth(retroSidePanelDefaultWidth)
+}
+
+function readRetroSidePanelWidth(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = Number(window.localStorage.getItem(retroSidePanelWidthStorageKey))
+    return Number.isFinite(stored) && stored > 0 ? clampRetroSidePanelWidth(stored) : null
+  } catch {
+    return null
+  }
+}
+
+function readWorkspaceExplorerWidth() {
+  if (typeof window === 'undefined') return workspaceExplorerDefaultWidth
+  try {
+    const stored = Number(window.localStorage.getItem(workspaceExplorerWidthStorageKey))
+    return clampWorkspaceExplorerWidth(Number.isFinite(stored) && stored > 0 ? stored : workspaceExplorerDefaultWidth)
+  } catch {
+    return clampWorkspaceExplorerWidth(workspaceExplorerDefaultWidth)
+  }
+}
+
+function readWorkspaceExplorerCollapsed() {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(workspaceExplorerCollapsedStorageKey) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function readWorkspaceExplorerRoot() {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage.getItem(workspaceExplorerRootStorageKey)?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+function workspaceAbsolutePath(cwd: string | undefined, path: string) {
+  if (!cwd) return path
+  const trimmed = cwd.replace(/[\\/]+$/, '')
+  const separator = cwd.includes('\\') && !cwd.includes('/') ? '\\' : '/'
+  const base = trimmed || (cwd.startsWith('\\') ? '\\' : '/')
+  const rootedDrive = /^[a-z]:$/i.test(base) ? `${base}${separator}` : base
+  if (!path) return cwd
+  return `${rootedDrive}${rootedDrive.endsWith('/') || rootedDrive.endsWith('\\') ? '' : separator}${path}`
+}
+
+function workspaceParentPath(path: string) {
+  const drivePath = /^([a-z]:)[\\/]*(.*)$/i.exec(path)
+  const separator = path.includes('\\') && !path.includes('/') ? '\\' : '/'
+  if (drivePath) {
+    const segments = drivePath[2].split(/[\\/]+/).filter(Boolean)
+    if (segments.length === 0) return `${drivePath[1]}${separator}`
+    segments.pop()
+    return `${drivePath[1]}${separator}${segments.join(separator) || ''}`
+  }
+  const normalized = path.replace(/[\\/]+$/, '')
+  if (!normalized) return path.startsWith('\\') ? '\\' : '/'
+  const lastSeparator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+  if (lastSeparator < 0) return path
+  if (lastSeparator === 0) return normalized[0]
+  return normalized.slice(0, lastSeparator)
+}
+
+function workspaceRelativeParentPath(path: string) {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const separator = normalized.lastIndexOf('/')
+  return separator < 0 ? '' : normalized.slice(0, separator)
+}
+
+function workspaceRelativeChildPath(parent: string, name: string) {
+  return parent ? `${parent.replace(/\/+$/, '')}/${name}` : name
+}
+
+function workspacePathIsWithin(path: string, parent: string) {
+  const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const normalizedParent = parent.replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`)
+}
+
+function workspaceFileReference(cwd: string | undefined, path: string) {
+  const isAbsolute = path.startsWith('/') || path.startsWith('\\\\') || /^[a-z]:[\\/]/i.test(path)
+  return isAbsolute || !cwd ? path : workspaceAbsolutePath(cwd, path)
+}
+
+function workspaceRelativePath(cwd: string | undefined, path: string) {
+  if (!cwd) return path
+  const normalizedCwd = cwd.replace(/[\\/]+/g, '/').replace(/\/$/, '')
+  const normalizedPath = path.replace(/[\\/]+/g, '/')
+  const prefix = `${normalizedCwd}/`
+  const isWindowsPath = /^[a-z]:\//i.test(prefix)
+  if (normalizedPath.toLowerCase() === normalizedCwd.toLowerCase()) return ''
+  if (isWindowsPath
+    ? normalizedPath.toLowerCase().startsWith(prefix.toLowerCase())
+    : normalizedPath.startsWith(prefix)) return normalizedPath.slice(prefix.length)
+  return path.replace(/^\.\//, '')
+}
+
+function draftContainsWorkspacePath(draft: string, path: string) {
+  if (!draft || !path) return false
+  let index = draft.indexOf(path)
+  while (index >= 0) {
+    const previous = draft[index - 1]
+    const next = draft[index + path.length]
+    const startsAtBoundary = previous === undefined || /[\s"'`([{<]/.test(previous)
+    const endsAtBoundary = next === undefined || /[\s"'`)\]}>]/.test(next)
+    if (startsAtBoundary && endsAtBoundary) return true
+    index = draft.indexOf(path, index + path.length)
+  }
+  return false
+}
+
+function workspacePathsMissingFromDraft(draft: string, paths: string[]) {
+  const seen = new Set<string>()
+  return paths.filter((path) => {
+    if (!path || seen.has(path) || draftContainsWorkspacePath(draft, path)) return false
+    seen.add(path)
+    return true
+  })
+}
+
+function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
+  if (value === 'on-request' || value === 'untrusted' || value === 'never') return value
+  // Migrate values saved by versions 0.0.20–0.0.24.
+  if (value === 'onRequest') return 'on-request'
+  if (value === 'unlessTrusted') return 'untrusted'
+  return undefined
+}
+
+function claudePermissionModeOf(value: unknown): ClaudeCodePermissionMode | undefined {
+  return value === 'default' || value === 'manual' || value === 'acceptEdits'
+    || value === 'auto' || value === 'bypassPermissions' || value === 'dontAsk' || value === 'plan' ? value : undefined
+}
+
+function composerPreferencesFrom(value: unknown): ComposerPreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const parsed = value as Record<string, unknown>
+  const preferences: ComposerPreferences = {}
+  if (typeof parsed.model === 'string' && parsed.model) preferences.model = parsed.model
+  if (typeof parsed.effort === 'string' && parsed.effort) preferences.effort = parsed.effort
+  const approvalPolicy = approvalPolicyOf(parsed.approvalPolicy)
+  if (approvalPolicy) preferences.approvalPolicy = approvalPolicy
+  if (typeof parsed.claudeModel === 'string' && parsed.claudeModel) preferences.claudeModel = parsed.claudeModel
+  if (typeof parsed.claudeEffort === 'string' && parsed.claudeEffort) preferences.claudeEffort = parsed.claudeEffort
+  const claudePermissionMode = claudePermissionModeOf(parsed.claudePermissionMode)
+  if (claudePermissionMode) preferences.claudePermissionMode = claudePermissionMode
+  return preferences
+}
+
+function mergeComposerPreferences(current: ComposerPreferences, changes: Partial<ComposerPreferences>) {
+  return composerPreferencesFrom({ ...current, ...changes })
+}
+
+function resolvedComposerPreferences(defaults: ComposerPreferences, threadPreferences?: ComposerPreferences): ComposerPreferences {
+  return {
+    model: threadPreferences?.model ?? defaults.model,
+    effort: threadPreferences?.effort ?? defaults.effort,
+    approvalPolicy: threadPreferences?.approvalPolicy ?? defaults.approvalPolicy,
+    claudeModel: threadPreferences?.claudeModel ?? defaults.claudeModel,
+    claudeEffort: threadPreferences?.claudeEffort ?? defaults.claudeEffort,
+    claudePermissionMode: threadPreferences?.claudePermissionMode ?? defaults.claudePermissionMode,
+  }
+}
+
+function readComposerPreferences(): ComposerPreferences {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = window.localStorage.getItem(composerPreferencesStorageKey)
+    if (!value) return {}
+    return composerPreferencesFrom(JSON.parse(value))
+  } catch {
+    return {}
+  }
+}
+
+function saveComposerPreferences(preferences: ComposerPreferences) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(composerPreferencesStorageKey, JSON.stringify(preferences))
+  } catch {
+    // Ignore storage restrictions; the composer still works for this session.
+  }
+}
+
+function readThreadComposerPreferences(): ThreadComposerPreferences {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = window.localStorage.getItem(threadComposerPreferencesStorageKey)
+    if (!value) return {}
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const preferences: ThreadComposerPreferences = {}
+    for (const [threadId, savedPreferences] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!threadId || threadId.length > 512) continue
+      preferences[threadId] = composerPreferencesFrom(savedPreferences)
+    }
+    return preferences
+  } catch {
+    return {}
+  }
+}
+
+function saveThreadComposerPreferences(preferences: ThreadComposerPreferences) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(threadComposerPreferencesStorageKey, JSON.stringify(preferences))
+  } catch {
+    // Ignore storage restrictions; the composer still works for this session.
+  }
+}
+
+function composerDraftScopeForThread(threadId?: string) {
+  return threadId ? `thread:${threadId}` : newThreadComposerDraftScope
+}
+
+function composerDraftStorageKeyFor(scope: string) {
+  return `${composerDraftStoragePrefix}${encodeURIComponent(scope)}`
+}
+
+function readComposerDraft(scope: string) {
+  if (typeof window === 'undefined') return ''
+  try {
+    const storageKey = composerDraftStorageKeyFor(scope)
+    const savedDraft = window.localStorage.getItem(storageKey)
+    if (savedDraft !== null) return savedDraft
+    // Keep an existing draft from older versions, but assign it to the first
+    // active scope instead of continuing to leak it into every conversation.
+    const legacyDraft = window.localStorage.getItem(legacyComposerDraftStorageKey)
+    if (!legacyDraft) return ''
+    window.localStorage.setItem(storageKey, legacyDraft)
+    window.localStorage.removeItem(legacyComposerDraftStorageKey)
+    return legacyDraft
+  } catch {
+    return ''
+  }
+}
+
+function saveComposerDraft(scope: string, draft: string) {
+  if (typeof window === 'undefined') return false
+  try {
+    const storageKey = composerDraftStorageKeyFor(scope)
+    if (draft) window.localStorage.setItem(storageKey, draft)
+    else window.localStorage.removeItem(storageKey)
+    return true
+  } catch {
+    // The composer still works for this session when storage is unavailable.
+    return false
+  }
+}
+
+function composerTableDraftStorageKeyFor(scope: string) {
+  return `${composerTableDraftStoragePrefix}${encodeURIComponent(scope)}`
+}
+
+function readComposerTableDraft(scope: string): CodexDocumentAttachment[] {
+  if (typeof window === 'undefined' || deletedTableDraftScopes.has(scope)) return []
+  try {
+    const raw = window.localStorage.getItem(composerTableDraftStorageKeyFor(scope))
+    if (!raw || raw.length > maxComposerTableDraftStorageLength) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is CodexDocumentAttachment => item !== null
+      && typeof item === 'object'
+      && item.name === 'pasted-table.md'
+      && typeof item.content === 'string'
+      && !item.sourceFileId).slice(0, maxDocumentsPerTurn)
+  } catch {
+    return []
+  }
+}
+
+function saveComposerTableDraft(scope: string, documents: CodexDocumentAttachment[]) {
+  if (typeof window === 'undefined') return true
+  try {
+    const key = composerTableDraftStorageKeyFor(scope)
+    if (deletedTableDraftScopes.has(scope)) {
+      window.localStorage.removeItem(key)
+      return true
+    }
+    const tables = documents.filter((item) => item.name === 'pasted-table.md' && !item.sourceFileId)
+      .map(({ name, content }) => ({ name, content }))
+    if (tables.length > 0) {
+      const serialized = JSON.stringify(tables)
+      if (serialized.length > maxComposerTableDraftStorageLength) {
+        window.localStorage.removeItem(key)
+        return false
+      }
+      window.localStorage.setItem(key, serialized)
+    } else window.localStorage.removeItem(key)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const composerDraftRecoveries = new ComposerDraftRecoveries({
+  readDraft: readComposerDraft,
+  saveDraft: saveComposerDraft,
+  readTables: readComposerTableDraft,
+  saveTables: saveComposerTableDraft,
+})
+
+function forgetComposerTableDraft(scope: string) {
+  deletedTableDraftScopes.add(scope)
+  saveComposerTableDraft(scope, [])
+}
+
+interface ComposerFocusRestoreState {
+  scope: string
+  selectionStart: number
+  selectionEnd: number
+}
+
+function modelIdOf(model: CodexModel) {
+  return model.model || model.id || ''
+}
+
+function modelLabelOf(model: CodexModel) {
+  return model.displayName || modelIdOf(model) || ui('未命名模型')
+}
+
+function imageMediaTypeFor(file: Pick<File, 'name' | 'type'>): CodexImageAttachment['mediaType'] | null {
+  if (imageTypes.has(file.type as CodexImageAttachment['mediaType'])) return file.type as CodexImageAttachment['mediaType']
+  const extension = file.name.toLowerCase().split('.').at(-1) ?? ''
+  return imageMediaTypesByExtension[extension] ?? null
+}
+
+function isImageAttachmentFile(file: Pick<File, 'name' | 'type'>) {
+  if (isSvgDocumentFile(file)) return false
+  return file.type.startsWith('image/') || imageMediaTypeFor(file) !== null
+}
+
+const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }> = [
+  { value: 'on-request', get label() { return ui('请求批准') } },
+  { value: 'untrusted', get label() { return ui('帮我批准') } },
+  { value: 'never', get label() { return ui('完全访问') } },
+]
+
+const defaultClaudeModelOptions = [
+  { value: 'default', get label() { return ui('本机默认模型') } },
+  { value: 'fable', label: 'Claude Fable' },
+  { value: 'opus', label: 'Claude Opus' },
+  { value: 'sonnet', label: 'Claude Sonnet' },
+  { value: 'haiku', label: 'Claude Haiku' },
+]
+
+const claudeEffortOptions = [
+  { value: 'default', label: 'default' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'xhigh', label: 'xhigh' },
+  { value: 'max', label: 'max' },
+]
+
+const claudePermissionModeOptions: Array<{ value: ClaudeCodePermissionMode; label: string }> = [
+  { value: 'default', get label() { return ui('本机默认权限') } },
+  { value: 'manual', get label() { return ui('手动确认') } },
+  { value: 'acceptEdits', get label() { return ui('自动接受编辑') } },
+  { value: 'auto', get label() { return ui('自动模式') } },
+  { value: 'bypassPermissions', get label() { return ui('绕过全部权限检查') } },
+  { value: 'dontAsk', get label() { return ui('不询问（拒绝需授权操作）') } },
+  { value: 'plan', get label() { return ui('计划模式') } },
+]
+
+function readImage(file: File): Promise<CodexImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error(`无法读取图片：${file.name}`))
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const separator = result.indexOf(',')
+      if (separator < 0) {
+        reject(new Error(`无法读取图片：${file.name}`))
+        return
+      }
+      const mediaType = imageMediaTypeFor(file)
+      if (!mediaType) {
+        reject(new Error(`不支持的图片格式：${file.name}`))
+        return
+      }
+      resolve({ name: file.name || 'image', mediaType, data: result.slice(separator + 1) })
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+function optimizeThemeBackgroundImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = document.createElement('img')
+    const sourceUrl = URL.createObjectURL(file)
+    image.onload = () => {
+      URL.revokeObjectURL(sourceUrl)
+      try {
+        const longestEdge = Math.max(image.naturalWidth, image.naturalHeight)
+        if (!longestEdge) throw new Error('图片尺寸无效。')
+        let scale = Math.min(1, maxThemeImageEdge / longestEdge)
+        let smallestResult = ''
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const width = Math.max(1, Math.round(image.naturalWidth * scale))
+          const height = Math.max(1, Math.round(image.naturalHeight * scale))
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+          const context = canvas.getContext('2d')
+          if (!context) throw new Error('浏览器不支持图片处理。')
+          context.drawImage(image, 0, 0, width, height)
+          for (const quality of [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]) {
+            const dataUrl = canvas.toDataURL('image/webp', quality)
+            if (!smallestResult || dataUrl.length < smallestResult.length) smallestResult = dataUrl
+            if (isCompactThemeBackgroundImage(dataUrl)) {
+              resolve(dataUrl)
+              return
+            }
+          }
+          scale *= 0.72
+        }
+        if (isCompactThemeBackgroundImage(smallestResult)) {
+          resolve(smallestResult)
+          return
+        }
+        throw new Error('图片无法压缩到浏览器可保存的大小。')
+      } catch (reason) {
+        reject(reason instanceof Error ? reason : new Error('背景图片处理失败。'))
+      }
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(sourceUrl)
+      reject(new Error('背景图片读取失败。'))
+    }
+    image.src = sourceUrl
+  })
+}
+
+function titleOf(thread: CodexThread) {
+  const title = thread.name || thread.preview || ui('新对话')
+  return title.length > 72 ? `${title.slice(0, 69)}…` : title
+}
+
+function timeOf(thread: CodexThread) {
+  const value = thread.updatedAt ?? thread.createdAt
+  if (typeof value !== 'number' && typeof value !== 'string') return ''
+  const date = typeof value === 'number'
+    ? new Date(value > 10_000_000_000 ? value : value * 1000)
+    : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const today = new Date()
+  return date.toDateString() === today.toDateString()
+    ? dateFormatters[getUiLanguage()].threadTime.format(date)
+    : dateFormatters[getUiLanguage()].threadDate.format(date)
+}
+
+function localDateTimeInputValue(date: Date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return localDate.toISOString().slice(0, 16)
+}
+
+function scheduledTimeLabel(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(getUiLanguage(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+}
+
+interface ComposerMenuOption {
+  value: string
+  label: string
+}
+
+interface ModelReasoningOptions {
+  options: ComposerMenuOption[]
+  defaultEffort?: string
+}
+
+function useComposerFloatingPosition<TAnchor extends HTMLElement, TPopover extends HTMLElement>(
+  open: boolean,
+  anchorRef: RefObject<TAnchor | null>,
+  popoverRef: RefObject<TPopover | null>,
+) {
+  const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null)
+      return
+    }
+    const updatePosition = () => {
+      if (!anchorRef.current || !popoverRef.current) return
+      const viewport = window.visualViewport
+      const rect = popoverRef.current.getBoundingClientRect()
+      const next = composerMenuPosition(anchorRef.current.getBoundingClientRect(), {
+        width: rect.width,
+        height: Math.min(340, popoverRef.current.scrollHeight + 2),
+      }, {
+        left: viewport?.offsetLeft ?? 0,
+        top: viewport?.offsetTop ?? 0,
+        width: viewport?.width ?? window.innerWidth,
+        height: viewport?.height ?? window.innerHeight,
+      })
+      setPosition((current) => current && current.left === next.left && current.top === next.top
+        && current.maxWidth === next.maxWidth && current.maxHeight === next.maxHeight ? current : next)
+    }
+    const handleScroll = (event: Event) => {
+      if (!(event.target instanceof Node) || !popoverRef.current?.contains(event.target)) updatePosition()
+    }
+    updatePosition()
+    const settleStartedAt = window.performance.now()
+    let settleFrame: number | undefined
+    const trackAnchorWhileViewportSettles = () => {
+      updatePosition()
+      if (window.performance.now() - settleStartedAt < 600) {
+        settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+      }
+    }
+    settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+    const observer = new ResizeObserver(updatePosition)
+    if (anchorRef.current) observer.observe(anchorRef.current)
+    if (popoverRef.current) observer.observe(popoverRef.current)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', handleScroll, true)
+    window.visualViewport?.addEventListener('resize', updatePosition)
+    window.visualViewport?.addEventListener('scroll', updatePosition)
+    return () => {
+      if (settleFrame !== undefined) window.cancelAnimationFrame(settleFrame)
+      observer.disconnect()
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.visualViewport?.removeEventListener('resize', updatePosition)
+      window.visualViewport?.removeEventListener('scroll', updatePosition)
+    }
+  }, [anchorRef, open, popoverRef])
+
+  return position
+}
+
+function ComposerMenu({
+  label,
+  value,
+  options,
+  emptyLabel,
+  disabled,
+  open,
+  onOpenChange,
+  onChange,
+  footer,
+  temporary = false,
+  compact = false,
+  mobileSettingsOwner,
+  portalTheme,
+  portalThemeStyle,
+}: {
+  label: string
+  value: string
+  options: ComposerMenuOption[]
+  emptyLabel: string
+  disabled?: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onChange: (value: string) => void
+  footer?: ReactNode
+  temporary?: boolean
+  compact?: boolean
+  mobileSettingsOwner?: string
+  portalTheme: AppTheme
+  portalThemeStyle: CSSProperties
+}) {
+  useUiLanguage()
+  const root = useRef<HTMLDivElement>(null)
+  const popover = useRef<HTMLDivElement>(null)
+  const composerFocusBeforeOpen = useRef<HTMLElement | null>(null)
+  const position = useComposerFloatingPosition(open, root, popover)
+  const selected = options.find((option) => option.value === value)
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      if (!root.current?.contains(event.target as Node) && !popover.current?.contains(event.target as Node)) onOpenChange(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      onOpenChange(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [onOpenChange, open])
+
+  return (
+    <div className={`composer-menu${open ? ' composer-menu--open' : ''}`} ref={root}>
+      <button
+        className="composer-menu__trigger"
+        type="button"
+        disabled={disabled}
+        aria-label={uiFormat("{0}，当前值：{1}{2}", label, selected?.label ?? emptyLabel, temporary ? ui('，仅本次') : '')}
+        title={`${selected?.label ?? emptyLabel}${temporary ? ui(' · 本次') : ''}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onPointerDown={(event) => {
+          const activeElement = document.activeElement
+          if (!(activeElement instanceof HTMLElement) || !activeElement.matches('.message-composer textarea')) {
+            composerFocusBeforeOpen.current = null
+            return
+          }
+          composerFocusBeforeOpen.current = activeElement
+          event.preventDefault()
+        }}
+        onClick={() => onOpenChange(!open)}
+      >
+        <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ui(' · 本次') : ''}</span>
+      </button>
+      {open ? createPortal(
+        <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+          <div
+            ref={popover}
+            className={`composer-menu__popover composer-menu__popover--floating${compact ? ' composer-menu__popover--compact' : ''}`}
+            data-mobile-settings-owner={mobileSettingsOwner}
+            style={position ?? { visibility: 'hidden' }}
+          >
+            {footer}
+            <div className="composer-menu__options" role="listbox" aria-label={label}>
+              {options.length > 0 ? options.map((option) => (
+                <button
+                  className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={option.value === value}
+                  disabled={disabled}
+                  onPointerDown={(event) => {
+                    if (composerFocusBeforeOpen.current) event.preventDefault()
+                  }}
+                  onClick={() => {
+                    onChange(option.value)
+                    onOpenChange(false)
+                    const focusTarget = composerFocusBeforeOpen.current
+                    composerFocusBeforeOpen.current = null
+                    if (focusTarget?.isConnected) {
+                      window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
+                    }
+                  }}
+                >
+                  <span className="composer-menu__option-copy">
+                    <strong>{option.label}</strong>
+                  </span>
+                  {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+                </button>
+              )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  )
+}
+
+type RemoteConnection = keyof typeof connectionLabel
+
+interface ComposerSendInput {
+  prompt: string
+  originalText?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
+  continuePaused?: boolean
+  sendDirectly?: boolean
+  images: CodexImageAttachment[]
+  documents?: CodexDocumentAttachment[]
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
+  scheduledAt?: string
+}
+
+type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+
+interface ComposerHandle {
+  focusInput(): void
+  replaceDraft(value: string): void
+  appendReplyDraft(value: string): boolean
+  appendDraft(value: string, focus?: boolean): void
+  insertDraftAtCursor(value: string, focus?: boolean): void
+  addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
+  adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
+  closeOpenMenu(): boolean
+  cancelQueuedEdit(): boolean
+}
+
+interface MessageComposerProps {
+  token: string
+  translation: TranslationPreferences
+  translationRevision: number
+  portalTheme: AppTheme
+  portalThemeStyle: CSSProperties
+  draftScope: string
+  onDraftChange: (draft: string) => void
+  composerHeightMemory: RefObject<ComposerHeightMemory | null>
+  connection: RemoteConnection
+  isRunning: boolean
+  isReplying: boolean
+  canInterrupt: boolean
+  fileChangeSummary: FileChangeSummary | null
+  fileChangeSummaryKey: string | null
+  reserveFileChangeSummarySpace: boolean
+  stableQueueHeight: boolean
+  showCodexPreferences: boolean
+  isInterrupting: boolean
+  writerConflict: boolean
+  modelSupportsImages: boolean
+  selectedModel: string
+  selectedEffort: string
+  selectedApprovalPolicy: CodexApprovalPolicy
+  selectedClaudePermissionMode: ClaudeCodePermissionMode
+  temporaryPreferences: boolean
+  onTemporaryPreferencesChange: (enabled: boolean) => void
+  modelOptions: ComposerMenuOption[]
+  reasoningOptions: ComposerMenuOption[]
+  reasoningOptionsByModel: Record<string, ModelReasoningOptions>
+  authorizationOptions: ComposerMenuOption[]
+  claudeModelOptions: ComposerMenuOption[]
+  claudeEffortOptions: ComposerMenuOption[]
+  claudePermissionModeOptions: ComposerMenuOption[]
+  onModelChange: (model: string) => void
+  onEffortChange: (effort: string) => void
+  onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  onClaudePermissionModeChange: (mode: ClaudeCodePermissionMode) => void
+  approvalPolicyUpdating?: boolean
+  onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
+  onSend: (input: ComposerSendInput) => Promise<boolean>
+  queuedMessages: QueuedTurnMessage[]
+  onSendQueuedNow: (messageId: string, mode: QueuedMessageSendMode) => Promise<boolean>
+  onRetryQueuedTranslation: (messageId: string) => Promise<boolean>
+  onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
+  onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
+  onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
+  onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
+  onMoveQueued: (messageId: string, adjacentMessageId: string, direction: 'up' | 'down') => Promise<boolean>
+  onInterrupt: () => void
+  onContinue: () => void
+  canContinue: boolean
+  continuationPending: boolean
+  onRefresh: () => void
+  onCreateThread: () => void
+  createThreadDisabled: boolean
+  createThreadTitle: string
+}
+
+const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
+  token,
+  translation,
+  translationRevision,
+  portalTheme,
+  portalThemeStyle,
+  draftScope,
+  onDraftChange,
+  composerHeightMemory,
+  connection,
+  isRunning,
+  isReplying,
+  canInterrupt,
+  fileChangeSummary,
+  fileChangeSummaryKey,
+  reserveFileChangeSummarySpace,
+  stableQueueHeight,
+  showCodexPreferences,
+  isInterrupting,
+  writerConflict,
+  modelSupportsImages,
+  selectedModel,
+  selectedEffort,
+  selectedApprovalPolicy,
+  selectedClaudePermissionMode,
+  temporaryPreferences,
+  onTemporaryPreferencesChange,
+  modelOptions,
+  reasoningOptions,
+  reasoningOptionsByModel,
+  authorizationOptions,
+  claudeModelOptions,
+  claudeEffortOptions,
+  claudePermissionModeOptions,
+  onModelChange,
+  onEffortChange,
+  onApprovalPolicyChange,
+  onClaudePermissionModeChange,
+  approvalPolicyUpdating = false,
+  onUploadPdf,
+  onSend,
+  queuedMessages,
+  onSendQueuedNow,
+  onRetryQueuedTranslation,
+  onBeginQueuedEdit,
+  onUpdateQueuedMessage,
+  onEndQueuedEdit,
+  onRemoveQueued,
+  onMoveQueued,
+  onInterrupt,
+  onContinue,
+  canContinue,
+  continuationPending,
+  onRefresh,
+  onCreateThread,
+  createThreadDisabled,
+  createThreadTitle,
+}, ref) {
+  useUiLanguage()
+  const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
+  const activeTranslation = readTranslationPreferencesIfAvailable() ?? translation
+  const translationProfileId = selectedTranslationProfileId(activeTranslation)
+  const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
+  const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
+  const [translationPreview, setTranslationPreview] = useState<{ key: string; text?: string; error?: string; loading: boolean } | null>(null)
+  const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
+  const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
+  const [imagesReady, setImagesReady] = useState(false)
+  const [readingImages, setReadingImages] = useState(false)
+  const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>(() => readComposerTableDraft(draftScope))
+  const [readingDocuments, setReadingDocuments] = useState(false)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && isCompactLandscape())
+  const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
+    isMobileLayout() || Boolean(window.DevWispAndroid?.changeEndpoint)
+  ))
+  const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
+  const [composerHeight, setComposerHeight] = useState(() => {
+    if (savedComposerHeight?.manuallyResized) return savedComposerHeight.height
+    if (typeof window === 'undefined') return defaultComposerHeight
+    return isCompactLandscape() ? compactLandscapeComposerHeight : defaultComposerHeight
+  })
+  const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
+  const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
+  const [movingQueuedId, setMovingQueuedId] = useState<string | null>(null)
+  const movingQueuedRef = useRef(false)
+  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
+  const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
+  const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
+  const [mobileSettingsExpanded, setMobileSettingsExpanded] = useState(false)
+  const mobileSettingsExpandedRef = useRef(false)
+  const mobileSettingsRoot = useRef<HTMLDivElement>(null)
+  const mobileSettingsToggle = useRef<HTMLButtonElement>(null)
+  const mobileSettingsPanel = useRef<HTMLDivElement>(null)
+  const mobileSettingsPosition = useComposerFloatingPosition(mobileLayout && mobileSettingsExpanded, mobileSettingsToggle, mobileSettingsPanel)
+  const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
+  const [scheduleDateTime, setScheduleDateTime] = useState('')
+  const scheduleButton = useRef<HTMLButtonElement>(null)
+  const schedulePanel = useRef<HTMLDivElement>(null)
+  const schedulePanelPosition = useComposerFloatingPosition(schedulePanelOpen, scheduleButton, schedulePanel)
+  const mobileSettingsOwner = useId()
+  const scheduleDateTimeInputId = useId()
+  mobileSettingsExpandedRef.current = mobileSettingsExpanded
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const composerMounted = useRef(false)
+  const draftRef = useRef(draft)
+  const draftScopeRef = useRef(draftScope)
+  draftScopeRef.current = draftScope
+  const attachedImagesRef = useRef(attachedImages)
+  attachedImagesRef.current = attachedImages
+  const attachedDocumentsRef = useRef(attachedDocuments)
+  attachedDocumentsRef.current = attachedDocuments
+  const editingQueuedMessageIdRef = useRef<string | null>(null)
+  const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
+  const composerEngineRef = useRef(composerEngine)
+  const draftSaveTimer = useRef<number | undefined>(undefined)
+  const tableDraftSaveTimer = useRef<number | undefined>(undefined)
+  const focusRestoreAttempted = useRef(false)
+  const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
+  const composerHeightWasResized = useRef(savedComposerHeight?.manuallyResized ?? false)
+  const inputIsComposing = useRef(false)
+  const keyboardFallbackTimer = useRef<number | undefined>(undefined)
+  const requestComposerKeyboard = useCallback(() => {
+    if (!window.DevWispAndroid?.showKeyboard) return
+    if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
+    const beforeHeight = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+    // Let the normal WebView focus open the IME first. The native fallback
+    // restarts the input connection, so only use it if focus did not open it.
+    keyboardFallbackTimer.current = window.setTimeout(() => {
+      keyboardFallbackTimer.current = undefined
+      if (document.activeElement !== composer.current) return
+      if ((window.DevWispAndroid?.getKeyboardInsetDp?.() ?? 0) > 0) return
+      const height = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+      if (beforeHeight - height > 80) return
+      window.DevWispAndroid?.showKeyboard?.()
+    }, 500)
+  }, [])
+  useEffect(() => () => {
+    if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
+  }, [])
+  const editingDraftSnapshot = useRef<{
+    draft: string
+    images: CodexImageAttachment[]
+    documents: CodexDocumentAttachment[]
+    attachmentError: string | null
+  } | null>(null)
+
+  useLayoutEffect(() => {
+    if (composerEngineRef.current !== composerEngine) return
+    composerHeightMemory.current = {
+      ...(composerHeightMemory.current ?? {}),
+      [composerEngine]: { height: composerHeight, manuallyResized: composerHeightWasResized.current },
+    }
+  }, [composerEngine, composerHeight, composerHeightMemory])
+
+  useLayoutEffect(() => {
+    if (composerEngineRef.current === composerEngine) return
+    composerEngineRef.current = composerEngine
+    const savedHeight = composerHeightMemory.current?.[composerEngine]
+    composerHeightWasResized.current = savedHeight?.manuallyResized ?? false
+    setComposerHeight(savedHeight?.manuallyResized ? savedHeight.height
+      : compactLandscape ? compactLandscapeComposerHeight : defaultComposerHeight)
+  }, [composerEngine, composerHeightMemory, compactLandscape])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(pointer: coarse)')
+    const syncComposerHeight = () => {
+      const landscape = isCompactLandscape()
+      setCompactLandscape(landscape)
+      if (composerHeightWasResized.current) return
+      setComposerHeight(landscape ? compactLandscapeComposerHeight : defaultComposerHeight)
+    }
+    syncComposerHeight()
+    if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
+    else mediaQuery.addListener(syncComposerHeight)
+    window.addEventListener(mobileLayoutChangedEvent, syncComposerHeight)
+    return () => {
+      window.removeEventListener(mobileLayoutChangedEvent, syncComposerHeight)
+      if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
+      else mediaQuery.removeListener(syncComposerHeight)
+    }
+  }, [composerEngine])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(mobileLayoutMediaQuery)
+    const syncMobileLayout = () => {
+      setMobileLayout(isMobileLayout() || Boolean(window.DevWispAndroid?.changeEndpoint))
+    }
+    syncMobileLayout()
+    if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncMobileLayout)
+    else mediaQuery.addListener(syncMobileLayout)
+    window.addEventListener(mobileLayoutChangedEvent, syncMobileLayout)
+    return () => {
+      window.removeEventListener(mobileLayoutChangedEvent, syncMobileLayout)
+      if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncMobileLayout)
+      else mediaQuery.removeListener(syncMobileLayout)
+    }
+  }, [])
+
+  const submittingQueuedMessageId = queuedMessages.find((message) => message.deliveryState === 'submitting')?.id
+
+  useEffect(() => {
+    if (queuedMessages.length === 0) setQueuedMessagesExpanded(false)
+  }, [queuedMessages.length])
+
+  useLayoutEffect(() => {
+    if (!compactLandscape || composerHeightWasResized.current) return
+    const textarea = composer.current
+    if (!textarea) return
+    const measureComposerHeight = () => {
+      const previousHeight = textarea.style.height
+      textarea.style.height = '0px'
+      const contentHeight = textarea.scrollHeight
+      textarea.style.height = previousHeight
+      const nextHeight = Math.min(maxComposerHeight, Math.max(minComposerHeight, contentHeight))
+      setComposerHeight((current) => current === nextHeight ? current : nextHeight)
+    }
+    measureComposerHeight()
+    window.addEventListener('resize', measureComposerHeight)
+    return () => window.removeEventListener('resize', measureComposerHeight)
+  }, [compactLandscape, draft, attachedDocuments.length, attachedImages.length])
+
+  const changeOpenMenu = useCallback((next: 'model' | 'effort' | 'approval' | null) => {
+    openMenuRef.current = next
+    setOpenMenu(next)
+  }, [])
+  const closeMobileSettings = useCallback(() => {
+    mobileSettingsExpandedRef.current = false
+    setMobileSettingsExpanded(false)
+    changeOpenMenu(null)
+  }, [changeOpenMenu])
+  const toggleMobileSettings = useCallback(() => {
+    setSchedulePanelOpen(false)
+    if (mobileSettingsExpandedRef.current) closeMobileSettings()
+    else {
+      mobileSettingsExpandedRef.current = true
+      setMobileSettingsExpanded(true)
+    }
+  }, [closeMobileSettings])
+
+  const toggleSchedulePanel = useCallback(() => {
+    closeMobileSettings()
+    if (schedulePanelOpen) {
+      setSchedulePanelOpen(false)
+      return
+    }
+    setScheduleDateTime((current) => current || localDateTimeInputValue(new Date(Date.now() + 5 * 60_000)))
+    setSchedulePanelOpen(true)
+  }, [closeMobileSettings, schedulePanelOpen])
+
+  useEffect(() => {
+    if (!schedulePanelOpen) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || schedulePanel.current?.contains(target) || scheduleButton.current?.contains(target)) return
+      setSchedulePanelOpen(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      setSchedulePanelOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [schedulePanelOpen])
+
+  useEffect(() => {
+    if (!mobileLayout || !mobileSettingsExpanded) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || mobileSettingsRoot.current?.contains(target)) return
+      const ownMenuPopover = Array.from(document.querySelectorAll<HTMLElement>('[data-mobile-settings-owner]'))
+        .some((popover) => popover.dataset.mobileSettingsOwner === mobileSettingsOwner && popover.contains(target))
+      if (!ownMenuPopover) closeMobileSettings()
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || openMenuRef.current) return
+      event.preventDefault()
+      closeMobileSettings()
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [closeMobileSettings, mobileLayout, mobileSettingsExpanded, mobileSettingsOwner])
+
+  useEffect(() => {
+    if (!mobileLayout && mobileSettingsExpandedRef.current) closeMobileSettings()
+  }, [closeMobileSettings, mobileLayout])
+
+  const updateDraft = useCallback((next: string | ((current: string) => string)) => {
+    const value = typeof next === 'function' ? next(draftRef.current) : next
+    draftRef.current = value
+    setDraft(value)
+  }, [])
+
+  useLayoutEffect(() => {
+    composerMounted.current = true
+    const restore = (detail: ComposerDraftRecovery) => {
+      const snapshot = editingDraftSnapshot.current
+      if (snapshot) {
+        snapshot.draft = prependComposerDraft(detail.draft, snapshot.draft)
+        snapshot.documents = mergeComposerDocuments(detail.documents, snapshot.documents)
+        snapshot.attachmentError ??= detail.attachmentError
+        saveComposerDraft(draftScope, snapshot.draft)
+        saveComposerTableDraft(draftScope, snapshot.documents)
+        return
+      }
+      if (detail.draft) {
+        const restored = prependComposerDraft(detail.draft, draftRef.current)
+        updateDraft(restored)
+        saveComposerDraft(draftScope, restored)
+      }
+      if (detail.documents.length) {
+        const restored = mergeComposerDocuments(detail.documents, attachedDocumentsRef.current)
+        attachedDocumentsRef.current = restored
+        setAttachedDocuments(restored)
+        saveComposerTableDraft(draftScope, restored)
+      }
+      if (detail.attachmentError) setAttachmentError((current) => current ?? detail.attachmentError)
+    }
+    const unsubscribe = composerDraftRecoveries.subscribe(draftScope, restore)
+    return () => {
+      composerMounted.current = false
+      unsubscribe()
+    }
+  }, [draftScope, updateDraft])
+
+  const updateAttachedImages = useCallback((next: CodexImageAttachment[], persist = true) => {
+    const images = next.slice(0, maxImagesPerTurn)
+    attachedImagesRef.current = images
+    setAttachedImages(images)
+    if (persist && !editingQueuedMessageIdRef.current) {
+      void saveComposerImageDraft(draftScope, images).catch((reason: unknown) => {
+        if (draftScopeRef.current !== draftScope) return
+        setAttachmentError(reason instanceof Error
+          ? `图片草稿暂未保存：${reason.message} 刷新后可能无法恢复。`
+          : '图片草稿暂未保存，刷新后可能无法恢复。')
+      })
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    let active = true
+    let imageDraftRevision = 0
+    setImagesReady(false)
+    const unsubscribe = subscribeToComposerImageDraft(draftScope, (images) => {
+      if (!active || editingQueuedMessageIdRef.current) return
+      imageDraftRevision += 1
+      attachedImagesRef.current = images
+      setAttachedImages(images)
+      setImagesReady(true)
+    })
+    const readRevision = imageDraftRevision
+    void readComposerImageDraft(draftScope).then((images) => {
+      if (!active || imageDraftRevision !== readRevision || editingQueuedMessageIdRef.current) return
+      attachedImagesRef.current = images
+      setAttachedImages(images)
+    }).catch((reason: unknown) => {
+      if (!active) return
+      setAttachmentError(reason instanceof Error
+        ? `待发送图片恢复失败：${reason.message}`
+        : '待发送图片恢复失败。')
+    }).finally(() => {
+      if (active) setImagesReady(true)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    const source = draft.trim()
+    const key = `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${source}`
+    if (!activeTranslation.enabled || !containsChinese(source)) {
+      setTranslationPreview(null)
+      return
+    }
+    if (source.length > 30_000) {
+      setTranslationPreview({ key, error: '内容超过 30000 字符，无法翻译。', loading: false })
+      return
+    }
+    const controller = new AbortController()
+    setTranslationPreview({ key, loading: true })
+    const timer = window.setTimeout(() => {
+      void devwispClient.translateText(token, { provider: activeTranslation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: activeTranslation.style, text: source }, controller.signal)
+        .then((result) => { if (!controller.signal.aborted) setTranslationPreview({ key, text: result.text, loading: false }) })
+        .catch((reason: unknown) => {
+          if (!controller.signal.aborted) setTranslationPreview({ key, error: reason instanceof Error ? reason.message : '翻译失败。', loading: false })
+        })
+    }, 700)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [draft, token, activeTranslation.enabled, activeTranslation.provider, translationProfileId, activeTranslation.style, translationRevision])
+
+  useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
+
+  useLayoutEffect(() => {
+    if (focusRestoreAttempted.current) return
+    focusRestoreAttempted.current = true
+
+    const navigation = window.performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+    let restoreState: ComposerFocusRestoreState | null = null
+    try {
+      const stored = window.sessionStorage.getItem(composerFocusRestoreStorageKey)
+      window.sessionStorage.removeItem(composerFocusRestoreStorageKey)
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored)
+        if (parsed && typeof parsed === 'object') {
+          const candidate = parsed as Record<string, unknown>
+          if (typeof candidate.scope === 'string'
+            && typeof candidate.selectionStart === 'number'
+            && typeof candidate.selectionEnd === 'number') {
+            restoreState = {
+              scope: candidate.scope,
+              selectionStart: candidate.selectionStart,
+              selectionEnd: candidate.selectionEnd,
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore browser storage restrictions; the composer still works normally.
+    }
+    if (navigation?.type !== 'reload' || restoreState?.scope !== draftScope) return
+    const savedFocus = restoreState
+
+    window.requestAnimationFrame(() => {
+      const textarea = composer.current
+      if (!textarea) return
+      textarea.focus({ preventScroll: true })
+      const selectionStart = Math.max(0, Math.min(savedFocus.selectionStart, textarea.value.length))
+      const selectionEnd = Math.max(selectionStart, Math.min(savedFocus.selectionEnd, textarea.value.length))
+      textarea.setSelectionRange(selectionStart, selectionEnd)
+    })
+  }, [draftScope])
+
+  useEffect(() => () => {
+    const messageId = editingQueuedMessageIdRef.current
+    if (messageId) onEndQueuedEdit(messageId)
+  }, [onEndQueuedEdit])
+
+  useImperativeHandle(ref, () => ({
+    focusInput() {
+      const textarea = composer.current
+      if (!textarea) return
+      textarea.focus({ preventScroll: true })
+      const cursor = textarea.value.length
+      textarea.setSelectionRange(cursor, cursor)
+    },
+    replaceDraft(value) {
+      updateDraft(value)
+      window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+    },
+    appendReplyDraft(value) {
+      if (editingQueuedMessageIdRef.current || sendingRef.current) return false
+      const current = draftRef.current
+      const separator = current.trim() ? current.endsWith('\n') ? '\n' : '\n\n' : ''
+      const next = `${current}${separator}${value}`
+      updateDraft(next)
+      window.requestAnimationFrame(() => {
+        const textarea = composer.current
+        if (!textarea) return
+        textarea.focus({ preventScroll: true })
+        textarea.setSelectionRange(next.length, next.length)
+      })
+      return true
+    },
+    appendDraft(value, focus = true) {
+      const current = draftRef.current
+      const additions = workspacePathsMissingFromDraft(current, value.split(/\r?\n/))
+      if (additions.length === 0) {
+        if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+        return
+      }
+      const separator = current && !/\s$/.test(current) ? '  ' : ''
+      updateDraft(`${current}${separator}${additions.join('\n')}`)
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+    },
+    insertDraftAtCursor(value, focus = true) {
+      const textarea = composer.current
+      const current = draftRef.current
+      const start = textarea?.selectionStart ?? current.length
+      const end = textarea?.selectionEnd ?? start
+      const next = `${current.slice(0, start)}${value}${current.slice(end)}`
+      updateDraft(next)
+      if (focus) {
+        window.requestAnimationFrame(() => {
+          const activeTextarea = composer.current
+          if (!activeTextarea) return
+          activeTextarea.focus({ preventScroll: true })
+          const cursor = start + value.length
+          activeTextarea.setSelectionRange(cursor, cursor)
+        })
+      }
+    },
+    addDocumentAttachment(document, focus = true) {
+      const added = appendDocument(document)
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+      return added
+    },
+    adoptUnassignedDraft(threadId, includeImages = true) {
+      const targetScope = composerDraftScopeForThread(threadId)
+      const unassignedDraft = draftScope === newThreadComposerDraftScope
+        ? draftRef.current
+        : readComposerDraft(newThreadComposerDraftScope)
+      if (includeImages
+        && targetScope !== newThreadComposerDraftScope
+        && (attachedImagesRef.current.length > 0 || !imagesReady)) {
+        void moveComposerImageDraft(newThreadComposerDraftScope, targetScope).then((images) => {
+          if (draftScopeRef.current === targetScope) updateAttachedImages(images, false)
+        }).catch((reason: unknown) => {
+          if (draftScopeRef.current === targetScope) {
+            setAttachmentError(reason instanceof Error
+              ? `图片草稿转移失败：${reason.message}`
+              : '图片草稿转移失败。')
+          }
+        })
+      } else if (targetScope !== newThreadComposerDraftScope) {
+        rememberComposerImageDraftTarget(newThreadComposerDraftScope, targetScope)
+      }
+      if (!unassignedDraft) return
+      saveComposerDraft(targetScope, unassignedDraft)
+      // The old keyed composer may unmount immediately after this callback.
+      // Keep its cleanup from restoring the transferred text to the new-chat scope.
+      if (draftScope === newThreadComposerDraftScope) {
+        if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
+        draftSaveTimer.current = undefined
+        draftRef.current = ''
+      }
+      saveComposerDraft(newThreadComposerDraftScope, '')
+      if (draftScope === targetScope) updateDraft(unassignedDraft)
+    },
+    closeOpenMenu() {
+      if (!openMenuRef.current && !mobileSettingsExpandedRef.current && !schedulePanelOpen) return false
+      setSchedulePanelOpen(false)
+      closeMobileSettings()
+      return true
+    },
+    cancelQueuedEdit() {
+      if (!editingQueuedMessageIdRef.current) return false
+      if (!sendingRef.current) void finishQueuedEdit()
+      return true
+    },
+  }), [closeMobileSettings, draftScope, onEndQueuedEdit, schedulePanelOpen, updateAttachedImages, updateDraft])
+
+  useEffect(() => {
+    if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
+    const snapshot = editingDraftSnapshot.current
+    if (snapshot) {
+      saveComposerDraft(draftScope, snapshot.draft)
+      draftSaveTimer.current = undefined
+      return
+    }
+    const timer = window.setTimeout(() => saveComposerDraft(draftScope, draft), 260)
+    draftSaveTimer.current = timer
+    return () => {
+      if (draftSaveTimer.current !== timer) return
+      window.clearTimeout(timer)
+      draftSaveTimer.current = undefined
+    }
+  }, [draft, draftScope, editingQueuedMessageId])
+
+  useLayoutEffect(() => {
+    const persistDraft = () => saveComposerDraft(draftScope, editingDraftSnapshot.current?.draft ?? draftRef.current)
+    window.addEventListener('pagehide', persistDraft)
+    return () => {
+      window.removeEventListener('pagehide', persistDraft)
+      persistDraft()
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    if (tableDraftSaveTimer.current !== undefined) window.clearTimeout(tableDraftSaveTimer.current)
+    const documents = editingDraftSnapshot.current?.documents ?? attachedDocuments
+    const timer = window.setTimeout(() => {
+      if (!saveComposerTableDraft(draftScope, documents) && documents.some((item) => item.name === 'pasted-table.md')) {
+        setAttachmentError((current) => current ?? '表格草稿暂未保存，刷新页面后可能无法恢复。')
+      }
+    }, 260)
+    tableDraftSaveTimer.current = timer
+    return () => {
+      if (tableDraftSaveTimer.current !== timer) return
+      window.clearTimeout(timer)
+      tableDraftSaveTimer.current = undefined
+    }
+  }, [attachedDocuments, draftScope, editingQueuedMessageId])
+
+  useLayoutEffect(() => {
+    const persistTables = () => saveComposerTableDraft(draftScope, editingDraftSnapshot.current?.documents ?? attachedDocumentsRef.current)
+    window.addEventListener('pagehide', persistTables)
+    return () => {
+      window.removeEventListener('pagehide', persistTables)
+      persistTables()
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    const rememberComposerFocus = () => {
+      const textarea = composer.current
+      try {
+        if (!textarea || document.activeElement !== textarea) {
+          window.sessionStorage.removeItem(composerFocusRestoreStorageKey)
+          return
+        }
+        window.sessionStorage.setItem(composerFocusRestoreStorageKey, JSON.stringify({
+          scope: draftScope,
+          selectionStart: textarea.selectionStart,
+          selectionEnd: textarea.selectionEnd,
+        } satisfies ComposerFocusRestoreState))
+      } catch {
+        // The page reload remains safe even when session storage is disabled.
+      }
+    }
+    window.addEventListener('pagehide', rememberComposerFocus)
+    return () => window.removeEventListener('pagehide', rememberComposerFocus)
+  }, [draftScope])
+
+  useEffect(() => {
+    const moveResize = (event: globalThis.PointerEvent) => {
+      const resize = resizeState.current
+      if (!resize) return
+      const nextHeight = resize.startHeight + resize.startY - event.clientY
+      setComposerHeight(Math.min(maxComposerHeight, Math.max(minComposerHeight, nextHeight)))
+    }
+    const endResize = () => {
+      resizeState.current = null
+      document.body.style.removeProperty('cursor')
+      document.body.style.removeProperty('user-select')
+    }
+    window.addEventListener('pointermove', moveResize)
+    window.addEventListener('pointerup', endResize)
+    window.addEventListener('pointercancel', endResize)
+    return () => {
+      window.removeEventListener('pointermove', moveResize)
+      window.removeEventListener('pointerup', endResize)
+      window.removeEventListener('pointercancel', endResize)
+      endResize()
+    }
+  }, [])
+
+  const canCompose = !sending && !writerConflict && connection === 'connected'
+  const canConfigure = canCompose
+  const canSend = (draft.trim().length > 0 || attachedDocuments.length > 0 || attachedImages.length > 0)
+    && !readingDocuments
+    && !readingImages
+    && imagesReady
+    && (editingQueuedMessageId ? !sending : canCompose)
+  const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
+  const stopWithSendButton = isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
+  const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
+  const temporaryPreferencesToggle = (
+    <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
+      aria-checked={temporaryPreferences} disabled={!canConfigure}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => onTemporaryPreferencesChange(!temporaryPreferences)}>
+      <span className="composer-menu__option-copy"><strong>{ui("仅本次")}</strong><small>{ui("发送后恢复原模型和思考等级")}</small></span>
+      {temporaryPreferences ? <Check size={14} aria-hidden="true" /> : null}
+    </button>
+  )
+  const composerSelectedModel = editingQueuedMessageId
+    ? showCodexPreferences ? editingQueuedPreferences?.model ?? selectedModel : editingQueuedPreferences?.claudeModel ?? 'default'
+    : selectedModel
+  const composerSelectedEffort = editingQueuedMessageId
+    ? showCodexPreferences ? editingQueuedPreferences?.effort ?? selectedEffort : editingQueuedPreferences?.claudeEffort ?? 'default'
+    : selectedEffort
+  const composerReasoningOptions = showCodexPreferences
+    ? editingQueuedMessageId ? reasoningOptionsByModel[composerSelectedModel]?.options ?? reasoningOptions : reasoningOptions
+    : claudeEffortOptions
+  const changeComposerModel = useCallback((model: string) => {
+    if (!editingQueuedMessageIdRef.current) {
+      onModelChange(model)
+      return
+    }
+    if (!showCodexPreferences) {
+      setEditingQueuedPreferences((current) => ({ ...current, claudeModel: model }))
+      return
+    }
+    const modelReasoning = reasoningOptionsByModel[model]
+    setEditingQueuedPreferences((current) => {
+      const currentEffort = current?.effort ?? selectedEffort
+      if (!modelReasoning) return { ...current, model }
+      const effort = modelReasoning.options.some((option) => option.value === currentEffort)
+        ? currentEffort
+        : modelReasoning.defaultEffort ?? modelReasoning.options[0]?.value
+      return { ...current, model, effort }
+    })
+  }, [onModelChange, reasoningOptionsByModel, selectedEffort, showCodexPreferences])
+  const changeComposerEffort = useCallback((effort: string) => {
+    if (!editingQueuedMessageIdRef.current) {
+      onEffortChange(effort)
+      return
+    }
+    setEditingQueuedPreferences((current) => showCodexPreferences
+      ? { ...current, effort }
+      : { ...current, claudeEffort: effort })
+  }, [onEffortChange, showCodexPreferences])
+  const fileChangeSummaryExpanded = Boolean(
+    mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
+  )
+  const fileChangeSummaryTotals = fileChangeSummary ? (
+    <>
+      <FileText size={12} aria-hidden="true" />
+      <span>{fileChangeSummary.files.length} {ui("个文件已更改")}</span>
+      {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
+        <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
+      ) : null}
+    </>
+  ) : null
+
+  async function attachImages(files: File[]): Promise<string | null> {
+    if (files.length === 0) return null
+    if (!imagesReady) {
+      const message = '正在恢复待发送图片，请稍后再添加图片。'
+      setAttachmentError(message)
+      return message
+    }
+    if (readingImages) {
+      const message = '图片仍在处理中，请稍后再添加。'
+      setAttachmentError(message)
+      return message
+    }
+    if (!modelSupportsImages) {
+      const message = '当前模型不支持图片输入，请选择支持图片的模型。'
+      setAttachmentError(message)
+      return message
+    }
+    const unsupported = files.find((file) => !imageMediaTypeFor(file))
+    if (unsupported) {
+      const message = '只支持 PNG、JPEG、WebP 和 GIF 图片。'
+      setAttachmentError(message)
+      return message
+    }
+    const oversized = files.find((file) => file.size > maxImageSize)
+    if (oversized) {
+      const message = '单张图片不能超过 8 MB。'
+      setAttachmentError(message)
+      return message
+    }
+    const remaining = maxImagesPerTurn - attachedImagesRef.current.length
+    if (remaining <= 0) {
+      const message = `单条消息最多附加 ${maxImagesPerTurn} 张图片。`
+      setAttachmentError(message)
+      return message
+    }
+    const chosen = files.slice(0, remaining)
+    setReadingImages(true)
+    try {
+      const next = await Promise.all(chosen.map(readImage))
+      updateAttachedImages([...attachedImagesRef.current, ...next])
+      const message = files.length > remaining ? `单条消息最多附加 ${maxImagesPerTurn} 张图片，其余图片未添加。` : null
+      setAttachmentError(message)
+      return message
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '图片读取失败。'
+      setAttachmentError(message)
+      return message
+    } finally {
+      setReadingImages(false)
+    }
+  }
+
+  async function attachDocuments(files: File[]): Promise<string | null> {
+    if (files.length === 0) return null
+    if (readingDocuments) {
+      const message = '文档仍在处理中，请稍后再添加。'
+      setAttachmentError(message)
+      return message
+    }
+    const availableSlots = maxDocumentsPerTurn - attachedDocumentsRef.current.length
+    if (availableSlots <= 0) {
+      const message = `单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`
+      setAttachmentError(message)
+      return message
+    }
+    setReadingDocuments(true)
+    const parsed: CodexDocumentAttachment[] = []
+    const notices: string[] = files.length > availableSlots
+      ? [`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`]
+      : []
+    try {
+      const { readDocumentAttachment } = await import('../lib/documentAttachments')
+      for (const file of files.slice(0, availableSlots)) {
+        try {
+          if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
+          if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
+          if (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf') {
+            const uploaded = await onUploadPdf(file)
+            parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
+            continue
+          }
+          const result = await readDocumentAttachment(file)
+          parsed.push({ name: result.name, content: result.content })
+          if (result.truncated) notices.push(`${file.name} 内容较多，受文件解析范围限制，部分内容未提取。`)
+        } catch (reason) {
+          notices.push(`${file.name || '文件'}：${reason instanceof Error ? reason.message : '读取失败。'}`)
+        }
+      }
+
+      let nextDocuments = [...attachedDocumentsRef.current]
+      for (const item of parsed) {
+        if (nextDocuments.some((current) => item.sourceFileId
+          ? current.sourceFileId === item.sourceFileId
+          : !current.sourceFileId && current.name === item.name && current.content === item.content)) continue
+        if (nextDocuments.length >= maxDocumentsPerTurn) {
+          notices.push(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`)
+          break
+        }
+        if (item.sourceFileId) {
+          nextDocuments.push(item)
+          continue
+        }
+        nextDocuments.push(item)
+      }
+      if (nextDocuments !== attachedDocumentsRef.current) {
+        attachedDocumentsRef.current = nextDocuments
+        setAttachedDocuments(nextDocuments)
+      }
+      const message = notices.length > 0 ? notices.slice(0, 4).join(' ') : null
+      setAttachmentError(message)
+      return message
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '无法加载文档解析器，请刷新页面后重试。'
+      setAttachmentError(message)
+      return message
+    } finally {
+      setReadingDocuments(false)
+    }
+  }
+
+  async function attachSelectedFiles(files: File[]) {
+    if (!mobileLayout) {
+      await attachDocuments(files)
+      return
+    }
+
+    const imageFiles = files.filter(isImageAttachmentFile)
+    const documentFiles = files.filter((file) => !isImageAttachmentFile(file))
+    const notices: string[] = []
+    if (imageFiles.length > 0) {
+      const notice = await attachImages(imageFiles)
+      if (notice) notices.push(notice)
+    }
+    if (documentFiles.length > 0) {
+      const notice = await attachDocuments(documentFiles)
+      if (notice) notices.push(notice)
+    }
+    setAttachmentError(notices.length > 0 ? notices.join(' ') : null)
+  }
+
+  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string, sendDirectly = false) {
+    event?.preventDefault()
+    if (sendingRef.current) return
+    if (readingDocuments || readingImages || !imagesReady) return
+    if (scheduledAt && (!Number.isFinite(Date.parse(scheduledAt)) || Date.parse(scheduledAt) <= Date.now())) {
+      setAttachmentError('请选择一个未来的发送时间。')
+      return
+    }
+    if (!scheduledAt) setSchedulePanelOpen(false)
+    if (editingQueuedMessageId) {
+      if (sendDirectly) {
+        setAttachmentError('请先保存或取消排队消息编辑，再使用 Ctrl+Enter。')
+        return
+      }
+      void confirmQueuedEdit()
+      return
+    }
+    // A second submit can arrive before React commits the cleared draft.
+    // Read the synchronously updated values so it cannot resend stale input.
+    const prompt = draftRef.current.trim()
+    if ((!prompt && attachedImagesRef.current.length === 0 && attachedDocumentsRef.current.length === 0) || !canCompose) return
+    if (!modelSupportsImages && attachedImagesRef.current.length > 0) {
+      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
+      return
+    }
+    let outgoingPrompt = prompt
+    let backgroundTranslation: QueuedTranslationConfig | undefined
+    const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+    const activeProfileId = selectedTranslationProfileId(translationForSend)
+    const previewKey = `${translationRevision}:${translationForSend.provider}:${activeProfileId ?? 'default'}:${translationForSend.style}:${prompt}`
+    const readyPreview = translationPreview?.key === previewKey && translationPreview.text
+      ? translationPreview.text.trim()
+      : ''
+    const wantsChineseTranslation = translationForSend.enabled && containsChinese(prompt)
+    const shouldTranslateInQueue = wantsChineseTranslation
+      && prompt.length <= 30_000
+      && !sendDirectly
+      && (isReplying || queuedMessages.length > 0 || Boolean(scheduledAt))
+      && !readyPreview
+    if (shouldTranslateInQueue) {
+      backgroundTranslation = {
+        provider: translationForSend.provider,
+        ...(activeProfileId ? { profileId: activeProfileId } : {}),
+        style: translationForSend.style,
+      }
+    } else if (wantsChineseTranslation) {
+      sendingRef.current = true
+      setSending(true)
+      try {
+        outgoingPrompt = (readyPreview
+          ? readyPreview
+          : (await devwispClient.translateText(token, {
+            provider: translationForSend.provider, profileId: activeProfileId, source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
+          })).text).trim()
+        if (!outgoingPrompt) throw new Error('翻译结果为空，消息没有发送。')
+      } catch (reason) {
+        setAttachmentError(reason instanceof Error ? reason.message : '翻译失败，消息没有发送。')
+        sendingRef.current = false
+        setSending(false)
+        return
+      }
+      if (draftRef.current.trim() !== prompt) {
+        setAttachmentError('翻译时输入内容发生变化，请重新发送最新内容。')
+        sendingRef.current = false
+        setSending(false)
+        return
+      }
+    }
+    const previousDraft = draftRef.current
+    const previousImages = attachedImagesRef.current
+    const previousDocuments = attachedDocumentsRef.current
+    const previousAttachmentError = attachmentError
+    const pendingImageDraftClear = draftScope === newThreadComposerDraftScope
+      ? null
+      : saveComposerImageDraft(draftScope, []).then(
+        () => ({ ok: true as const }),
+        (reason: unknown) => ({ ok: false as const, reason }),
+      )
+    sendingRef.current = true
+    setSending(true)
+    updateDraft('')
+    saveComposerDraft(draftScope, '')
+    updateAttachedImages([], false)
+    attachedDocumentsRef.current = []
+    setAttachedDocuments([])
+    setAttachmentError(null)
+    let sent = false
+    try {
+      sent = await onSend({
+        prompt: outgoingPrompt,
+        ...(outgoingPrompt !== prompt ? { originalText: prompt } : {}),
+        ...(backgroundTranslation ? { translation: backgroundTranslation, translationStatus: 'pending' as const } : {}),
+        images: previousImages,
+        documents: previousDocuments,
+        model: showCodexPreferences ? selectedModel || undefined : undefined,
+        effort: showCodexPreferences ? selectedEffort || undefined : undefined,
+        approvalPolicy: showCodexPreferences ? selectedApprovalPolicy : undefined,
+        claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
+        claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
+        claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
+        ...(sendDirectly ? { sendDirectly: true } : {}),
+        scheduledAt,
+      })
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
+    }
+    if (!sent) {
+      const transferredImageTarget = pendingComposerImageDraftTarget(draftScope)
+      let imagesMovedToNewThread = false
+      if (transferredImageTarget) {
+        try {
+          await moveComposerImageDraft(draftScope, transferredImageTarget)
+          forgetComposerImageDraftTarget(draftScope)
+          imagesMovedToNewThread = true
+        } catch (reason) {
+          forgetComposerImageDraftTarget(draftScope)
+          setAttachmentError(reason instanceof Error
+            ? `发送失败，图片仍保留在原草稿：${reason.message}`
+            : '发送失败，图片仍保留在原草稿。')
+        }
+      }
+      const restoreScope = transferredImageTarget ?? (!composerMounted.current ? draftScope : null)
+      if (restoreScope) composerDraftRecoveries.recover(restoreScope, {
+        draft: previousDraft, documents: previousDocuments, attachmentError: previousAttachmentError,
+      })
+      else updateDraft((current) => prependComposerDraft(previousDraft, current))
+      let persistedImages: CodexImageAttachment[] = []
+      if (pendingImageDraftClear && !imagesMovedToNewThread) {
+        try {
+          persistedImages = await readComposerImageDraft(draftScope)
+        } catch {
+          // Keep the in-memory images when browser storage is unavailable.
+        }
+      }
+      const restoredImages = [...previousImages, ...attachedImagesRef.current, ...persistedImages]
+        .filter((image, index, images) => images.findIndex((candidate) => candidate.name === image.name && candidate.data === image.data) === index)
+      updateAttachedImages(restoredImages, !imagesMovedToNewThread)
+      if (!restoreScope) {
+        const restoredDocuments = mergeComposerDocuments(previousDocuments, attachedDocumentsRef.current)
+        attachedDocumentsRef.current = restoredDocuments
+        setAttachedDocuments(restoredDocuments)
+        setAttachmentError((current) => current ?? previousAttachmentError)
+      }
+    } else {
+      forgetComposerImageDraftTarget(draftScope)
+      if (scheduledAt) {
+        setSchedulePanelOpen(false)
+        setScheduleDateTime('')
+      }
+      try {
+        if (pendingImageDraftClear) {
+          const result = await pendingImageDraftClear
+          if (!result.ok) throw result.reason
+        } else {
+          await saveComposerImageDraft(draftScope, [])
+        }
+      } catch (reason) {
+        if (draftScopeRef.current === draftScope) {
+          setAttachmentError(reason instanceof Error
+            ? `消息已发送，但清除图片草稿失败：${reason.message}`
+            : '消息已发送，但清除图片草稿失败。')
+        }
+      }
+    }
+    sendingRef.current = false
+    setSending(false)
+  }
+
+  function submitScheduledMessage() {
+    const scheduledTime = new Date(scheduleDateTime)
+    if (!scheduleDateTime || Number.isNaN(scheduledTime.getTime()) || scheduledTime.getTime() <= Date.now()) {
+      setAttachmentError('请选择一个未来的发送时间。')
+      return
+    }
+    setSchedulePanelOpen(false)
+    void send(undefined, scheduledTime.toISOString())
+  }
+
+  function restoreDraftAfterQueuedEdit() {
+    const snapshot = editingDraftSnapshot.current
+    editingDraftSnapshot.current = null
+    if (!snapshot) return
+    updateDraft(snapshot.draft)
+    updateAttachedImages(snapshot.images)
+    attachedDocumentsRef.current = snapshot.documents
+    setAttachedDocuments(snapshot.documents)
+    setAttachmentError(snapshot.attachmentError)
+  }
+
+  async function beginQueuedEdit(message: QueuedTurnMessage) {
+    if (editingQueuedMessageId || sending || sendingQueuedId) return
+    if (!imagesReady) {
+      setAttachmentError('图片草稿恢复完成后再编辑排队消息。')
+      return
+    }
+    if (!await onBeginQueuedEdit(message.id)) {
+      setAttachmentError('这条排队消息正在处理中，请稍后再试。')
+      return
+    }
+    editingDraftSnapshot.current = {
+      draft: draftRef.current,
+      images: attachedImagesRef.current,
+      documents: attachedDocuments,
+      attachmentError,
+    }
+    setEditingQueuedPreferences(showCodexPreferences
+      ? { model: message.model ?? selectedModel, effort: message.effort ?? selectedEffort }
+      : { claudeModel: message.claudeModel ?? 'default', claudeEffort: message.claudeEffort ?? 'default' })
+    editingQueuedMessageIdRef.current = message.id
+    setEditingQueuedMessageId(message.id)
+    updateDraft(message.originalText ?? message.text)
+    updateAttachedImages(message.images, false)
+    attachedDocumentsRef.current = message.documents ?? []
+    setAttachedDocuments(message.documents ?? [])
+    setAttachmentError(null)
+    window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+  }
+
+  async function finishQueuedEdit() {
+    const messageId = editingQueuedMessageIdRef.current
+    if (messageId && await onEndQueuedEdit(messageId) === false) {
+      setAttachmentError('无法结束排队消息编辑，请检查连接后重试。')
+      return false
+    }
+    editingQueuedMessageIdRef.current = null
+    setEditingQueuedMessageId(null)
+    setEditingQueuedPreferences(null)
+    restoreDraftAfterQueuedEdit()
+    return true
+  }
+
+  async function confirmQueuedEdit() {
+    const messageId = editingQueuedMessageIdRef.current
+    if (!messageId || sendingRef.current) return
+    const prompt = draftRef.current.trim()
+    if (!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) {
+      setAttachmentError('消息内容和附件不能同时为空。')
+      return
+    }
+    sendingRef.current = true
+    setSending(true)
+    try {
+      let outgoingPrompt = prompt
+      const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+      if (translationForSend.enabled && containsChinese(prompt)) {
+        const result = await devwispClient.translateText(token, {
+          provider: translationForSend.provider, profileId: selectedTranslationProfileId(translationForSend), source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
+        })
+        if (draftRef.current.trim() !== prompt) throw new Error('翻译时输入内容发生变化，请重新确认最新内容。')
+        outgoingPrompt = result.text.trim()
+        if (!outgoingPrompt) throw new Error('翻译结果为空，排队消息没有更新。')
+      }
+      if (!await onUpdateQueuedMessage(messageId, {
+        prompt: outgoingPrompt,
+        ...(outgoingPrompt !== prompt ? { originalText: prompt } : {}),
+        images: attachedImages,
+        documents: attachedDocuments,
+        model: showCodexPreferences ? editingQueuedPreferences?.model || undefined : undefined,
+        effort: showCodexPreferences ? editingQueuedPreferences?.effort || undefined : undefined,
+        claudeModel: !showCodexPreferences && editingQueuedPreferences?.claudeModel !== 'default'
+          ? editingQueuedPreferences?.claudeModel
+          : undefined,
+        claudeEffort: !showCodexPreferences && editingQueuedPreferences?.claudeEffort !== 'default'
+          ? editingQueuedPreferences?.claudeEffort
+          : undefined,
+      })) {
+        setAttachmentError('排队消息更新失败，请检查连接后重试。')
+        return
+      }
+      await finishQueuedEdit()
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '翻译失败，排队消息没有更新。')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
+  }
+
+  function cancelQueuedEdit() {
+    if (!editingQueuedMessageIdRef.current) return
+    void finishQueuedEdit()
+  }
+
+  async function sendQueuedNow(messageId: string, mode: QueuedMessageSendMode) {
+    if (sendingQueuedId) return
+    setSendingQueuedId(messageId)
+    try {
+      if (await onSendQueuedNow(messageId, mode)) {
+        setAttachmentError(null)
+      } else {
+        setAttachmentError(mode === 'steer'
+          ? '插队发送未确认成功，消息仍在队列中；请查看错误提示或核对聊天记录。'
+          : '消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
+      }
+    } finally {
+      setSendingQueuedId((current) => current === messageId ? null : current)
+    }
+  }
+
+  async function moveQueuedMessage(messageId: string, adjacentMessageId: string, direction: 'up' | 'down') {
+    if (movingQueuedRef.current) return
+    movingQueuedRef.current = true
+    setMovingQueuedId(messageId)
+    try {
+      await onMoveQueued(messageId, adjacentMessageId, direction)
+    } finally {
+      movingQueuedRef.current = false
+      setMovingQueuedId(null)
+    }
+  }
+
+  function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    const action = composerKeyAction(event.nativeEvent, inputIsComposing.current)
+    if (!action) return
+    if (action !== 'send') {
+      event.preventDefault()
+      event.stopPropagation()
+      if (action === 'direct' && canSend) void send(undefined, undefined, true)
+      return
+    }
+    if (!canSend) return
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
+  }
+
+  function handleQueueKeyboardShortcut(event: KeyboardEvent<HTMLFormElement>) {
+    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    if (queuedMessages.length === 0 || inputIsComposing.current || event.nativeEvent.isComposing) return
+
+    const target = event.target
+    if (!(target instanceof HTMLElement)) return
+    if (target !== composer.current && target.closest('input, select, textarea, [contenteditable="true"]')) return
+    if (target === composer.current && draftRef.current.length > 0) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    setQueuedMessagesExpanded(event.key === 'ArrowUp')
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (readingDocuments) return
+    const pastedText = event.clipboardData.getData('text/plain')
+    const html = event.clipboardData.getData('text/html')
+    const pastedTable = clipboardTableToMarkdown(html, pastedText)
+    const insertPastedText = (value: string, asBlock: boolean) => {
+      const textarea = composer.current
+      const current = draftRef.current
+      const start = textarea?.selectionStart ?? current.length
+      const end = textarea?.selectionEnd ?? start
+      const before = current.slice(0, start)
+      const after = current.slice(end)
+      const prefix = !asBlock || before.length === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n'
+      const suffix = !asBlock || after.length === 0 || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n'
+      updateDraft(`${before}${prefix}${value}${suffix}${after}`)
+      window.requestAnimationFrame(() => {
+        const activeTextarea = composer.current
+        if (!activeTextarea) return
+        const cursor = before.length + prefix.length + value.length
+        activeTextarea.focus({ preventScroll: true })
+        activeTextarea.setSelectionRange(cursor, cursor)
+      })
+    }
+    const appendPastedTable = (value: string) => {
+      if (attachedDocumentsRef.current.length >= maxDocumentsPerTurn) {
+        insertPastedText(value, true)
+        return
+      }
+      appendDocument({ name: 'pasted-table.md', content: value })
+    }
+    const directFiles = Array.from(event.clipboardData.files)
+    const itemFiles = Array.from(event.clipboardData.items)
+      .map((item) => item.kind === 'file' ? item.getAsFile() : null)
+      .filter((file): file is File => file !== null)
+    const clipboardFiles = directFiles.length > 0 ? directFiles : itemFiles
+    const fileImages = clipboardFiles.filter(isImageAttachmentFile)
+    const fileDocuments = clipboardFiles.filter(isSvgDocumentFile)
+    const { text: copiedMessageText, images: embeddedImages } = richMessageContentFromClipboardHtml(html)
+    const images = embeddedImages.length > fileImages.length ? embeddedImages : fileImages
+    if (images.length > 0 || fileDocuments.length > 0) {
+      event.preventDefault()
+      if (images.length > 0) void attachImages(images)
+      if (fileDocuments.length > 0) void attachDocuments(fileDocuments)
+      const labels = images.map((image) => `[图片：${image.name}]`).join('\n\n')
+      const plainText = labels && pastedText === labels
+        ? ''
+        : labels && pastedText.endsWith(`\n\n${labels}`)
+          ? pastedText.slice(0, -(labels.length + 2))
+          : pastedText
+      const text = copiedMessageText ?? recoverCopiedMessageTextFromImagePaste(pastedText, images) ?? plainText
+      if (pastedTable) appendPastedTable(pastedTable)
+      else if (text) insertPastedText(text, false)
+      return
+    }
+    if (copiedMessageText !== null) {
+      event.preventDefault()
+      const copiedTable = clipboardTableToMarkdown('', copiedMessageText)
+      if (copiedTable) appendPastedTable(copiedTable)
+      else if (copiedMessageText.length >= longPasteThreshold) appendDocument({ name: 'pasted-content.md', content: copiedMessageText })
+      else if (copiedMessageText) insertPastedText(copiedMessageText, false)
+      return
+    }
+    if (pastedTable) {
+      event.preventDefault()
+      appendPastedTable(pastedTable)
+      return
+    }
+    if (pastedText.length < longPasteThreshold) return
+    event.preventDefault()
+    appendDocument({ name: 'pasted-content.md', content: pastedText })
+  }
+
+  function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    composerHeightWasResized.current = true
+    composerHeightMemory.current = {
+      ...(composerHeightMemory.current ?? {}),
+      [composerEngine]: { height: composerHeight, manuallyResized: true },
+    }
+    resizeState.current = { startY: event.clientY, startHeight: composerHeight }
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  function appendDocument(document: CodexDocumentAttachment) {
+    const current = attachedDocumentsRef.current
+    const isSelection = isWorkspaceSelectionDocument(document)
+    if (current.some((item) => document.sourceFileId
+      ? item.sourceFileId === document.sourceFileId
+      : !item.sourceFileId && (isSelection
+        ? sameWorkspaceSelectionDocument(item, document)
+        : item.name === document.name && item.content === document.content))) return false
+    if (current.length >= maxDocumentsPerTurn) {
+      setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
+      return false
+    }
+    const numberedCurrent = current.reduce<CodexDocumentAttachment[]>((documents, item) => {
+      documents.push(isWorkspaceSelectionDocument(item) ? numberWorkspaceSelectionDocument(item, documents) : item)
+      return documents
+    }, [])
+    const nextDocument = isSelection ? numberWorkspaceSelectionDocument(document, numberedCurrent) : document
+    if (document.sourceFileId) {
+      const next = [...numberedCurrent, nextDocument]
+      attachedDocumentsRef.current = next
+      setAttachedDocuments(next)
+      setAttachmentError(null)
+      return true
+    }
+    const next = [...numberedCurrent, nextDocument]
+    attachedDocumentsRef.current = next
+    setAttachedDocuments(next)
+    setAttachmentError(null)
+    return true
+  }
+
+  const preferenceMenus = showCodexPreferences ? <>
+    <ComposerMenu label={ui("模型")} value={composerSelectedModel} options={modelOptions} emptyLabel={ui("读取模型…")} disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={approvalPolicyUpdating ? ui('授权更新中') : ui('授权')} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel={ui("请求批准")} disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+  </> : <>
+    <ComposerMenu label={ui("Claude 模型")} value={composerSelectedModel} options={claudeModelOptions} emptyLabel={ui("本机默认模型")} disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考等级")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} compact mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("权限模式")} value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel={ui("本机默认权限")} disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+  </>
+
+  return (
+    <div className="composer-dock">
+      {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
+        <div className={`composer-file-change-summary${fileChangeSummaryExpanded ? ' composer-file-change-summary--expanded' : ''}`} aria-live="polite" aria-label={uiFormat("{0} 个文件已更改，新增 {1} 行，删除 {2} 行", fileChangeSummary.files.length, fileChangeSummary.additions, fileChangeSummary.deletions)}>
+          {mobileLayout ? (
+            <button
+              className="composer-file-change-summary__toggle"
+              type="button"
+              aria-expanded={fileChangeSummaryExpanded}
+              aria-controls="composer-file-change-files"
+              aria-label={uiFormat("{0} 个文件已更改，{1}文件明细", fileChangeSummary.files.length, fileChangeSummaryExpanded ? ui('收起') : ui('展开'))}
+              title={fileChangeSummaryExpanded ? ui('收起文件明细') : ui('查看文件明细')}
+              onClick={() => setExpandedFileChangesKey(fileChangeSummaryExpanded ? null : fileChangeSummaryKey)}
+            >
+              {fileChangeSummaryTotals}
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+          ) : fileChangeSummaryTotals}
+          <span id="composer-file-change-files" className="composer-file-change-summary__files" aria-label={ui("各文件增删行数")}>
+            {fileChangeSummary.files.map((file) => {
+              const fileName = file.path.split(/[\\/]/).at(-1) || file.path
+              const hasStats = file.additions > 0 || file.deletions > 0
+              return (
+                <span className="composer-file-change-summary__file" key={file.path} title={file.path}>
+                  <span>{fileName}</span>
+                  {hasStats ? <span className="composer-file-change-summary__file-stats"><i>+{file.additions}</i><em>-{file.deletions}</em></span> : null}
+                </span>
+              )
+            })}
+          </span>
+        </div>
+      ) : null}
+      {reserveFileChangeSummarySpace && !mobileLayout && (!fileChangeSummary || fileChangeSummary.files.length === 0) ? (
+        <div className="composer-file-change-summary composer-file-change-summary--placeholder" aria-hidden="true">
+          <FileText size={12} />
+          <span>{ui("1 个文件已更改")}</span>
+          <span className="composer-file-change-summary__stats"><i>+1</i><em>-1</em></span>
+        </div>
+      ) : null}
+      <form
+        className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
+        ref={isReplying ? syncReplyBreatheOnMount : undefined}
+        onKeyDownCapture={handleQueueKeyboardShortcut}
+        onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }}
+        onSubmit={(event) => void send(event)}
+      >
+      <span className="message-composer__breath" data-reply-breath-layer aria-hidden="true" />
+      {editingQueuedMessageId ? (
+        <div className="composer-edit-bar">
+          <span>{ui("正在修改排队消息")}</span>
+          <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label={ui("取消修改排队消息")} title={ui("取消修改排队消息")}><X size={15} /></button>
+        </div>
+      ) : null}
+      {attachedImages.length > 0 ? (
+        <div className="composer-images" aria-label={ui("待发送图片")}>
+          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><ImagePreviewButton src={`data:${image.mediaType};base64,${image.data}`} name={image.name} /><button className="composer-image__remove" type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={uiFormat("移除图片 {0}", image.name)}><X size={12} /></button></span>)}
+        </div>
+      ) : null}
+      {attachmentError ? <p className="attachment-error" role="alert">{uiMessage(attachmentError)}</p> : null}
+      {readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{ui("正在读取图片…")}</p> : null}
+      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{ui("正在处理文档附件…")}</p> : null}
+      {attachedDocuments.some((document) => document.name !== 'pasted-table.md' || document.sourceFileId) ? (
+        <div className="composer-documents" aria-label={ui("待发送文档")}>
+          {attachedDocuments.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId ? null : (
+            <div className="composer-document" key={`${document.name}-${index}`}>
+              <FileText size={16} />
+              <span><strong>{document.name}</strong><small>{document.sourceFileId ? ui('原始文件 · Codex 将读取原件') : uiFormat("{0} 个字符 · 已提取文字", document.content.length.toLocaleString())}</small></span>
+              <button type="button" disabled={readingDocuments} onClick={() => {
+                const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} aria-label={uiFormat("移除文档 {0}", document.name)}><X size={13} /></button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {attachedDocuments.some((document) => document.name === 'pasted-table.md' && !document.sourceFileId) ? (
+        <div className="composer-tables" aria-label={ui("待发送表格")}>
+          {attachedDocuments.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId
+            ? <PastedTablePreview key={`${editingQueuedMessageId ?? 'draft'}-${document.name}-${index}`} content={document.content} disabled={readingDocuments || sending} onChange={(content) => {
+                const next = [...attachedDocumentsRef.current]
+                if (!next[index]) return
+                next[index] = { ...next[index], content }
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} onRemove={() => {
+                const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} />
+            : null)}
+        </div>
+      ) : null}
+      <div className={`composer-input-stack${stableQueueHeight ? ' composer-input-stack--stable' : ''}`}>
+        {stableQueueHeight ? (
+          <div className="composer-input-stack__sizer" aria-hidden="true">
+            <div className="composer-queue composer-queue--collapsed">
+              <div className="composer-queue__heading"><span>{ui("已排队 1 条")}</span><ChevronDown size={14} /></div>
+            </div>
+            <div className="composer-editor" style={{ height: `${composerHeight}px` }} />
+          </div>
+        ) : null}
+        <div className="composer-input-stack__body">
+      {queuedMessages.length > 0 ? (
+        <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={uiFormat("{0} {1} 条消息", submittingQueuedMessageId ? ui('待处理') : ui('已排队'), queuedMessages.length)}>
+          <button
+            className="composer-queue__heading"
+            type="button"
+            aria-expanded={queuedMessagesExpanded}
+            aria-controls="composer-queue-list"
+            aria-label={uiFormat("{0} {1} 条，{2}", submittingQueuedMessageId ? ui('待处理') : ui('已排队'), queuedMessages.length, queuedMessagesExpanded ? ui('收起内容') : ui('展开内容'))}
+            aria-keyshortcuts="Control+ArrowUp Control+ArrowDown"
+            title={ui("Ctrl+↑ 展开 · Ctrl+↓ 收起")}
+            onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
+          >
+            <span>{submittingQueuedMessageId ? ui('待处理') : ui('已排队')} {queuedMessages.length} {ui("条")}</span>
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? ui('编辑期间暂停 · 结束后继续队列') : sendingQueuedId ? ui('正在发送排队消息') : queuedMessages[0]?.sendAttempt ? ui('有消息送达待核对') : submittingQueuedMessageId ? ui('正在确认送达') : uiMessage(queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? ui('回复结束后依次发送；点“插队”沿用当前轮次设置立即发送') : ui('普通消息回复后发送；点“插队”提交到当前 Claude 会话，回复结束后处理') : ui('等待电脑端自动发送')))}</small> : null}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+          <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
+            {queuedMessages.map((message, index) => {
+              const sendingNow = sendingQueuedId === message.id
+              const isEditing = editingQueuedMessageId === message.id
+              const isSubmitting = message.deliveryState === 'submitting'
+              const deliveryUnverified = Boolean(message.sendAttempt)
+              const translationPending = message.translationStatus === 'pending'
+              const translationFailed = message.translationStatus === 'failed'
+              const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId) || Boolean(movingQueuedId)
+              const previousMessage = queuedMessages[index - 1]
+              const nextMessage = queuedMessages[index + 1]
+              const canReorder = (item: QueuedTurnMessage | undefined) => item?.deliveryState === 'pending' && !item.editing && !item.sendAttempt
+              const canMoveUp = !queueLocked && canReorder(message) && canReorder(previousMessage)
+              const canMoveDown = !queueLocked && canReorder(message) && canReorder(nextMessage)
+              const queuedModel = showCodexPreferences ? message.model : message.claudeModel
+              const queuedEffort = showCodexPreferences ? message.effort : message.claudeEffort
+              const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
+              const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? queuedEffort ?? ''
+              const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
+              const sendMode: QueuedMessageSendMode = isRunning ? 'steer' : 'start'
+              const sendTitle = translationPending ? '后台翻译完成后才能发送'
+                : translationFailed ? `翻译失败：${message.translationError ?? '请重试翻译。'}`
+                  : isSubmitting ? '消息正在提交，请稍候'
+                : deliveryUnverified ? '请先核对这条消息是否已发送'
+                  : sendMode === 'steer' && !showCodexPreferences ? '提交到当前 Claude 会话，当前回复结束后处理'
+                    : sendMode === 'steer' ? '立即插入当前 Codex 回复，沿用当前轮次的模型和思考等级'
+                      : index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中'
+                        : '按消息保存的模型和思考等级开始新一轮'
+              const attachmentSummary = [
+                message.images.length > 0 ? uiFormat('{0} 张图片', message.images.length) : '',
+                message.documents?.length ? uiFormat('{0} 个文档', message.documents.length) : '',
+              ].filter(Boolean).join(' · ')
+              const summary = [activeTranslation.enabled && activeTranslation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
+              const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
+              const queueStatus = isSubmitting ? '正在确认送达'
+                : isEditing ? '正在输入框中编辑'
+                  : message.editing ? '另一设备正在编辑 · 暂停发送'
+                    : sendingNow ? '正在确认送达'
+                      : deliveryUnverified ? '可能已发送 · 请核对聊天记录'
+                        : translationPending ? '后台翻译中 · 完成后自动发送'
+                          : translationFailed ? `翻译失败 · ${message.translationError ?? '点击重试翻译'}`
+                        : scheduledLabel ? `定于 ${scheduledLabel} 发送`
+                          : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')
+              return (
+                <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
+                  <span className="composer-queue__index">{index + 1}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small title={translationFailed && message.translationError ? uiMessage(message.translationError) : undefined}>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{uiMessage(queueStatus)}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__order" role="group" aria-label={uiFormat("调整第 {0} 条发送顺序", index + 1)}>
+                    <button className="composer-queue__move" type="button" disabled={!canMoveUp} onClick={() => previousMessage && void moveQueuedMessage(message.id, previousMessage.id, 'up')} aria-label={uiFormat("上移第 {0} 条排队消息", index + 1)} title={ui("上移一位")}><ArrowUp size={14} /></button>
+                    <button className="composer-queue__move" type="button" disabled={!canMoveDown} onClick={() => nextMessage && void moveQueuedMessage(message.id, nextMessage.id, 'down')} aria-label={uiFormat("下移第 {0} 条排队消息", index + 1)} title={ui("下移一位")}><ArrowDown size={14} /></button>
+                  </span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? ui('消息正在提交，请稍候') : deliveryUnverified ? ui('请先核对这条消息是否已发送') : message.editing ? ui('解除其它设备的编辑暂停') : ui('在输入框中编辑排队消息')}>
+                    <Pencil size={14} /><span>{isEditing ? ui('编辑中') : message.editing ? ui('解除编辑') : ui('编辑')}</span>
+                  </button>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={uiMessage(sendTitle)}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : translationFailed ? <RotateCcw size={14} /> : translationPending ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{translationPending ? ui('翻译中') : translationFailed ? ui('重试翻译') : sendMode === 'steer' ? ui('插队') : ui('发送')}</span>
+                  </button>
+                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label={ui("删除排队消息")} title={isSubmitting ? ui('消息正在提交，请稍候') : ui('删除这条排队消息')}><X size={13} /><span>{ui("删除")}</span></button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
+      {activeTranslation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
+        <strong>{ui("英文发送预览")}</strong>
+        {translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.text
+          ? <p>{translationPreview.text}</p>
+          : translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.error
+            ? <p className="composer-translation-preview__error">{uiMessage(translationPreview.error)}</p>
+            : <p>{ui("正在翻译最新内容…")}</p>}
+      </div> : null}
+      <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
+        <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label={ui("调整输入框高度")} title={ui("上下拖动调整输入框高度")}><ChevronsUpDown size={14} /></button>
+        <textarea
+          ref={composer}
+          data-chat-composer
+          value={draft}
+          onChange={(event) => updateDraft(event.target.value)}
+          onCompositionStart={() => { inputIsComposing.current = true }}
+          onCompositionEnd={() => { inputIsComposing.current = false }}
+          onBlur={() => { inputIsComposing.current = false }}
+          onKeyDownCapture={(event) => {
+            if (inputIsComposing.current && event.key === 'Escape') event.stopPropagation()
+          }}
+          onKeyDown={handleInputKey}
+          onPaste={handlePaste}
+          onFocus={requestComposerKeyboard}
+          onPointerDown={(event) => {
+            if (document.activeElement === event.currentTarget) {
+              requestComposerKeyboard()
+            }
+          }}
+          placeholder={editingQueuedMessageId ? ui('编辑排队消息…') : uiFormat("给{0}发送消息…", showCodexPreferences ? ' Codex' : ' Claude Code')}
+          aria-label={editingQueuedMessageId ? ui('编辑排队消息') : uiFormat("发送消息给{0}", showCodexPreferences ? ' Codex' : ' Claude Code')}
+          aria-keyshortcuts={[
+            stableQueueHeight ? 'Control+ArrowLeft Control+ArrowRight' : '',
+            editingQueuedMessageId ? '' : 'Control+Enter',
+          ].filter(Boolean).join(' ') || undefined}
+          title={`${editingQueuedMessageId ? ui('Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter') : showCodexPreferences ? ui('Ctrl+Enter 立即发送；回复时插队') : ui('Ctrl+Enter 提交到当前 Claude 会话；当前回复结束后处理')}${stableQueueHeight ? ui('；Ctrl+←/→ 切换并发窗口') : ''}`}
+          inputMode="text"
+          enterKeyHint="send"
+        />
+      </div>
+        </div>
+      </div>
+      <div className="message-composer__footer">
+        <div className="composer-footer-start">
+          <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button>
+          <div className={`composer-preferences${mobileLayout ? ' composer-preferences--mobile' : ''}`} ref={mobileSettingsRoot}>
+            {mobileLayout ? <>
+              <button ref={mobileSettingsToggle} className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? ui('关闭对话设置') : ui('打开对话设置')} aria-expanded={mobileSettingsExpanded}>
+                {mobileSettingsExpanded ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
+              </button>
+              {mobileSettingsExpanded ? createPortal(
+                <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+                  <div ref={mobileSettingsPanel} className="composer-menu__popover composer-menu__popover--floating composer-preferences__mobile-panel" role="group" aria-label={ui("对话设置")} data-mobile-settings-owner={mobileSettingsOwner} style={mobileSettingsPosition ?? { visibility: 'hidden' }}>
+                    <div className="composer-preferences__controls">{preferenceMenus}</div>
+                  </div>
+                </div>,
+                document.body,
+              ) : null}
+            </> : <div className="composer-preferences__controls">{preferenceMenus}</div>}
+            <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? ui('正在恢复待发送图片…') : editingQueuedMessageId ? ui('Enter 确定 · Shift+Enter 换行') : continuationPending ? ui('继续会另起一轮；再次 Esc 取消续接') : ui('Enter 发送 · Shift+Enter 换行')}</span>
+          </div>
+        </div>
+        <div className="composer-actions">
+          <button ref={scheduleButton} className="composer-new-thread-button composer-schedule-toggle" type="button" onClick={toggleSchedulePanel} disabled={!canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} aria-label={ui("定时发送")} title={ui("定时发送")}>
+            <CalendarClock size={16} aria-hidden="true" />
+          </button>
+          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? ui('正在处理附件') : mobileLayout ? ui('附加图片、文档或源码文件') : ui('附加文档或源码文件')}>
+            {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
+            <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? ui('附加图片、文档或源码文件') : ui('附加文档或源码文件')} />
+          </span>
+          {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />{ui("刷新状态")}</button> : null}
+          {(!writerConflict || editingQueuedMessageId) ? (
+            <button
+              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}${continueWithSendButton ? ' send-button--continue' : ''}${!editingQueuedMessageId && !stopWithSendButton && !continueWithSendButton ? ' send-button--arrow' : ''}`}
+              type={stopWithSendButton || continueWithSendButton ? 'button' : 'submit'}
+              onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
+              disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
+              aria-label={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? ui('将消息加入发送队列') : ui('发送消息')}
+              title={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务（新一轮）') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? showCodexPreferences ? ui('加入发送队列；Ctrl+Enter 插队') : ui('加入发送队列；Ctrl+Enter 提交到当前 Claude 会话') : ui('发送消息；Ctrl+Enter 立即发送')}
+            >
+              {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
+                ? <LoaderCircle className="spin" size={16} />
+                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <RotateCcw size={16} /> : <ArrowUp size={16} />}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {schedulePanelOpen ? createPortal(
+        <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+          <div ref={schedulePanel} className="composer-menu__popover composer-menu__popover--floating composer-schedule-panel" role="dialog" aria-label={ui("定时发送")} style={schedulePanelPosition ?? { visibility: 'hidden' }}>
+            <label className="composer-schedule-panel__label" htmlFor={scheduleDateTimeInputId}>{ui("发送时间")}</label>
+            <input id={scheduleDateTimeInputId} className="composer-schedule-panel__input" type="datetime-local" min={localDateTimeInputValue(new Date())} value={scheduleDateTime} onChange={(event) => setScheduleDateTime(event.currentTarget.value)} />
+            <small>{ui("本地时间；无会话时先创建，到点自动发送。")}</small>
+            <div className="composer-schedule-panel__actions">
+              <button className="composer-schedule-panel__button" type="button" onClick={() => setSchedulePanelOpen(false)}>{ui("取消")}</button>
+              <button className="composer-schedule-panel__button composer-schedule-panel__button--primary" type="button" disabled={!scheduleDateTime || !canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} onClick={submitScheduledMessage}>{ui("加入排队")}</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      </form>
+    </div>
+  )
+}))
+
+interface WorkspaceExplorerProps {
+  token: string
+  eyebrow?: string
+  theme: AppTheme
+  themePreferences: ThemePreferences
+  engine: ChatEngine
+  cwd?: string
+  threadId?: string
+  canBindThreadWorkspace: boolean
+  onBindDirectory: (cwd: string) => Promise<boolean>
+  previewRequest: WorkspacePreviewRequest | null
+  previewContainerRef: RefObject<HTMLDivElement | null>
+  onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
+  draft: string
+  onInsertPath: (path: string, focus?: boolean) => void
+  onAddToTerminal: (path: string) => void
+  onRunInTerminal: (path: string) => void
+  onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
+  mobileOpen: boolean
+  mobileDragging: boolean
+  onOpenMobile: () => void
+  onCloseMobile: () => void
+  panelRef: RefObject<HTMLElement | null>
+}
+
+interface WorkspaceExplorerViewState {
+  directories: Record<string, CodexWorkspaceTree>
+  expanded: Record<string, boolean>
+  selectedPaths: string[]
+  scrollTop: number
+}
+
+interface WorkspacePreviewRequest {
+  id: number
+  cwd?: string
+  path: string
+  diff?: string
+  kind?: 'text' | 'image'
+  viewedByCodexThreadId?: string
+}
+
+interface WorkspaceSelectionContextMenu {
+  path: string
+  startLine: number
+  endLine: number
+  content: string
+  note: string
+  anchorX: number
+  anchorY: number
+  mobile: boolean
+  selectionBounds: WorkspaceSelectionBounds | null
+  maxHeight: number
+  x: number
+  y: number
+}
+
+interface WorkspaceEntryContextMenu {
+  entry: CodexWorkspaceEntry
+  paths: string[]
+  x: number
+  y: number
+  root?: boolean
+}
+
+interface WorkspaceTerminalRequest {
+  id: number
+  paneIndex: number
+  path: string
+  action: 'directory' | 'run'
+}
+
+interface WorkspaceClipboard {
+  mode: 'copy' | 'move'
+  paths: string[]
+}
+
+type WorkspaceMutationDialog =
+  | { action: 'create'; kind: CodexWorkspaceEntry['kind']; parentPath: string; value: string }
+  | { action: 'rename'; entry: CodexWorkspaceEntry; value: string }
+  | { action: 'delete'; paths: string[] }
+
+function selectedCodeFromPreview(root: HTMLElement) {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
+
+  const selectedText: string[] = []
+  const selectedLineNumbers: number[] = []
+  for (const line of root.querySelectorAll<HTMLElement>('.workspace-file-preview__line')) {
+    const lineContent = line.querySelector<HTMLElement>('.workspace-file-preview__line-content')
+    if (!lineContent || !range.intersectsNode(lineContent)) continue
+
+    const lineRange = document.createRange()
+    lineRange.selectNodeContents(lineContent)
+    if (range.compareBoundaryPoints(Range.START_TO_START, lineRange) > 0) {
+      lineRange.setStart(range.startContainer, range.startOffset)
+    }
+    if (range.compareBoundaryPoints(Range.END_TO_END, lineRange) < 0) {
+      lineRange.setEnd(range.endContainer, range.endOffset)
+    }
+
+    const kind = line.dataset.diffKind
+    const prefix = kind === 'added' ? '+' : kind === 'deleted' ? '-' : root.dataset.diffPreview === 'true' ? ' ' : ''
+    selectedText.push(`${prefix}${lineRange.toString()}`)
+    const lineNumber = Number(line.dataset.fileLine)
+    if (Number.isInteger(lineNumber) && lineNumber > 0) selectedLineNumbers.push(lineNumber)
+  }
+
+  const content = selectedText.join('\n')
+  if (!content.trim() || selectedLineNumbers.length === 0) return null
+  return {
+    content,
+    startLine: Math.min(...selectedLineNumbers),
+    endLine: Math.max(...selectedLineNumbers),
+  }
+}
+
+function selectedCodeBoundsFromPreview(root: HTMLElement): WorkspaceSelectionBounds | null {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
+  const rectangles = Array.from(range.getClientRects()).filter((rect) => rect.height > 0)
+  if (rectangles.length === 0) return null
+  return {
+    top: Math.min(...rectangles.map((rect) => rect.top)),
+    bottom: Math.max(...rectangles.map((rect) => rect.bottom)),
+  }
+}
+
+function selectedCodeBoundsFromEditor(editor: HTMLTextAreaElement, startLine: number, endLine: number): WorkspaceSelectionBounds {
+  const editorRect = editor.getBoundingClientRect()
+  const editorStyle = window.getComputedStyle(editor)
+  const lineHeight = Number.parseFloat(editorStyle.lineHeight) || 18
+  const paddingTop = Number.parseFloat(editorStyle.paddingTop) || 0
+  const firstLineTop = editorRect.top + paddingTop - editor.scrollTop
+  return {
+    top: firstLineTop + (startLine - 1) * lineHeight,
+    bottom: firstLineTop + endLine * lineHeight,
+  }
+}
+
+function selectedCodeFromEditor(editor: HTMLTextAreaElement) {
+  const start = editor.selectionStart
+  const end = editor.selectionEnd
+  if (start === end) return null
+  const lineRange = workspaceTextSelectionLineRange(editor.value, start, end)
+  const content = editor.value.slice(start, end)
+  if (!lineRange || !content.trim()) return null
+  return { ...lineRange, content }
+}
+
+function desktopWorkspacePreviewAvailable() {
+  return typeof window !== 'undefined'
+    && !isMobileLayout()
+}
+
+function concurrentPaneLimit() {
+  if (typeof window === 'undefined') return maxConcurrentPaneCount
+  const mobileLayout = isMobileLayout() || Boolean(window.DevWispAndroid?.changeEndpoint)
+  return mobileLayout ? 3 : maxConcurrentPaneCount
+}
+
+function shouldAutoFocusComposer() {
+  return !isMobileLayout() && !window.DevWispAndroid?.changeEndpoint
+}
+
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+  useUiLanguage()
+  const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
+  const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
+  const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
+  const [contextMenu, setContextMenu] = useState<WorkspaceEntryContextMenu | null>(null)
+  const downloadInProgress = useRef(false)
+  const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
+  const selectionContextMenuElement = useRef<HTMLDivElement>(null)
+  const contextMenuElement = useRef<HTMLDivElement>(null)
+  useContextMenuShortcuts(contextMenuElement, contextMenu)
+  const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboard | null>(null)
+  const [mutationDialog, setMutationDialog] = useState<WorkspaceMutationDialog | null>(null)
+  const [mutationSaving, setMutationSaving] = useState(false)
+  const [mutationError, setMutationError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<{ completed: number; total: number; name: string; loaded: number; size: number; confirming: boolean } | null>(null)
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const uploadTarget = useRef<{ root: string; path: string; scopeKey: string } | null>(null)
+  const uploadInProgress = useRef(false)
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
+  const [previewViewedByCodexThreadId, setPreviewViewedByCodexThreadId] = useState<string | null>(null)
+  const [previewDiff, setPreviewDiff] = useState<string | null>(null)
+  const [previewKind, setPreviewKind] = useState<'text' | 'image'>('text')
+  const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
+  const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
+  const [previewImage, setPreviewImage] = useState<CodexWorkspaceImage | null>(null)
+  const [previewEditContent, setPreviewEditContent] = useState<string | null>(null)
+  const [previewSaving, setPreviewSaving] = useState(false)
+  const [workspaceSearchMode, setWorkspaceSearchMode] = useState<WorkspaceSearchMode>(null)
+  const [workspaceReplacing, setWorkspaceReplacing] = useState(false)
+  const [previewSearchTarget, setPreviewSearchTarget] = useState<WorkspaceSearchMatch | null>(null)
+  const [highlightedPreview, setHighlightedPreview] = useState<{ file: CodexWorkspaceFile; lines: Array<Array<{ text: string; className: string }>> } | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewCopied, setPreviewCopied] = useState(false)
+  const previewCloseButton = useRef<HTMLButtonElement>(null)
+  const previewEditor = useRef<HTMLTextAreaElement>(null)
+  const previewEditorSearch = useRef<WorkspaceFileEditorSearchHandle | null>(null)
+  const previewOpenedFromSearch = useRef(false)
+  const previewReturnFocus = useRef<HTMLElement | null>(null)
+  const requestGeneration = useRef(0)
+  const previewRequestGeneration = useRef(0)
+  const handledPreviewRequest = useRef(0)
+  const previousScopeKey = useRef<string | null>(null)
+  const pendingPreviewScopeReset = useRef(false)
+  const restoreMobilePanelAfterPreview = useRef(false)
+  const treeElement = useRef<HTMLDivElement>(null)
+  const viewStateCache = useRef(new Map<string, WorkspaceExplorerViewState>())
+  const pendingScrollRestore = useRef<number | null>(null)
+  const browsingRoot = manualRoot || cwd
+  const portalThemeStyle = theme === 'custom'
+    ? themeRootStyle(themePreferences)
+    : letterSpacingStyle(themePreferences)
+  const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
+  const activeScopeKey = useRef(scopeKey)
+  activeScopeKey.current = scopeKey
+  const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
+  const currentViewState = useRef({ directories, expanded, selectedPaths })
+  currentViewState.current = { directories, expanded, selectedPaths }
+
+  useEffect(() => {
+    if (!manualRoot) setRootInput(cwd ?? '')
+  }, [cwd, manualRoot])
+
+  const directoryKey = (path: string) => path || '.'
+  const rememberViewState = useCallback((key: string, state: WorkspaceExplorerViewState) => {
+    viewStateCache.current.delete(key)
+    viewStateCache.current.set(key, state)
+    while (viewStateCache.current.size > 16) {
+      const oldestKey = viewStateCache.current.keys().next().value
+      if (oldestKey === undefined) break
+      viewStateCache.current.delete(oldestKey)
+    }
+  }, [])
+  const clearPreview = useCallback(() => {
+    const shouldRestoreMobilePanel = restoreMobilePanelAfterPreview.current
+    restoreMobilePanelAfterPreview.current = false
+    previewRequestGeneration.current += 1
+    setPreviewPath(null)
+    setPreviewCwd(undefined)
+    setPreviewViewedByCodexThreadId(null)
+    setPreviewDiff(null)
+    setPreviewKind('text')
+    setMobilePreviewDialog(false)
+    setPreviewFile(null)
+    setPreviewImage(null)
+    setPreviewLoading(false)
+    setPreviewError(null)
+    setPreviewCopied(false)
+    setPreviewEditContent(null)
+    setPreviewSearchTarget(null)
+    onPreviewStateChange(false)
+    if (shouldRestoreMobilePanel) onOpenMobile()
+  }, [onOpenMobile, onPreviewStateChange])
+  const closePreview = useCallback(() => {
+    if (previewSaving || workspaceReplacing) return
+    if (previewDirty && !window.confirm(ui('文件有未保存的修改，确定放弃并关闭吗？'))) return
+    clearPreview()
+  }, [clearPreview, previewDirty, previewSaving, workspaceReplacing])
+  const forceClosePreview = useCallback(() => {
+    if (previewSaving) return
+    clearPreview()
+  }, [clearPreview, previewSaving])
+
+  const loadDirectory = useCallback(async (path: string, offset = 0) => {
+    if (!browsingRoot) return
+    const generation = requestGeneration.current
+    const key = directoryKey(path)
+    setLoadingPaths((current) => ({ ...current, [key]: true }))
+    try {
+      const tree = await devwispClient.workspaceTree(token, browsingRoot, path, offset)
+      if (generation !== requestGeneration.current) return
+      setDirectories((current) => {
+        const entries = offset > 0 && current[key]
+          ? [...current[key].entries, ...tree.entries]
+          : tree.entries
+        return { ...current, [key]: { ...tree, entries } }
+      })
+      setError(null)
+    } catch (reason) {
+      if (generation !== requestGeneration.current) return
+      setError(reason instanceof Error ? reason.message : '无法读取文件目录')
+    } finally {
+      if (generation === requestGeneration.current) {
+        setLoadingPaths((current) => ({ ...current, [key]: false }))
+      }
+    }
+  }, [browsingRoot, token])
+
+  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text', viewedByCodexThreadId?: string, autoEdit = false, searchTarget?: WorkspaceSearchMatch & { revision: string }) => {
+    if (previewSaving) return
+    if (previewDirty && !window.confirm(ui('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？'))) return
+    if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
+      previewReturnFocus.current = document.activeElement
+    }
+    pendingPreviewScopeReset.current = false
+    const generation = ++previewRequestGeneration.current
+    previewOpenedFromSearch.current = Boolean(searchTarget)
+    const mobileDialog = !desktopWorkspacePreviewAvailable()
+    if (mobileDialog && mobileOpen) {
+      restoreMobilePanelAfterPreview.current = true
+      onCloseMobile()
+    }
+    onPreviewStateChange(true, closePreview)
+    setPreviewPath(path)
+    setPreviewCwd(requestedCwd)
+    setPreviewViewedByCodexThreadId(viewedByCodexThreadId ?? null)
+    setPreviewDiff(kind === 'text' ? diff ?? null : null)
+    setPreviewKind(kind)
+    setMobilePreviewDialog(mobileDialog)
+    setPreviewFile(null)
+    setPreviewImage(null)
+    setPreviewEditContent(null)
+    setPreviewSearchTarget(null)
+    setPreviewError(null)
+    setPreviewCopied(false)
+    setPreviewLoading(true)
+    try {
+      if (kind === 'image') {
+        const image = viewedByCodexThreadId
+          ? await devwispClient.codexViewedImage(token, viewedByCodexThreadId, path)
+          : await devwispClient.workspaceImage(token, requestedCwd, path)
+        if (generation !== previewRequestGeneration.current) return
+        setPreviewImage(image)
+      } else {
+        const file = await devwispClient.workspaceFile(token, requestedCwd, path)
+        if (generation !== previewRequestGeneration.current) return
+        setPreviewFile(file)
+        if (autoEdit) setPreviewEditContent(file.content)
+        if (searchTarget) {
+          if (searchTarget.revision === file.revision) setPreviewSearchTarget(searchTarget)
+          else setPreviewError('文件已变化，请重新查找后定位。')
+        }
+      }
+    } catch (reason) {
+      if (generation !== previewRequestGeneration.current) return
+      if (!diff) setPreviewError(reason instanceof Error ? reason.message : '无法读取文件')
+    } finally {
+      if (generation === previewRequestGeneration.current) setPreviewLoading(false)
+    }
+  }, [closePreview, mobileOpen, onCloseMobile, onPreviewStateChange, previewDirty, previewSaving, token])
+
+  async function savePreviewEdits() {
+    if (!previewFile || previewEditContent === null || !previewDirty || previewSaving || workspaceReplacing) return
+    const fileBeingSaved = previewFile
+    const contentBeingSaved = previewEditContent
+    setPreviewSaving(true)
+    setPreviewError(null)
+    try {
+      const savedFile = await devwispClient.saveWorkspaceFile(
+        token,
+        previewCwd,
+        fileBeingSaved.path,
+        contentBeingSaved,
+        fileBeingSaved.revision,
+      )
+      setPreviewFile(savedFile)
+      setPreviewEditContent(null)
+      setPreviewDiff(null)
+      const fileDirectory = savedFile.path.split(/[\\/]/).slice(0, -1).join('/')
+      if ((previewCwd ?? '') === (browsingRoot ?? '')) void loadDirectory(fileDirectory)
+    } catch (reason) {
+      setPreviewError(reason instanceof Error ? reason.message : '保存失败，文件内容仍保留在编辑器中。')
+    } finally {
+      setPreviewSaving(false)
+    }
+  }
+
+  function beginPreviewEditing() {
+    if (!previewFile || previewLoading || previewSaving || workspaceReplacing) return
+    setPreviewEditContent(previewFile.content)
+    setPreviewError(null)
+    window.requestAnimationFrame(() => previewEditor.current?.focus())
+  }
+
+  function cancelPreviewEditing() {
+    if (previewSaving || workspaceReplacing) return
+    if (previewDirty && !window.confirm(ui('确定放弃当前未保存的修改吗？'))) return
+    setPreviewEditContent(null)
+    setPreviewError(null)
+  }
+
+  function bindRoot(path = rootInput) {
+    if (workspaceReplacing) return
+    const nextRoot = path.trim()
+    if (!nextRoot) return
+    setManualRoot(nextRoot)
+    setRootInput(nextRoot)
+    setError(null)
+    try {
+      window.localStorage.setItem(workspaceExplorerRootStorageKey, nextRoot)
+    } catch {
+      // Keep the selected root for this page even when browser storage is unavailable.
+    }
+  }
+
+  function goToParentDirectory() {
+    if (!browsingRoot) return
+    const parent = workspaceParentPath(browsingRoot)
+    if (parent !== browsingRoot) bindRoot(parent)
+  }
+
+  function followChatDirectory(nextCwd = cwd ?? '') {
+    setManualRoot(null)
+    setRootInput(nextCwd)
+    try {
+      window.localStorage.removeItem(workspaceExplorerRootStorageKey)
+    } catch {
+      // The current page can still return to the chat directory.
+    }
+  }
+
+  useEffect(() => {
+    const scopeChanged = previousScopeKey.current !== scopeKey
+    if (scopeChanged) {
+      restoreMobilePanelAfterPreview.current = false
+      const previousKey = previousScopeKey.current
+      if (previousKey) {
+        rememberViewState(previousKey, {
+          ...currentViewState.current,
+          scrollTop: treeElement.current?.scrollTop ?? viewStateCache.current.get(previousKey)?.scrollTop ?? 0,
+        })
+      }
+      previousScopeKey.current = scopeKey
+      requestGeneration.current += 1
+      previewRequestGeneration.current += 1
+      const restoredView = viewStateCache.current.get(scopeKey)
+      pendingScrollRestore.current = restoredView?.scrollTop ?? null
+      setDirectories(restoredView?.directories ?? {})
+      setExpanded(restoredView?.expanded ?? {})
+      setLoadingPaths({})
+      setSelectedPaths(restoredView?.selectedPaths ?? [])
+      setContextMenu(null)
+      setWorkspaceClipboard(null)
+      setMutationDialog(null)
+      setMutationError(null)
+      setError(null)
+      setUploadNotice(null)
+      if (browsingRoot) void loadDirectory('')
+      if (previewDirty) pendingPreviewScopeReset.current = true
+    }
+    if (!scopeChanged && !(pendingPreviewScopeReset.current && !previewDirty)) return
+    if (previewDirty) return
+    setPreviewPath(null)
+    setPreviewCwd(undefined)
+    setPreviewViewedByCodexThreadId(null)
+    setPreviewDiff(null)
+    setPreviewKind('text')
+    setMobilePreviewDialog(false)
+    setPreviewFile(null)
+    setPreviewImage(null)
+    setPreviewEditContent(null)
+    setPreviewLoading(false)
+    setPreviewError(null)
+    setPreviewCopied(false)
+    pendingPreviewScopeReset.current = false
+    onPreviewStateChange(false)
+  }, [browsingRoot, loadDirectory, onPreviewStateChange, previewDirty, rememberViewState, scopeKey])
+
+  useLayoutEffect(() => {
+    if (!mobileOpen) return
+    const tree = treeElement.current
+    const restoredView = viewStateCache.current.get(scopeKey)
+    const scrollTop = pendingScrollRestore.current ?? restoredView?.scrollTop
+    if (!tree || scrollTop === undefined) return
+    tree.scrollTop = scrollTop
+    pendingScrollRestore.current = null
+  }, [directories, mobileOpen, scopeKey])
+
+  useEffect(() => {
+    if (!manualRoot) setRootInput(cwd ?? '')
+  }, [cwd, manualRoot])
+
+  useEffect(() => {
+    if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
+    if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
+    handledPreviewRequest.current = previewRequest.id
+    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff, previewRequest.kind, previewRequest.viewedByCodexThreadId)
+  }, [cwd, loadPreview, previewRequest])
+
+  useEffect(() => {
+    if (!contextMenu && !selectionContextMenu) return
+    const closeMenu = () => {
+      setContextMenu(null)
+      setSelectionContextMenu(null)
+    }
+    const handleMenuKeyboard = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (event.isComposing) return
+        closeMenu()
+        return
+      }
+      if (selectionContextMenu && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        const target = event.target
+        if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
+        event.preventDefault()
+        void copyTextToClipboard(selectionContextMenu.content).then(setPreviewCopied)
+      }
+    }
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', handleMenuKeyboard)
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', handleMenuKeyboard)
+    }
+  }, [contextMenu, selectionContextMenu])
+
+  useEffect(() => {
+    if (!mutationDialog) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || mutationSaving) return
+      setMutationDialog(null)
+      setMutationError(null)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [mutationDialog, mutationSaving])
+
+  useLayoutEffect(() => {
+    const current = selectionContextMenu
+    const menu = selectionContextMenuElement.current
+    if (!current?.mobile || !menu) return
+    const menuBounds = menu.getBoundingClientRect()
+    if (menuBounds.width <= 0 || menuBounds.height <= 0) return
+    const position = workspaceSelectionMenuPosition({
+      anchorX: current.anchorX,
+      anchorY: current.anchorY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      menuWidth: menuBounds.width,
+      menuHeight: menuBounds.height,
+      selectionBounds: current.selectionBounds,
+    })
+    if (Math.abs(current.x - position.x) < 1
+      && Math.abs(current.y - position.y) < 1
+      && Math.abs(current.maxHeight - position.maxHeight) < 1) return
+    setSelectionContextMenu((latest) => {
+      if (!latest || latest.anchorX !== current.anchorX || latest.anchorY !== current.anchorY) return latest
+      return { ...latest, ...position }
+    })
+  }, [selectionContextMenu])
+
+  useLayoutEffect(() => {
+    const current = contextMenu
+    const menu = contextMenuElement.current
+    if (!current || !menu) return
+
+    const keepMenuInViewport = () => {
+      const bounds = menu.getBoundingClientRect()
+      if (bounds.width <= 0 || bounds.height <= 0) return
+      const x = Math.max(8, Math.min(current.x, window.innerWidth - bounds.width - 8))
+      const y = Math.max(8, Math.min(current.y, window.innerHeight - bounds.height - 8))
+      if (Math.abs(current.x - x) < 1 && Math.abs(current.y - y) < 1) return
+      setContextMenu((latest) => latest === current ? { ...latest, x, y } : latest)
+    }
+
+    keepMenuInViewport()
+    window.addEventListener('resize', keepMenuInViewport)
+    return () => window.removeEventListener('resize', keepMenuInViewport)
+  }, [contextMenu])
+
+  function toggleDirectory(path: string) {
+    const nextExpanded = !expanded[path]
+    setExpanded((current) => ({ ...current, [path]: nextExpanded }))
+    if (nextExpanded && !directories[directoryKey(path)]) void loadDirectory(path)
+  }
+
+  function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.focus({ preventScroll: true })
+    const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
+    const menuHeight = theme === 'retro'
+      ? Math.min(entry.kind === 'directory' ? 480 : 352, Math.max(0, window.innerHeight - 16))
+      : entry.kind === 'directory' ? 390 : 296
+    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
+    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
+    const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
+    setSelectedPaths(paths)
+    setSelectionContextMenu(null)
+    setContextMenu({ entry, paths, x, y })
+  }
+
+  function openRootContextMenu(clientX: number, clientY: number) {
+    if (!browsingRoot) return
+    const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
+    const menuHeight = theme === 'retro'
+      ? Math.min(280, Math.max(0, window.innerHeight - 16))
+      : 220
+    const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8))
+    const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8))
+    const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
+    setSelectedPaths([])
+    setSelectionContextMenu(null)
+    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true })
+  }
+
+  function handleRootContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest('.workspace-explorer__entry')) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.focus({ preventScroll: true })
+    openRootContextMenu(event.clientX, event.clientY)
+  }
+
+  function openRootMenuFromButton(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    openRootContextMenu(bounds.right, bounds.bottom + 4)
+  }
+
+  function startWorkspaceCreate(kind: CodexWorkspaceEntry['kind']) {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory') return
+    setMutationDialog({ action: 'create', kind, parentPath: contextMenu.entry.path, value: '' })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function startWorkspaceRename() {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length !== 1) return
+    setMutationDialog({ action: 'rename', entry: contextMenu.entry, value: contextMenu.entry.name })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function startWorkspaceDelete() {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length === 0) return
+    setMutationDialog({ action: 'delete', paths: contextMenu.paths })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  async function downloadWorkspaceFile() {
+    const menu = contextMenu
+    if (!menu || menu.entry.kind !== 'file' || menu.paths.length !== 1 || !browsingRoot || downloadInProgress.current) return
+    downloadInProgress.current = true
+    setContextMenu(null)
+    setError(null)
+    try {
+      const { url } = await devwispClient.prepareWorkspaceDownload(token, browsingRoot, menu.entry.path)
+      if (!url.startsWith('/api/v1/codex/workspace/download/')) throw new Error('下载地址无效')
+      const link = document.createElement('a')
+      link.href = url
+      link.download = menu.entry.name
+      link.hidden = true
+      document.body.append(link)
+      link.click()
+      link.remove()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '文件下载失败')
+    } finally {
+      downloadInProgress.current = false
+    }
+  }
+
+  function closeWorkspaceMutation() {
+    if (mutationSaving) return
+    setMutationDialog(null)
+    setMutationError(null)
+  }
+
+  function rememberWorkspaceEntries(mode: WorkspaceClipboard['mode']) {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length === 0) return
+    setWorkspaceClipboard({ mode, paths: contextMenu.paths })
+    setContextMenu(null)
+    setError(null)
+  }
+
+  function pruneWorkspacePaths(paths: string[]) {
+    const affected = (path: string) => paths.some((parent) => workspacePathIsWithin(path, parent))
+    setExpanded((current) => Object.fromEntries(Object.entries(current).filter(([path]) => !affected(path))))
+    setDirectories((current) => Object.fromEntries(Object.entries(current).filter(([path]) => path === '.' || !affected(path))))
+    setSelectedPaths((current) => current.filter((path) => !affected(path)))
+  }
+
+  function previewUsesWorkspacePath(paths: string[]) {
+    return Boolean(previewPath
+      && (previewCwd ?? browsingRoot) === browsingRoot
+      && paths.some((path) => workspacePathIsWithin(previewPath, path)))
+  }
+
+  async function refreshWorkspaceDirectories(paths: string[]) {
+    await Promise.all([...new Set(paths)].map((path) => loadDirectory(path)))
+  }
+
+  function chooseWorkspaceUpload(path: string) {
+    if (!browsingRoot || uploadInProgress.current) return
+    uploadTarget.current = { root: browsingRoot, path, scopeKey }
+    setContextMenu(null)
+    uploadInput.current?.click()
+  }
+
+  async function uploadLocalFiles(files: File[], target: { root: string; path: string; scopeKey: string }) {
+    if (files.length === 0 || uploadInProgress.current) return
+    uploadInProgress.current = true
+    setUploadNotice(null)
+    setError(null)
+    const uploaded: CodexWorkspaceEntry[] = []
+    const failures: string[] = []
+    try {
+      for (const [index, file] of files.entries()) {
+        setUploadProgress({ completed: index, total: files.length, name: file.name, loaded: 0, size: file.size, confirming: false })
+        if (file.size > maxWorkspaceUploadFileSize) {
+          failures.push(`${file.name}：单个文件不能超过 512 MB`)
+          continue
+        }
+        try {
+          uploaded.push(await devwispClient.uploadWorkspaceFile(token, target.root, target.path, file, (progress) => {
+            setUploadProgress((current) => current?.completed === index
+              ? { ...current, loaded: progress.loaded, size: progress.total, confirming: progress.confirming }
+              : current)
+          }))
+        } catch (reason) {
+          failures.push(`${file.name}：${reason instanceof Error ? reason.message : '上传失败'}`)
+        }
+      }
+      if (target.scopeKey !== activeScopeKey.current) return
+      if (uploaded.length > 0) {
+        if (target.path) setExpanded((current) => ({ ...current, [target.path]: true }))
+        await loadDirectory(target.path)
+        setSelectedPaths(uploaded.map((entry) => entry.path))
+      }
+      const summary = `已上传 ${uploaded.length}/${files.length} 个文件到 ${target.path || '当前根目录'}`
+      setUploadNotice(failures.length > 0 ? `${summary} · ${failures.length} 个失败：${failures[0]}` : summary)
+      if (failures.length > 0) {
+        const shown = failures.slice(0, 3).join('；')
+        setError(failures.length > 3 ? `${shown}；另有 ${failures.length - 3} 个文件上传失败` : shown)
+      }
+    } finally {
+      uploadInProgress.current = false
+      setUploadProgress(null)
+    }
+  }
+
+  function handleWorkspacePaste(event: ClipboardEvent<HTMLDivElement>) {
+    if (!browsingRoot) return
+    const files = Array.from(event.clipboardData.files)
+    if (files.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (uploadInProgress.current) {
+      setError('文件正在上传，请等当前上传结束后再粘贴')
+      return
+    }
+    const selectedPath = selectedPaths.at(-1)
+    const selectedEntry = selectedPath
+      ? Object.values(directories).flatMap((tree) => tree.entries).find((entry) => entry.path === selectedPath)
+      : undefined
+    const destination = contextMenu?.entry.kind === 'directory'
+      ? contextMenu.entry.path
+      : selectedPath && selectedEntry?.kind === 'directory'
+        ? selectedPath
+        : selectedPath ? workspaceRelativeParentPath(selectedPath) : ''
+    setContextMenu(null)
+    void uploadLocalFiles(files, { root: browsingRoot, path: destination, scopeKey })
+  }
+
+  function handleWorkspaceUploadSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? [])
+    event.currentTarget.value = ''
+    const target = uploadTarget.current
+    uploadTarget.current = null
+    if (target && files.length > 0) void uploadLocalFiles(files, target)
+  }
+
+  function refreshVisibleDirectories() {
+    const { directories: loaded, expanded: open } = currentViewState.current
+    const paths = Object.keys(open).filter((path) => open[path] && loaded[path])
+    void refreshWorkspaceDirectories(['', ...paths])
+  }
+
+  async function submitWorkspaceMutation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!mutationDialog || mutationSaving || !browsingRoot) return
+    const affectedPreviewPaths = mutationDialog.action === 'rename'
+      ? [mutationDialog.entry.path]
+      : mutationDialog.action === 'delete' ? mutationDialog.paths : []
+    if (affectedPreviewPaths.length > 0 && previewUsesWorkspacePath(affectedPreviewPaths)) {
+      if (previewSaving) {
+        setMutationError('文件正在保存，请稍后再操作')
+        return
+      }
+      if (previewDirty && !window.confirm(ui('当前预览有未保存修改，继续会放弃这些修改。确定继续吗？'))) return
+    }
+    setMutationSaving(true)
+    setMutationError(null)
+    try {
+      if (mutationDialog.action === 'create') {
+        const name = mutationDialog.value.trim()
+        if (!name) throw new Error('请填写名称')
+        const entry = await devwispClient.createWorkspaceEntry(
+          token,
+          browsingRoot,
+          workspaceRelativeChildPath(mutationDialog.parentPath, name),
+          mutationDialog.kind,
+        )
+        await refreshWorkspaceDirectories([mutationDialog.parentPath])
+        setSelectedPaths([entry.path])
+      } else if (mutationDialog.action === 'rename') {
+        const name = mutationDialog.value.trim()
+        if (!name) throw new Error('请填写新名称')
+        const result = await devwispClient.renameWorkspaceEntry(token, browsingRoot, mutationDialog.entry.path, name)
+        const oldPath = result.oldPath
+        if (previewUsesWorkspacePath([oldPath])) forceClosePreview()
+        pruneWorkspacePaths([oldPath])
+        if (workspaceClipboard?.paths.some((path) => workspacePathIsWithin(path, oldPath))) setWorkspaceClipboard(null)
+        await refreshWorkspaceDirectories([workspaceRelativeParentPath(oldPath)])
+        setSelectedPaths([result.entry.path])
+      } else {
+        const paths = mutationDialog.paths
+        await devwispClient.deleteWorkspaceEntries(token, browsingRoot, paths)
+        if (previewUsesWorkspacePath(paths)) forceClosePreview()
+        pruneWorkspacePaths(paths)
+        if (workspaceClipboard?.paths.some((path) => paths.some((parent) => workspacePathIsWithin(path, parent)))) setWorkspaceClipboard(null)
+        await refreshWorkspaceDirectories(paths.map(workspaceRelativeParentPath))
+      }
+      setMutationDialog(null)
+      setError(null)
+    } catch (reason) {
+      setMutationError(reason instanceof Error ? reason.message : '文件操作失败')
+    } finally {
+      setMutationSaving(false)
+    }
+  }
+
+  async function pasteWorkspaceEntries() {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory' || !workspaceClipboard || !browsingRoot) return
+    const destination = contextMenu.entry.path
+    const clipboard = workspaceClipboard
+    if (clipboard.mode === 'move' && previewUsesWorkspacePath(clipboard.paths)) {
+      if (previewSaving) {
+        setContextMenu(null)
+        setError('文件正在保存，请稍后再移动')
+        return
+      }
+      if (previewDirty && !window.confirm(ui('当前预览有未保存修改，移动会放弃这些修改。确定继续吗？'))) return
+    }
+    setContextMenu(null)
+    setError(null)
+    try {
+      const result = await devwispClient.pasteWorkspaceEntries(token, browsingRoot, clipboard.paths, destination, clipboard.mode)
+      const changedPaths = result.changedPaths ?? clipboard.paths
+      if (clipboard.mode === 'move') {
+        if (previewUsesWorkspacePath(changedPaths)) forceClosePreview()
+        pruneWorkspacePaths(changedPaths)
+        setWorkspaceClipboard(null)
+      }
+      await refreshWorkspaceDirectories([
+        destination,
+        ...(clipboard.mode === 'move' ? changedPaths.map(workspaceRelativeParentPath) : []),
+      ])
+      setSelectedPaths(result.entries.map((entry) => entry.path))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '粘贴失败')
+    }
+  }
+
+  async function bindDirectoryToCurrentThread() {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory') return
+    const nextCwd = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path)
+    setContextMenu(null)
+    try {
+      if (await onBindDirectory(nextCwd)) {
+        followChatDirectory(nextCwd)
+        setError(null)
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法绑定当前聊天到该目录')
+    }
+  }
+
+  function openSelectionContextMenu(event: ReactMouseEvent<HTMLPreElement | HTMLTextAreaElement>) {
+    if (!previewFile) return
+    const editor = event.currentTarget instanceof HTMLTextAreaElement ? event.currentTarget : null
+    const selected = editor
+      ? selectedCodeFromEditor(editor)
+      : selectedCodeFromPreview(event.currentTarget)
+    if (!selected) return
+
+    event.preventDefault()
+    setContextMenu(null)
+    const isMobile = isMobileLayout() || Boolean(window.DevWispAndroid?.changeEndpoint)
+    const menuWidth = Math.min(300, window.innerWidth - 16)
+    const menuHeight = isMobile ? 132 : 240
+    const selectionBounds = isMobile
+      ? editor
+        ? selectedCodeBoundsFromEditor(editor, selected.startLine, selected.endLine)
+        : selectedCodeBoundsFromPreview(event.currentTarget)
+      : null
+    const position = workspaceSelectionMenuPosition({
+      anchorX: event.clientX,
+      anchorY: event.clientY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      menuWidth,
+      menuHeight,
+      selectionBounds,
+    })
+    setSelectionContextMenu({
+      ...selected,
+      path: workspaceAbsolutePath(previewCwd ?? browsingRoot, previewFile.path),
+      note: '',
+      anchorX: event.clientX,
+      anchorY: event.clientY,
+      mobile: isMobile,
+      selectionBounds,
+      ...position,
+    })
+  }
+
+  function addSelectedCodeAsDocument() {
+    if (!selectionContextMenu) return
+    const { path, startLine, endLine, content, note } = selectionContextMenu
+    setSelectionContextMenu(null)
+    onAddDocument(createWorkspaceSelectionDocument(path, startLine, endLine, content, note), !mobileOpen)
+  }
+
+  function handleEntryClick(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedPaths((current) => current.includes(entry.path)
+        ? current.filter((path) => path !== entry.path)
+        : [...current, entry.path])
+      return
+    }
+    setSelectedPaths([entry.path])
+    if (entry.kind === 'directory') toggleDirectory(entry.path)
+    else void loadPreview(entry.path, browsingRoot, undefined, workspaceFileType(entry.path).tone === 'image' ? 'image' : 'text', undefined, true)
+  }
+
+  async function copyPreview() {
+    if (!previewFile) return
+    setPreviewCopied(await copyTextToClipboard(previewEditContent ?? previewFile.content))
+  }
+
+  function entryAbsolutePath(entry: CodexWorkspaceEntry) {
+    return workspaceAbsolutePath(browsingRoot, entry.path)
+  }
+
+  function sizeLabel(size: number | null | undefined) {
+    if (size === undefined || size === null) return ''
+    if (size < 1_024) return `${size} B`
+    if (size < 1_024 * 1_024) return `${Math.ceil(size / 1_024)} KB`
+    return `${(size / (1_024 * 1_024)).toFixed(1)} MB`
+  }
+
+  function renderDirectory(path: string, depth: number): ReactNode[] {
+    const tree = directories[directoryKey(path)]
+    if (!tree) return []
+    const rows = tree.entries.flatMap((entry) => {
+      const isDirectory = entry.kind === 'directory'
+      const isOpen = Boolean(expanded[entry.path])
+      const absolutePath = entryAbsolutePath(entry)
+      const alreadyAdded = draftContainsWorkspacePath(draft, absolutePath)
+      const row = (
+          <Fragment key={entry.path}>
+          <div className="workspace-explorer__entry-row">
+            <button
+              className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}${workspaceClipboard?.mode === 'move' && workspaceClipboard.paths.some((path) => workspacePathIsWithin(entry.path, path)) ? ' workspace-explorer__entry--cut' : ''}`}
+              type="button"
+              style={{ paddingLeft: `${10 + depth * 14}px` }}
+              title={entry.path}
+              onClick={(event) => handleEntryClick(event, entry)}
+              onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
+            >
+              {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
+              {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <WorkspaceFileTypeIcon path={entry.path} size={16} />}
+              <span className="workspace-explorer__entry-name">{entry.name}</span>
+              {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
+            </button>
+            {!alreadyAdded ? <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(absolutePath, !mobileOpen) }} aria-label={uiFormat("加入输入框 {0}", entry.name)} title={ui("加入输入框")}><Plus size={14} /></button> : null}
+          </div>
+          {isDirectory && isOpen ? (
+            loadingPaths[directoryKey(entry.path)]
+              ? <div className="workspace-explorer__loading" style={{ paddingLeft: `${37 + depth * 14}px` }}><LoaderCircle className="spin" size={12} />{ui("读取中…")}</div>
+              : renderDirectory(entry.path, depth + 1)
+          ) : null}
+        </Fragment>
+      )
+      return [row]
+    })
+    if (tree.nextOffset !== null) {
+      rows.push(
+        <button
+          className="workspace-explorer__load-more"
+          key={`${directoryKey(path)}:load-more`}
+          type="button"
+          style={{ paddingLeft: `${10 + depth * 14}px` }}
+          disabled={Boolean(loadingPaths[directoryKey(path)])}
+          onClick={() => void loadDirectory(path, tree.nextOffset ?? 0)}
+        >
+          {loadingPaths[directoryKey(path)] ? <LoaderCircle className="spin" size={12} /> : <ChevronDown size={12} />}
+          {loadingPaths[directoryKey(path)] ? ui('继续读取…') : ui('加载更多')}
+        </button>,
+      )
+    }
+    return rows
+  }
+
+  const rootLoading = loadingPaths['.']
+  const previewLines = useMemo(() => {
+    if (!previewFile) return []
+    const lines = previewFile.content.split(/\r\n|\n|\r/)
+    if (lines.length > 1 && lines.at(-1) === '' && /(?:\r\n|\n|\r)$/.test(previewFile.content)) lines.pop()
+    return lines
+  }, [previewFile])
+  const previewDiffLines = useMemo(() => {
+    if (!previewDiff) return null
+    const lines = numberDiffLines(previewDiff).filter(({ line, kind }) => (
+      kind !== 'context' || !/^(?:diff --git |index |--- |\+\+\+ )/.test(line)
+    ))
+    return lines.length > 0 ? lines : null
+  }, [previewDiff])
+  const previewDiffStats = useMemo(() => previewDiffLines ? {
+    additions: previewDiffLines.filter(({ kind }) => kind === 'added').length,
+    deletions: previewDiffLines.filter(({ kind }) => kind === 'deleted').length,
+  } : null, [previewDiffLines])
+  useEffect(() => {
+    if (!previewFile) {
+      setHighlightedPreview(null)
+      return
+    }
+    let cancelled = false
+    void import('../lib/codeHighlight').then(async ({ highlightCodeLines }) => {
+      const lines = await highlightCodeLines(previewFile.path, previewFile.content)
+      if (!cancelled) setHighlightedPreview({ file: previewFile, lines })
+    }).catch(() => {
+      if (!cancelled) setHighlightedPreview(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [previewFile])
+  const highlightedPreviewLines = highlightedPreview?.file === previewFile ? highlightedPreview.lines : []
+  useLayoutEffect(() => {
+    if (!previewSearchTarget || previewEditContent === null || !previewEditorSearch.current) return
+    const lines = previewEditContent.replace(/\r\n?/g, '\n').split('\n')
+    const lineIndex = Math.min(previewSearchTarget.line - 1, lines.length - 1)
+    let offset = 0
+    for (let index = 0; index < lineIndex; index += 1) offset += lines[index].length + 1
+    offset += Array.from(lines[lineIndex]).slice(0, previewSearchTarget.column - 1).join('').length
+    previewEditorSearch.current.reveal(previewSearchTarget.text, offset)
+    previewEditor.current?.focus({ preventScroll: true })
+    setPreviewSearchTarget(null)
+  }, [previewSearchTarget, previewEditContent])
+  useEffect(() => {
+    if (!previewPath || previewOpenedFromSearch.current) return
+    const frame = window.requestAnimationFrame(() => previewCloseButton.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [previewPath])
+  useEffect(() => {
+    if (previewPath) return
+    const returnFocus = previewReturnFocus.current
+    previewReturnFocus.current = null
+    if (!returnFocus) return
+    const frame = window.requestAnimationFrame(() => {
+      if (returnFocus.isConnected) returnFocus.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [previewPath])
+  const previewPortalTarget = previewContainerRef.current
+  const contextMenuMissingDraftPaths = contextMenu
+    ? workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path)))
+    : []
+  const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && canBindThreadWorkspace)
+  const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanRunInTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'file' && contextMenu.paths.length === 1 && isRunnableScriptPath(contextMenu.entry.path))
+  const contextMenuCanCreate = contextMenu?.entry.kind === 'directory'
+  const contextMenuCanRename = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanCut = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanDownload = Boolean(contextMenu && contextMenu.entry.kind === 'file' && contextMenu.paths.length === 1)
+  const contextMenuCanPaste = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && workspaceClipboard)
+  const contextMenuCanUpload = contextMenu?.entry.kind === 'directory'
+  const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuCanRunInTerminal || contextMenuMissingDraftPaths.length > 0
+  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanDownload || contextMenuCanPaste || contextMenuCanUpload
+  let contextMenuShortcut = 0
+  const nextContextMenuShortcut = () => {
+    contextMenuShortcut += 1
+    return contextMenuShortcut === 10 ? 0 : contextMenuShortcut
+  }
+  const uploadPercent = uploadProgress
+    ? uploadProgress.size > 0
+      ? Math.min(100, Math.floor(uploadProgress.loaded / uploadProgress.size * 100))
+      : uploadProgress.confirming ? 100 : 0
+    : 0
+  return (
+    <>
+      <aside id="workspace-explorer-panel" ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}${uploadProgress ? ' workspace-explorer--uploading' : ''}`} aria-label={ui("工作区文件资源管理器")} onKeyDown={(event) => {
+        if (!event.nativeEvent.isComposing && !event.altKey && event.shiftKey && (event.ctrlKey || event.metaKey) && !workspaceReplacing) {
+          const key = event.key.toLowerCase()
+          if (key === 'f' || key === 'h') { event.preventDefault(); event.stopPropagation(); setWorkspaceSearchMode(key === 'h' ? 'replace' : 'find') }
+        }
+      }} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+        <input ref={uploadInput} className="workspace-explorer__upload-input" type="file" multiple onChange={handleWorkspaceUploadSelection} aria-label={ui("选择要上传到工作区的本机文件")} />
+        <header className="workspace-explorer__header">
+          <div><span className="workspace-explorer__eyebrow">{ui(eyebrow)}</span><strong>{ui("文件")}</strong></div>
+          <div className="workspace-explorer__header-actions">
+            <button className="icon-button" type="button" disabled={!browsingRoot || workspaceReplacing} onClick={() => setWorkspaceSearchMode((current) => current === 'find' ? null : 'find')} aria-label={ui('在目录中查找')} title={ui('在目录中查找（Ctrl/⌘+Shift+F）')} aria-pressed={workspaceSearchMode === 'find'}><Search size={15} /></button>
+            <button className="icon-button" type="button" disabled={!browsingRoot || workspaceReplacing} onClick={() => setWorkspaceSearchMode((current) => current === 'replace' ? null : 'replace')} aria-label={ui('在目录中替换')} title={ui('在目录中替换（Ctrl/⌘+Shift+H）')} aria-pressed={workspaceSearchMode === 'replace'}><ReplaceAll size={15} /></button>
+            <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={workspaceReplacing || !browsingRoot} aria-label={ui("新建或管理文件")} title={ui("新建或管理文件")}><FilePlus2 size={15} /></button>
+            <button className="icon-button" type="button" onClick={() => chooseWorkspaceUpload('')} disabled={workspaceReplacing || !browsingRoot || Boolean(uploadProgress)} aria-label={ui("上传本机文件到当前根目录")} title={ui("上传本机文件到当前根目录")}><Upload size={15} /></button>
+            <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={workspaceReplacing || !browsingRoot || rootLoading} aria-label={ui("刷新文件目录")} title={ui("刷新当前目录和已展开文件夹")}><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+            <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label={ui("关闭文件窗口")} title={ui("关闭文件窗口")}><X size={16} /></button>
+          </div>
+        </header>
+        <div className="workspace-explorer__root">
+          <form className="workspace-explorer__root-form" onSubmit={(event) => { event.preventDefault(); bindRoot() }}>
+            <input
+              aria-label={ui("服务端目录路径")}
+              title={browsingRoot ?? ui('输入后端主机上的目录路径')}
+              value={rootInput}
+              onChange={(event) => setRootInput(event.currentTarget.value)}
+              placeholder={ui("输入服务端目录路径")}
+              spellCheck={false}
+              disabled={workspaceReplacing}
+            />
+            <button className="workspace-explorer__root-open" type="submit" disabled={workspaceReplacing} title={ui("绑定并打开目录")}><FolderOpen size={13} /><span>{ui("打开")}</span></button>
+          </form>
+          <div className="workspace-explorer__root-actions">
+            <button type="button" onClick={goToParentDirectory} disabled={workspaceReplacing || !browsingRoot || workspaceParentPath(browsingRoot) === browsingRoot} title={ui("浏览上级目录")}><ArrowUp size={12} />{ui("上级")}</button>
+            <button type="button" onClick={() => followChatDirectory()} disabled={workspaceReplacing || !manualRoot} title={ui("恢复跟随当前聊天的工作目录")}><RotateCcw size={12} />{ui("跟随聊天")}</button>
+          </div>
+        </div>
+        <div className="workspace-explorer__body">
+          <WorkspaceSearch
+            key={scopeKey}
+            token={token}
+            root={browsingRoot}
+            mode={workspaceSearchMode}
+            onModeChange={setWorkspaceSearchMode}
+            onBusyChange={setWorkspaceReplacing}
+            onOpenResult={(file, match) => loadPreview(file.path, browsingRoot, undefined, 'text', undefined, true, { ...match, revision: file.revision })}
+            beforeReplace={(paths) => previewSaving ? '文件正在保存，请稍候再替换。' : previewDirty && previewFile && previewCwd === browsingRoot && (paths === null || paths.includes(previewFile.path)) ? '当前文件有未保存修改，请先保存或取消编辑再替换。' : null}
+            onReplaced={async (paths) => {
+              if (activeScopeKey.current !== scopeKey) return
+              refreshVisibleDirectories()
+              if (previewFile && previewCwd === browsingRoot && paths.includes(previewFile.path)) {
+                await loadPreview(previewFile.path, previewCwd, undefined, 'text', undefined, previewEditContent !== null)
+              }
+            }}
+          />
+          <div
+            ref={treeElement}
+            className="workspace-explorer__tree"
+            hidden={workspaceSearchMode !== null}
+            tabIndex={0}
+            onContextMenu={handleRootContextMenu}
+            onPaste={handleWorkspacePaste}
+            onScroll={(event) => {
+              rememberViewState(scopeKey, {
+                ...currentViewState.current,
+                scrollTop: event.currentTarget.scrollTop,
+              })
+            }}
+          >
+            {!browsingRoot ? <p className="workspace-explorer__empty">{ui("还没有聊天工作目录，可以输入服务端路径打开文件夹。")}</p> : null}
+            {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{ui("读取文件目录…")}</div> : null}
+            {error ? <p className="workspace-explorer__error" role="alert">{uiMessage(error)}</p> : null}
+            {browsingRoot && directories['.'] ? renderDirectory('', 0) : null}
+            {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">{ui("此目录条目较多，可在列表底部继续加载。")}</p> : null}
+          </div>
+        </div>
+        <footer className={`workspace-explorer__footer${uploadProgress ? ' workspace-explorer__footer--uploading' : ''}`} aria-live={uploadProgress ? 'off' : 'polite'} title={uploadProgress?.name ?? (uploadNotice ? uiMessage(uploadNotice) : ui('右键文件夹可上传本机文件；选中文件夹后可按 Ctrl/⌘+V 粘贴浏览器能读取的本机文件'))}>{uploadProgress ? <>
+          <div className="workspace-explorer__upload-heading"><span>{ui("上传")} {uploadProgress.completed + 1}/{uploadProgress.total} · {uploadProgress.name}</span><strong>{uploadPercent}%</strong></div>
+          <div className="workspace-explorer__upload-detail">{uploadProgress.confirming ? ui('已发送，等待服务器确认…') : uiFormat("已发送 {0} / {1}", sizeLabel(uploadProgress.loaded), sizeLabel(uploadProgress.size))}</div>
+          <div className="workspace-explorer__upload-track" role="progressbar" aria-label={uiFormat("{0} 上传进度", uploadProgress.name)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadPercent} aria-valuetext={uploadProgress.confirming ? ui('已发送，等待服务器确认') : uiFormat("已发送 {0} / {1}", sizeLabel(uploadProgress.loaded), sizeLabel(uploadProgress.size))}><span style={{ width: `${uploadPercent}%` }} /></div>
+        </> : <span>{uploadNotice ? uiMessage(uploadNotice) : (workspaceClipboard ? uiFormat("{0} {1} 项 · 在文件夹右键粘贴", workspaceClipboard.mode === 'copy' ? ui('已复制') : ui('已剪切'), workspaceClipboard.paths.length) : ui('右键文件夹可上传本机文件 · Ctrl/⌘+V 可粘贴'))}</span>}</footer>
+      </aside>
+      {previewPath && previewPortalTarget ? createPortal(
+        <ChatOverlayPanel
+          ariaLabel={previewKind === 'image' ? ui('工作区图片预览') : ui('工作区文件预览')}
+          backdropLabel={ui("关闭文件预览")}
+          ariaModal={mobilePreviewDialog || undefined}
+          className="workspace-file-preview-panel"
+          closeButtonRef={previewCloseButton}
+          onClose={closePreview}
+          onEscape={() => {
+            if (contextMenu || selectionContextMenu) {
+              setContextMenu(null)
+              setSelectionContextMenu(null)
+              return
+            }
+            if (previewEditorSearch.current?.close()) return
+            closePreview()
+          }}
+          onKeyDown={(event) => {
+            if (!event.nativeEvent.isComposing && !event.altKey && (event.ctrlKey || event.metaKey)
+              && (event.key.toLowerCase() === 'f' || event.key.toLowerCase() === 'h') && previewEditContent !== null) {
+              event.preventDefault()
+              event.stopPropagation()
+              previewEditorSearch.current?.open(event.key.toLowerCase() === 'h')
+              return
+            }
+            if (!mobilePreviewDialog || event.key !== 'Tab') return
+            const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [role="separator"][tabindex="0"]')
+            const first = controls.item(0)
+            const last = controls.item(controls.length - 1)
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault()
+              last?.focus()
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault()
+              first?.focus()
+            }
+          }}
+          header={(
+            <div className="workspace-file-preview-panel__heading">
+              <WorkspaceFileTypeIcon path={previewImage?.path ?? previewFile?.path ?? previewPath} size={19} />
+              <span className="workspace-file-preview-panel__heading-copy">
+                <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? ui('图片预览') : previewEditContent === null ? (previewDiff ? ui('差异预览') : ui('只读预览')) : ui('编辑文件')}</span>
+                <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+              </span>
+            </div>
+          )}
+          footer={(
+            <span className="workspace-file-preview-panel__footer">{previewSaving ? ui('正在保存到本机工作区…') : previewImage ? `${sizeLabel(previewImage.size)} · ${previewImage.mediaType}` : previewEditContent !== null ? (previewDirty ? ui('有未保存修改 · Ctrl/⌘+S 保存') : ui('编辑中 · 未修改')) : previewDiffStats ? uiFormat("新增 {0} 行 · 删除 {1} 行", previewDiffStats.additions, previewDiffStats.deletions) : previewFile ? uiFormat("{0} 行 · UTF-8 文本", previewLines.length) : previewKind === 'image' ? ui('图片预览') : ui('UTF-8 文本')}</span>
+          )}
+        >
+          <section className="workspace-file-preview">
+            <div className="workspace-file-preview__toolbar">
+              <code title={previewImage?.path ?? previewFile?.path ?? previewPath}>{previewImage?.path ?? previewFile?.path ?? previewPath}</code>
+              <div>
+                {previewEditContent !== null && previewFile ? <button className="workspace-file-preview__copy" type="button" onClick={() => previewEditorSearch.current?.open()} title={ui('查找和替换（Ctrl/⌘+F）')} aria-keyshortcuts="Control+f Meta+f"><Search size={13} />{ui('查找')}</button> : null}
+                {previewKind !== 'image' && previewEditContent === null ? (
+                  <button className="workspace-file-preview__copy" type="button" onClick={beginPreviewEditing} disabled={!previewFile || previewLoading || previewSaving} title={ui("编辑并保存文件")}><Pencil size={13} />{ui("编辑")}</button>
+                ) : previewKind !== 'image' ? (
+                  <>
+                    <button className="workspace-file-preview__copy" type="button" onClick={() => void savePreviewEdits()} disabled={!previewDirty || previewSaving || workspaceReplacing} title={ui("保存到本机工作区")}>{previewSaving ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}{ui("保存")}</button>
+                    <button className="workspace-file-preview__copy" type="button" onClick={cancelPreviewEditing} disabled={previewSaving || workspaceReplacing} title={ui("取消编辑")}>{ui("取消")}</button>
+                  </>
+                ) : null}
+                {previewKind !== 'image' ? <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title={ui("复制文件内容")}><Copy size={13} />{previewCopied ? ui('已复制') : ui('复制')}</button> : null}
+                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind, previewViewedByCodexThreadId ?? undefined)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? ui('重新读取图片') : ui('重新读取文件')} title={previewKind === 'image' ? ui('重新读取图片') : ui('重新读取文件')}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
+              </div>
+            </div>
+            {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{previewKind === 'image' ? ui('读取图片…') : ui('读取文件内容…')}</div> : null}
+            {previewError ? <p className="workspace-explorer__error" role="alert">{uiMessage(previewError)}</p> : null}
+            {previewImage ? (
+              <div className="workspace-image-preview"><img src={`data:${previewImage.mediaType};base64,${previewImage.data}`} alt={previewImage.path} /></div>
+            ) : previewEditContent !== null && previewFile ? (
+              <WorkspaceFileEditor
+                key={`${previewCwd ?? ''}:${previewFile.path}`}
+                path={previewFile.path}
+                value={previewEditContent}
+                disabled={previewSaving || workspaceReplacing}
+                editorRef={previewEditor}
+                searchRef={previewEditorSearch}
+                onChange={setPreviewEditContent}
+                onSave={savePreviewEdits}
+                onContextMenu={openSelectionContextMenu}
+              />
+            ) : previewFile || previewDiffLines ? (
+              <pre className="workspace-file-preview__code" data-diff-preview={previewDiffLines ? 'true' : undefined} onContextMenu={openSelectionContextMenu}><code>{previewDiffLines
+                ? previewDiffLines.map((diffLine, index) => {
+                  const content = diffLine.kind === 'added' || diffLine.kind === 'deleted'
+                    ? diffLine.line.slice(1)
+                    : diffLine.kind === 'context' && diffLine.line.startsWith(' ')
+                      ? diffLine.line.slice(1)
+                      : diffLine.line
+                  const highlightedLine = diffLine.newLine === null ? undefined : highlightedPreviewLines[diffLine.newLine - 1]
+                  return (
+                    <span className={`workspace-file-preview__line workspace-file-preview__line--${diffLine.kind}`} data-file-line={diffLine.newLine ?? diffLine.oldLine ?? ''} data-diff-kind={diffLine.kind} key={`diff-${index}`}>
+                      <span className="workspace-file-preview__line-number" aria-hidden="true">{diffLine.newLine ?? diffLine.oldLine ?? ''}</span>
+                      <span className="workspace-file-preview__line-content syntax-highlighted">{diffLine.kind !== 'deleted' && highlightedLine?.length
+                        ? highlightedLine.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+                        : content || ' '}</span>
+                    </span>
+                  )
+                })
+                : previewLines.map((line, index) => (
+                  <span className="workspace-file-preview__line" data-file-line={index + 1} key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content syntax-highlighted">{highlightedPreviewLines[index]?.length
+                    ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+                    : line || ' '}</span></span>
+                ))}</code></pre>
+            ) : null}
+          </section>
+        </ChatOverlayPanel>,
+        previewPortalTarget,
+      ) : null}
+      {contextMenu && typeof document !== 'undefined' ? createPortal(
+        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ ...portalThemeStyle, left: contextMenu.x, top: contextMenu.y }} role="menu" tabIndex={-1} onPointerDown={(event) => event.stopPropagation()} onPaste={handleWorkspacePaste}>
+          <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? uiFormat(" · 已选 {0} 项", contextMenu.paths.length) : ''}</div>
+          {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
+            <span className="workspace-file-context-menu__group-label">{ui("快捷操作")}</span>
+            {contextMenuCanBind ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />{ui("绑定当前聊天到此目录")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanOpenTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />{ui("添加到终端")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanRunInTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onRunInTerminal(path) }}><Play size={14} />{ui("终端运行")}</ShortcutContextMenuButton> : null}
+            {contextMenuMissingDraftPaths.length > 0 ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />{ui("加入输入框")}</ShortcutContextMenuButton> : null}
+          </div> : null}
+          {contextMenuCanCreate ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--create">
+            <span className="workspace-file-context-menu__group-label">{ui("新建")}</span>
+            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />{ui("新建文件")}</ShortcutContextMenuButton>
+            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />{ui("新建文件夹")}</ShortcutContextMenuButton>
+          </div> : null}
+          {contextMenuHasFileActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--manage">
+            <span className="workspace-file-context-menu__group-label">{ui("文件操作")}</span>
+            {contextMenuCanRename ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={startWorkspaceRename}><Pencil size={14} />{ui("重命名")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanCopy ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />{ui("复制")}{contextMenu.paths.length > 1 ? uiFormat(" {0} 项", contextMenu.paths.length) : ''}</ShortcutContextMenuButton> : null}
+            {contextMenuCanCut ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />{ui("剪切")}{contextMenu.paths.length > 1 ? uiFormat(" {0} 项", contextMenu.paths.length) : ''}</ShortcutContextMenuButton> : null}
+            {contextMenuCanDownload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void downloadWorkspaceFile()}><Download size={14} />{ui("文件下载")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanPaste ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />{ui("粘贴到此处")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanUpload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />{ui("上传文件")}</ShortcutContextMenuButton> : null}
+          </div> : null}
+          {contextMenuCanDelete ? <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger workspace-file-context-menu__delete" onClick={startWorkspaceDelete}><Trash2 size={14} />{ui("删除")}{contextMenu.paths.length > 1 ? uiFormat(" {0} 项", contextMenu.paths.length) : ''}</ShortcutContextMenuButton> : null}
+        </div>,
+        document.body,
+      ) : null}
+      {mutationDialog && typeof document !== 'undefined' ? createPortal(
+        <div className={`thread-rename-backdrop remote-shell--theme-${theme}`} style={portalThemeStyle} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeWorkspaceMutation() }}>
+          <form className={`thread-rename-dialog workspace-mutation-dialog${mutationDialog.action === 'delete' ? ' thread-delete-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="workspace-mutation-title" onSubmit={(event) => { void submitWorkspaceMutation(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              {mutationDialog.action === 'delete' ? (
+                <>
+                  <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="workspace-mutation-title">{ui("删除所选内容")}</h2></div>
+                  <p>{ui("将永久删除所选内容，非空文件夹也会一并删除。此操作无法恢复。")}</p>
+                </>
+              ) : (
+                <>
+                  <h2 id="workspace-mutation-title">{mutationDialog.action === 'rename' ? ui('重命名') : mutationDialog.kind === 'directory' ? ui('新建文件夹') : ui('新建文件')}</h2>
+                  <p>{mutationDialog.action === 'rename' ? ui('请输入新的文件或文件夹名称。') : uiFormat("将在 {0} 中创建。", mutationDialog.parentPath || '当前根目录')}</p>
+                </>
+              )}
+            </div>
+            {mutationDialog.action === 'delete' ? (
+              <div className="thread-delete-dialog__thread" title={mutationDialog.paths.join('\n')}>{mutationDialog.paths.length === 1 ? mutationDialog.paths[0] : uiFormat("{0} 等 {1} 项", mutationDialog.paths[0], mutationDialog.paths.length)}</div>
+            ) : (
+              <>
+                <label htmlFor="workspace-mutation-input">{ui("名称")}</label>
+                <input
+                  id="workspace-mutation-input"
+                  type="text"
+                  value={mutationDialog.value}
+                  maxLength={255}
+                  autoComplete="off"
+                  autoFocus
+                  disabled={mutationSaving}
+                  aria-describedby={mutationError ? 'workspace-mutation-error' : undefined}
+                  onFocus={(event) => {
+                    if (mutationDialog.action !== 'rename') return
+                    const dot = event.currentTarget.value.lastIndexOf('.')
+                    event.currentTarget.setSelectionRange(0, dot > 0 ? dot : event.currentTarget.value.length)
+                  }}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    setMutationDialog((current) => current && current.action !== 'delete' ? { ...current, value } : current)
+                    setMutationError(null)
+                  }}
+                />
+              </>
+            )}
+            {mutationError ? <p className="thread-rename-dialog__error" id="workspace-mutation-error" role="alert">{uiMessage(mutationError)}</p> : null}
+            <div className={`thread-rename-dialog__actions${mutationDialog.action === 'delete' ? ' thread-delete-dialog__actions' : ''}`}>
+              <button type="button" onClick={closeWorkspaceMutation} disabled={mutationSaving}>{ui("取消")}</button>
+              <button type="submit" disabled={mutationSaving || (mutationDialog.action !== 'delete' && !mutationDialog.value.trim())}>
+                {mutationSaving ? <><LoaderCircle className="spin" size={14} />{ui("处理中")}</> : mutationDialog.action === 'delete' ? <><Trash2 size={14} />{ui("确认删除")}</> : ui('确定')}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body,
+      ) : null}
+      {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
+        <div
+          ref={selectionContextMenuElement}
+          className={`thread-context-menu workspace-file-context-menu workspace-selection-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`}
+          style={{ ...portalThemeStyle, left: selectionContextMenu.x, top: selectionContextMenu.y, maxHeight: selectionContextMenu.mobile ? `${selectionContextMenu.maxHeight}px` : undefined }}
+          role="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} {ui("· 第")} {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} {ui("行")}</div>
+          <textarea
+            className="workspace-selection-context-menu__note"
+            aria-label={ui("选区备注")}
+            placeholder={ui("写下这段代码需要修改什么…（可选）")}
+            value={selectionContextMenu.note}
+            onChange={(event) => {
+              const note = event.currentTarget.value
+              setSelectionContextMenu((current) => current ? { ...current, note } : current)
+            }}
+          />
+          <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />{ui("添加到对话")}</button>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  )
+})
+
+interface RemoteChatPaneProps {
+  paneIndex: number
+  token: string
+  translation: TranslationPreferences
+  translationRevision: number
+  remote: DevWispController
+  active: boolean
+  showActiveFrame: boolean
+  showPaneClose: boolean
+  onActivate: () => void
+  onClose: () => void
+  onCreateThread: () => void
+  claudeCodeAvailable: boolean | null
+  claudeModelOptions: ComposerMenuOption[]
+  onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
+  onOpenSidebar: () => void
+  onOpenWorkspace: () => void
+  onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
+  onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => void
+  directoryRequest: WorkspaceTerminalRequest | null
+  onDirectoryRequestHandled: (id: number) => void
+  composerHandle: RefObject<ComposerHandle | null>
+  copyFeedback: { id: string; label: string } | null
+  onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
+}
+
+const emptyOperations: CodexOperation[] = []
+const emptyFileChanges: CodexFileChange[] = []
+const emptyActivityTimeline: CodexActivityTimelineEntry[] = []
+
+function resendImageAttachments(images: CodexMessage['images']): CodexImageAttachment[] | null {
+  const attachments: CodexImageAttachment[] = []
+  for (const image of images ?? []) {
+    const match = image.previewUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/)
+    if (!match) return null
+    attachments.push({ name: image.name, mediaType: match[1] as CodexImageAttachment['mediaType'], data: match[2] })
+  }
+  return attachments
+}
+
+type TranslatedInput = { requestId: string; turnId: string; sentText: string; originalText: string }
+
+const RemoteChatPane = memo(function RemoteChatPane({
+  paneIndex,
+  token,
+  translation,
+  translationRevision,
+  remote,
+  active,
+  showActiveFrame,
+  showPaneClose,
+  onActivate,
+  onClose,
+  onCreateThread,
+  claudeCodeAvailable,
+  claudeModelOptions,
+  onSwitchEngine,
+  onOpenSidebar,
+  onOpenWorkspace,
+  onOpenWorkspaceFile,
+  onOpenWorkspaceImage,
+  directoryRequest,
+  onDirectoryRequestHandled,
+  composerHandle,
+  copyFeedback,
+  onCopy,
+}: RemoteChatPaneProps) {
+  useUiLanguage()
+  const activeThreadId = remote.activeThread?.id ?? null
+  const [translatedInputs, setTranslatedInputs] = useState<{ threadId: string; messages: TranslatedInput[] } | null>(null)
+  const [resendingMessageId, setResendingMessageId] = useState<string | null>(null)
+  const resendingMessageIdRef = useRef<string | null>(null)
+  const latestUserMarker = useMemo(() => {
+    for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
+      const message = remote.messages[index]
+      if (message.role === 'user') return `${message.id}:${message.turnId ?? ''}`
+    }
+    return ''
+  }, [remote.messages])
+  useEffect(() => {
+    if (!activeThreadId) return
+    let cancelled = false
+    const load = () => {
+      void devwispClient.translatedInputs(token, activeThreadId).then((response) => {
+        if (!cancelled) setTranslatedInputs((current) => {
+          if (current?.threadId === activeThreadId && current.messages.length > response.messages.length) return current
+          if (current?.threadId === activeThreadId
+            && current.messages.length === response.messages.length
+            && current.messages.at(-1)?.requestId === response.messages.at(-1)?.requestId) return current
+          return { threadId: activeThreadId, messages: response.messages }
+        })
+      }).catch(() => {
+        // History remains readable if the translation metadata is unavailable.
+      })
+    }
+    load()
+    const retry = window.setTimeout(load, 900)
+    return () => { cancelled = true; window.clearTimeout(retry) }
+  }, [activeThreadId, latestUserMarker, remote.queueRevision, token])
+  const originalTextByMessageId = useMemo(() => {
+    const originalText = new Map<string, string>()
+    if (translatedInputs?.threadId !== activeThreadId || !translatedInputs.messages.length) return originalText
+    const byRequestId = new Map(translatedInputs.messages.map((entry) => [entry.requestId, entry]))
+    const byTurnAndText = new Map<string, TranslatedInput[]>()
+    for (const entry of translatedInputs.messages) {
+      const key = `${entry.turnId}\u0000${entry.sentText}`
+      const matches = byTurnAndText.get(key) ?? []
+      matches.push(entry)
+      byTurnAndText.set(key, matches)
+    }
+    const used = new Set<string>()
+    const directRequestIds = new Set(remote.messages.filter((message) => message.role === 'user').map((message) => message.id))
+    for (const message of remote.messages) {
+      if (message.role !== 'user') continue
+      let entry = byRequestId.get(message.id)
+      if (!entry && message.turnId) {
+        const matches = byTurnAndText.get(`${message.turnId}\u0000${message.text}`) ?? []
+        entry = matches.find((candidate) => !used.has(candidate.requestId) && !directRequestIds.has(candidate.requestId))
+      }
+      if (entry) used.add(entry.requestId)
+      if (!message.originalText && entry?.originalText) originalText.set(message.id, entry.originalText)
+    }
+    return originalText
+  }, [activeThreadId, latestUserMarker, remote.activeThread?.historyRevision, remote.messages.length, translatedInputs])
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalMounted, setTerminalMounted] = useState(false)
+  const [terminalMountedThreadId, setTerminalMountedThreadId] = useState<string | null>(null)
+  const terminalVisible = terminalOpen && terminalMountedThreadId === activeThreadId
+  const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const [terminalRunRequest, setTerminalRunRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const [terminalSessionCwd, setTerminalSessionCwd] = useState<string | undefined>()
+  const [terminalSessionId, setTerminalSessionId] = useState(0)
+  const [terminalSessionIsolated, setTerminalSessionIsolated] = useState(false)
+  const handledDirectoryRequestId = useRef(0)
+  const [engineSwitching, setEngineSwitching] = useState(false)
+  const messageContainer = useRef<HTMLDivElement>(null)
+  const approvalModal = useRef<HTMLDivElement>(null)
+  const claudePermissionModal = useRef<HTMLDivElement>(null)
+  const messageContent = useRef<HTMLDivElement>(null)
+  const scrollAnimationFrame = useRef<number | undefined>(undefined)
+  const forceMessageStreamBottomFor = useRef<string | null>(null)
+  const forceMessageStreamBottomVersion = useRef(0)
+  const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
+  const olderMessageScrollAnchor = useRef<{ messageId: string; top: number } | null>(null)
+  const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
+  const lastMessageScrollTop = useRef(0)
+  const followMessageStream = useRef(true)
+  const upwardMessageScrollIntentUntil = useRef(0)
+  const messageTouchY = useRef<number | null>(null)
+  const messageScrollbarPointer = useRef<{ id: number; y: number } | null>(null)
+  const focusComposerAfterPaneClick = useRef(false)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const choiceReplyTarget = useRef(remote)
+  useLayoutEffect(() => {
+    choiceReplyTarget.current = remote
+  }, [remote])
+  const fillChoiceReply = useCallback((reply: string) => {
+    const currentComposer = composerHandle.current
+    if (!active || !currentComposer) return false
+    return currentComposer.appendReplyDraft(reply)
+  }, [active, composerHandle])
+  const sendChoiceReply = useCallback(async (reply: string): Promise<ChoiceReplyDelivery | false> => {
+    const target = choiceReplyTarget.current
+    if (!active || !target.activeThread) return false
+    let prompt = reply
+    const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+    if (translationForSend.enabled && containsChinese(reply)) {
+      try {
+        const result = await devwispClient.translateText(token, {
+          provider: translationForSend.provider, profileId: selectedTranslationProfileId(translationForSend), source: 'zh', target: 'en', style: translationForSend.style, text: reply,
+        })
+        prompt = result.text.trim()
+        if (!prompt) return false
+      } catch (reason) {
+        throw new Error(`答案翻译失败，尚未发送：${reason instanceof Error ? reason.message : '请检查翻译配置。'}`)
+      }
+    }
+    let delivery: ChoiceReplyDelivery = 'sent'
+    const accepted = await target.sendMessage({
+      prompt,
+      ...(prompt !== reply ? { originalText: reply } : {}),
+      images: [],
+      documents: [],
+      sendImmediately: true,
+      onDeliveryStatus: (status) => { delivery = status },
+    })
+    return accepted ? delivery : false
+  }, [active, token, translation])
+
+  const resendUserMessage = useCallback(async (message: CodexMessage) => {
+    if (!active || !activeThreadId || resendingMessageIdRef.current) return false
+    const images = resendImageAttachments(message.images)
+    if (!images) return false
+    const originalText = message.originalText ?? originalTextByMessageId.get(message.id)
+    resendingMessageIdRef.current = message.id
+    setResendingMessageId(message.id)
+    try {
+      return await remote.sendMessage({
+        prompt: message.text,
+        ...(originalText && originalText !== message.text ? { originalText } : {}),
+        images,
+        documents: message.documents?.map(({ name, content, sourceFileId }) => ({
+          name,
+          content,
+          ...(sourceFileId ? { sourceFileId } : {}),
+        })) ?? [],
+      })
+    } finally {
+      if (resendingMessageIdRef.current === message.id) {
+        resendingMessageIdRef.current = null
+        setResendingMessageId(null)
+      }
+    }
+  }, [active, activeThreadId, originalTextByMessageId, remote])
+
+  useEffect(() => {
+    if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
+    handledDirectoryRequestId.current = directoryRequest.id
+    onActivate()
+    if (directoryRequest.action === 'run') {
+      if (activeThreadId) forgetOpenTerminalThread(paneIndex, activeThreadId)
+      setTerminalMountedThreadId(activeThreadId)
+      setTerminalRunRequest(directoryRequest)
+      setTerminalDirectoryRequest(null)
+      setTerminalSessionCwd(workspaceParentPath(directoryRequest.path))
+      setTerminalSessionIsolated(true)
+      setTerminalSessionId((value) => value + 1)
+    } else {
+      setTerminalDirectoryRequest(directoryRequest)
+      if (!terminalVisible) {
+        setTerminalMountedThreadId(activeThreadId)
+        setTerminalSessionCwd(undefined)
+        setTerminalSessionIsolated(false)
+      }
+      if (activeThreadId) rememberOpenTerminalThread(paneIndex, activeThreadId)
+    }
+    setTerminalMounted(true)
+    setTerminalOpen(true)
+    onDirectoryRequestHandled(directoryRequest.id)
+  }, [active, activeThreadId, directoryRequest, onActivate, onDirectoryRequestHandled, paneIndex, terminalVisible])
+
+  useLayoutEffect(() => {
+    const restore = activeThreadId !== null && isOpenTerminalThread(paneIndex, activeThreadId)
+    setTerminalOpen(restore)
+    setTerminalMounted(restore)
+    setTerminalMountedThreadId(restore ? activeThreadId : null)
+    setTerminalSessionIsolated(false)
+    setTerminalSessionCwd(undefined)
+    setTerminalRunRequest(null)
+    setTerminalDirectoryRequest(null)
+  }, [activeThreadId, paneIndex])
+
+  const closeTerminal = useCallback(() => {
+    if (terminalMountedThreadId) forgetOpenTerminalThread(paneIndex, terminalMountedThreadId)
+    setTerminalOpen(false)
+  }, [paneIndex, terminalMountedThreadId])
+  const handleTerminalDirectoryRequestConsumed = useCallback((id: number) => {
+    setTerminalDirectoryRequest((current) => current?.id === id ? null : current)
+  }, [])
+  const handleTerminalRunRequestConsumed = useCallback((id: number) => {
+    setTerminalRunRequest((current) => current?.id === id ? null : current)
+  }, [])
+  const insertTerminalText = useCallback((value: string) => {
+    if (value.length >= longPasteThreshold) {
+      composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
+    } else {
+      composerHandle.current?.insertDraftAtCursor(value, true)
+    }
+  }, [composerHandle])
+  useEffect(() => {
+    if (active && remote.approval) approvalModal.current?.focus()
+    if (active && remote.claudePermission) claudePermissionModal.current?.focus()
+  }, [active, remote.approval?.method, remote.approval?.requestId, remote.claudePermission?.permissionId])
+  const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
+    ? remote.approval.params.threadId
+    : null
+  const approvalThread = approvalThreadId
+    ? remote.threads.find((thread) => thread.id === approvalThreadId)
+      ?? (remote.activeThread?.id === approvalThreadId ? remote.activeThread : null)
+    : null
+  const approvalSource = approvalThread ? titleOf(approvalThread) : approvalThreadId ? ui('其他对话') : null
+  const [messageWindow, setMessageWindow] = useState(() => recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
+  const visibleStartIndex = visibleTurnMessageStart(messageWindow, activeThreadId ?? null, remote.messages)
+  const visibleMessages = useMemo(() => remote.messages.slice(visibleStartIndex), [remote.messages, visibleStartIndex])
+  const insertChangedFileIntoConversation = useCallback((path: string) => {
+    const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
+    onActivate()
+    window.requestAnimationFrame(() => composerHandle.current?.appendDraft(fileReference, true))
+  }, [composerHandle, onActivate, remote.activeThread?.cwd, remote.runtime.workspace])
+  const openChangedFilePreview = useCallback((path: string, diff?: string) => {
+    const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
+    onActivate()
+    onOpenWorkspaceFile(workspaceRelativePath(cwd, path), cwd, diff)
+  }, [onActivate, onOpenWorkspaceFile, remote.activeThread?.cwd, remote.runtime.workspace])
+  const openViewedImagePreview = useCallback((path: string) => {
+    const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
+    onActivate()
+    onOpenWorkspaceImage(path, cwd, remote.activeThread?.id)
+  }, [onActivate, onOpenWorkspaceImage, remote.activeThread?.cwd, remote.activeThread?.id, remote.runtime.workspace])
+
+  const positionMessageStreamAtBottom = useCallback(() => {
+    const container = messageContainer.current
+    if (container) {
+      container.scrollTop = container.scrollHeight
+      lastMessageScrollTop.current = container.scrollTop
+    }
+  }, [])
+
+  const markUpwardMessageScrollIntent = useCallback(() => {
+    // Layout changes can also move scrollTop; only recent input may pause following.
+    upwardMessageScrollIntentUntil.current = window.performance.now() + 750
+  }, [])
+  const pauseFollowOnOriginalToggle = useCallback(() => {
+    // Expanding/collapsing the translated original inside a message changes the
+    // stream height; without pausing following the resize observer would yank
+    // the view back to the bottom and blink the just-opened text away.
+    followMessageStream.current = false
+    upwardMessageScrollIntentUntil.current = window.performance.now() + 750
+    setShowScrollToBottom(true)
+  }, [])
+
+  const handleMessageWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
+    if (event.deltaY < 0) markUpwardMessageScrollIntent()
+    else if (event.deltaY > 0) upwardMessageScrollIntentUntil.current = 0
+  }, [markUpwardMessageScrollIntent])
+
+  const handleMessageTouchStart = useCallback((event: ReactTouchEvent<HTMLElement>) => {
+    messageTouchY.current = event.touches.length === 1 ? event.touches[0].clientY : null
+  }, [])
+
+  const handleMessageTouchMove = useCallback((event: ReactTouchEvent<HTMLElement>) => {
+    const y = event.touches.length === 1 ? event.touches[0].clientY : null
+    if (y === null) {
+      messageTouchY.current = null
+      return
+    }
+    const previousY = messageTouchY.current
+    if (previousY !== null && y > previousY + 1) {
+      markUpwardMessageScrollIntent()
+      messageTouchY.current = y
+    } else if (previousY !== null && y < previousY - 1) {
+      upwardMessageScrollIntentUntil.current = 0
+      messageTouchY.current = y
+    } else if (previousY === null) {
+      messageTouchY.current = y
+    }
+  }, [markUpwardMessageScrollIntent])
+
+  const handleMessageKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented || event.altKey
+      || ((event.ctrlKey || event.metaKey) && event.key !== 'Home' && event.key !== 'End')
+      || event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]')) return
+    if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home' || (event.key === ' ' && event.shiftKey)) {
+      markUpwardMessageScrollIntent()
+    } else if (event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'End' || (event.key === ' ' && !event.shiftKey)) {
+      upwardMessageScrollIntentUntil.current = 0
+    }
+  }, [markUpwardMessageScrollIntent])
+
+  const handleMessagePointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType === 'touch' || event.button !== 0) return
+    const container = event.currentTarget
+    if (container.scrollHeight <= container.clientHeight) return
+    const bounds = container.getBoundingClientRect()
+    const scrollbarWidth = Math.max(container.offsetWidth - container.clientWidth, 12)
+    if (event.clientX < bounds.right - scrollbarWidth || event.clientX > bounds.right) return
+    messageScrollbarPointer.current = { id: event.pointerId, y: event.clientY }
+    markUpwardMessageScrollIntent()
+  }, [markUpwardMessageScrollIntent])
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const pointer = messageScrollbarPointer.current
+      if (!pointer || pointer.id !== event.pointerId) return
+      if (event.clientY < pointer.y - 1) markUpwardMessageScrollIntent()
+      else if (event.clientY > pointer.y + 1) upwardMessageScrollIntentUntil.current = 0
+      pointer.y = event.clientY
+    }
+    const onPointerEnd = (event: PointerEvent) => {
+      if (messageScrollbarPointer.current?.id === event.pointerId) messageScrollbarPointer.current = null
+    }
+    window.addEventListener('pointermove', onPointerMove, true)
+    window.addEventListener('pointerup', onPointerEnd, true)
+    window.addEventListener('pointercancel', onPointerEnd, true)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove, true)
+      window.removeEventListener('pointerup', onPointerEnd, true)
+      window.removeEventListener('pointercancel', onPointerEnd, true)
+      messageScrollbarPointer.current = null
+    }
+  }, [markUpwardMessageScrollIntent])
+
+  const forceMessageStreamToBottom = useCallback((threadId: string | null | undefined) => {
+    forceMessageStreamBottomFor.current = threadId ?? null
+    forceMessageStreamBottomVersion.current += 1
+    if (forceMessageStreamBottomTimer.current !== undefined) {
+      window.clearTimeout(forceMessageStreamBottomTimer.current)
+      forceMessageStreamBottomTimer.current = undefined
+    }
+    if (scrollAnimationFrame.current !== undefined) {
+      window.cancelAnimationFrame(scrollAnimationFrame.current)
+      scrollAnimationFrame.current = undefined
+    }
+    followMessageStream.current = true
+    upwardMessageScrollIntentUntil.current = 0
+    messageTouchY.current = null
+    messageScrollbarPointer.current = null
+    setShowScrollToBottom(false)
+  }, [])
+
+  const settleForcedMessageStreamBottom = useCallback(() => {
+    const threadId = activeThreadId
+    if (!threadId || remote.loadingHistory || forceMessageStreamBottomFor.current !== threadId) return
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+    const version = forceMessageStreamBottomVersion.current
+    const timer = window.setTimeout(() => {
+      if (forceMessageStreamBottomVersion.current === version && forceMessageStreamBottomFor.current === threadId) {
+        forceMessageStreamBottomFor.current = null
+      }
+      if (forceMessageStreamBottomTimer.current === timer) forceMessageStreamBottomTimer.current = undefined
+    }, 360)
+    forceMessageStreamBottomTimer.current = timer
+  }, [activeThreadId, remote.loadingHistory])
+
+  const handleMessageScroll = useCallback(() => {
+    const container = messageContainer.current
+    if (!container) return
+    const scrollTop = container.scrollTop
+    const movedUp = scrollTop < lastMessageScrollTop.current - 1
+    lastMessageScrollTop.current = scrollTop
+    if (forceMessageStreamBottomFor.current === activeThreadId) return
+    const atBottom = container.scrollHeight - scrollTop - container.clientHeight < 72
+    if (atBottom) followMessageStream.current = true
+    else if (movedUp && window.performance.now() <= upwardMessageScrollIntentUntil.current) followMessageStream.current = false
+    const showScrollToBottom = !followMessageStream.current
+    setShowScrollToBottom((current) => current === showScrollToBottom ? current : showScrollToBottom)
+    if (atBottom) {
+      setMessageWindow((current) => current.threadId === activeThreadId && !current.anchoredToLatest
+        ? recentTurnMessageWindow(activeThreadId ?? null, remote.messages)
+        : current)
+    }
+  }, [activeThreadId, remote.messages])
+
+  const scrollToBottom = useCallback(() => {
+    followMessageStream.current = true
+    upwardMessageScrollIntentUntil.current = 0
+    setShowScrollToBottom(false)
+    setMessageWindow(recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
+    positionMessageStreamAtBottom()
+  }, [activeThreadId, positionMessageStreamAtBottom, remote.messages])
+
+  const loadEarlierMessages = useCallback(() => {
+    if (visibleStartIndex === 0) return
+    const firstMessage = messageContent.current?.querySelector<HTMLElement>('[data-message-id]')
+    olderMessageScrollAnchor.current = firstMessage?.dataset.messageId
+      ? { messageId: firstMessage.dataset.messageId, top: firstMessage.getBoundingClientRect().top }
+      : null
+    followMessageStream.current = false
+    forceMessageStreamBottomFor.current = null
+    forceMessageStreamBottomVersion.current += 1
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
+    forceMessageStreamBottomTimer.current = undefined
+    scrollAnimationFrame.current = undefined
+    setShowScrollToBottom(true)
+    setMessageWindow((current) => earlierTurnMessageWindow(current, activeThreadId ?? null, remote.messages))
+  }, [activeThreadId, remote.messages, visibleStartIndex])
+
+  useLayoutEffect(() => {
+    if (!active) return
+    forceMessageStreamToBottom(activeThreadId)
+    olderMessageScrollAnchor.current = null
+    setMessageWindow(recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
+  }, [active, activeThreadId, forceMessageStreamToBottom])
+
+  useLayoutEffect(() => {
+    let latestUserMessageId: string | null = null
+    for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
+      const message = remote.messages[index]
+      if (message?.role === 'user') {
+        latestUserMessageId = message.id
+        break
+      }
+    }
+    const previous = lastObservedUserMessage.current
+    lastObservedUserMessage.current = { threadId: activeThreadId ?? null, messageId: latestUserMessageId }
+    if (!active || !activeThreadId || remote.loadingHistory || previous.threadId !== activeThreadId) return
+    if (!latestUserMessageId || latestUserMessageId === previous.messageId) return
+    setMessageWindow(recentTurnMessageWindow(activeThreadId, remote.messages))
+    forceMessageStreamToBottom(activeThreadId)
+  }, [active, activeThreadId, forceMessageStreamToBottom, remote.loadingHistory, remote.messages])
+
+  const scheduleMessageStreamScroll = useCallback(() => {
+    if (scrollAnimationFrame.current !== undefined) return
+    scrollAnimationFrame.current = window.requestAnimationFrame(() => {
+      scrollAnimationFrame.current = undefined
+      const forced = forceMessageStreamBottomFor.current === activeThreadId
+      if (!forced && !followMessageStream.current) return
+      positionMessageStreamAtBottom()
+      followMessageStream.current = true
+      setShowScrollToBottom(false)
+      if (forced) settleForcedMessageStreamBottom()
+    })
+  }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
+
+  useLayoutEffect(() => {
+    scheduleMessageStreamScroll()
+  }, [active, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, scheduleMessageStreamScroll, visibleStartIndex])
+
+  useLayoutEffect(() => {
+    const anchor = olderMessageScrollAnchor.current
+    if (!anchor) return
+    olderMessageScrollAnchor.current = null
+    const container = messageContainer.current
+    const message = [...(messageContent.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])]
+      .find((element) => element.dataset.messageId === anchor.messageId)
+    if (container && message) container.scrollTop += message.getBoundingClientRect().top - anchor.top
+  }, [visibleStartIndex])
+
+  useLayoutEffect(() => {
+    const content = messageContent.current
+    if (!content || typeof ResizeObserver === 'undefined') return
+    // Streaming commits and image/font resizes share one scroll measurement per
+    // frame, rather than forcing layout from both effects and ResizeObserver.
+    const observer = new ResizeObserver(scheduleMessageStreamScroll)
+    observer.observe(content)
+    if (messageContainer.current) observer.observe(messageContainer.current)
+    return () => observer.disconnect()
+  }, [scheduleMessageStreamScroll])
+
+  useEffect(() => () => {
+    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+  }, [])
+
+  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : ui('新对话')
+  const currentConnectionLabel = remote.handedOff
+    ? ui('已交还给本机')
+    : connectionLabel[remote.connection]
+  const activeEngineLabel = remote.activeEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const assistantModelOptions = useMemo<ComposerMenuOption[]>(() => remote.activeEngine === 'claude-code'
+    ? claudeModelOptions
+    : remote.models.flatMap((model) => {
+      const id = modelIdOf(model)
+      return id ? [{ value: id, label: modelLabelOf(model) }] : []
+    }), [remote.activeEngine, remote.models, claudeModelOptions])
+  const targetEngine = remote.activeEngine === 'claude-code' ? 'codex' : 'claude-code'
+  const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
+  const engineSwitchLabel = claudeCodeUnavailable
+    ? ui('Claude Code 不可用')
+    : uiFormat('切换到 {0} 聊天', targetEngineLabel)
+  let streamingAssistant: CodexMessage | undefined
+  for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
+    const message = remote.messages[index]
+    if (message.role === 'assistant' && message.streaming) {
+      streamingAssistant = message
+      break
+    }
+  }
+  const hasStreamingAssistant = Boolean(streamingAssistant)
+  const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
+  const activeTurnStartedAt = remote.turnStartedAt ?? (Number.isFinite(streamingStartedAt) ? streamingStartedAt : null)
+  const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? emptyOperations : emptyOperations
+  const runningTimeline = remote.runningTurnId ? remote.activityTimelineByTurn[remote.runningTurnId] ?? emptyActivityTimeline : emptyActivityTimeline
+  const runningOperationTimeline = runningTimeline.filter((entry) => entry.type === 'operation')
+  const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
+  const lastMessageIndexByTurn = useMemo(() => {
+    const indexes = new Map<string, number>()
+    visibleMessages.forEach((message, index) => {
+      if (message.turnId) indexes.set(message.turnId, visibleStartIndex + index)
+    })
+    return indexes
+  }, [visibleMessages, visibleStartIndex])
+  const lastAssistantMessageIndexByTurn = useMemo(() => {
+    const indexes = new Map<string, number>()
+    visibleMessages.forEach((message, index) => {
+      if (message.role === 'assistant' && message.turnId) indexes.set(message.turnId, visibleStartIndex + index)
+    })
+    return indexes
+  }, [visibleMessages, visibleStartIndex])
+  const choiceStartIndex = useMemo(() => assistantChoiceStartIndex(remote.messages), [remote.messages])
+  const isPaneReplying = remote.isRunning || remote.runningTurnId !== null || remote.messages[remote.messages.length - 1]?.streaming === true
+  const handlePanePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    const target = event.target
+    focusComposerAfterPaneClick.current = !active && event.pointerType === 'mouse' && event.button === 0
+      && target instanceof Element
+      && !target.closest('a, button, input, textarea, select, label, [contenteditable="true"], [role="button"], [role="radio"], [role="checkbox"], [role="option"], .terminal-dialog, .chat-overlay-panel')
+    onActivate()
+  }
+  const handlePaneClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!focusComposerAfterPaneClick.current) return
+    focusComposerAfterPaneClick.current = false
+    const selection = window.getSelection()
+    if (selection && !selection.isCollapsed && selection.anchorNode && event.currentTarget.contains(selection.anchorNode)) return
+    window.requestAnimationFrame(() => composerHandle.current?.focusInput())
+  }
+  return (
+    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}${isPaneReplying ? ' conversation-pane--replying' : ''}`} onPointerDown={handlePanePointerDown} onClick={handlePaneClick}>
+      {showActiveFrame ? <span className="conversation-pane__breath" data-pane-border-breath-layer aria-hidden="true" ref={active && isPaneReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'pane-border-breathe') scheduleReplyBreatheSync() }} /> : null}
+      <header className="remote-chat__header">
+        <div className="remote-chat__title-wrap">
+          <button className="icon-button menu-button" type="button" aria-label={ui("打开对话列表")} onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
+          <div className="remote-chat__title"><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || ui('本机项目')}</span></div>
+        </div>
+        <div className="remote-chat__controls">
+          <button
+            className="icon-button engine-switch-button"
+            type="button"
+            aria-label={engineSwitchLabel}
+            title={engineSwitchLabel}
+            disabled={claudeCodeUnavailable || engineSwitching}
+            onClick={async (event) => {
+              event.stopPropagation()
+              if (claudeCodeUnavailable || engineSwitching) return
+              setEngineSwitching(true)
+              try {
+                await onSwitchEngine(targetEngine)
+              } finally {
+                setEngineSwitching(false)
+              }
+            }}
+          >
+            <EngineBrandIcon engine={targetEngine} />
+          </button>
+          <button
+            className={`icon-button terminal-open-button${terminalVisible ? ' terminal-open-button--active' : ''}`}
+            type="button"
+            aria-label={terminalVisible ? ui('关闭本机终端') : ui('打开本机终端')}
+            title={terminalVisible ? ui('关闭本机终端') : ui('本机终端')}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (terminalVisible) {
+                closeTerminal()
+              } else {
+                onActivate()
+                if (!terminalMounted || !terminalSessionIsolated && terminalMountedThreadId !== activeThreadId) {
+                  setTerminalMountedThreadId(activeThreadId)
+                  setTerminalSessionCwd(undefined)
+                  setTerminalSessionIsolated(false)
+                  setTerminalRunRequest(null)
+                }
+                if (activeThreadId) rememberOpenTerminalThread(paneIndex, activeThreadId)
+                setTerminalMounted(true)
+                setTerminalOpen(true)
+              }
+            }}
+          >
+            {terminalVisible ? <X size={16} /> : <TerminalIcon size={16} />}
+          </button>
+          <button className="icon-button mobile-workspace-button" type="button" aria-label={ui("打开文件树")} title={ui("打开文件树")} onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
+          {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label={ui("关闭并发窗口")} title={ui("关闭并发窗口")}><X size={15} /></button> : null}
+        </div>
+      </header>
+
+      <section
+        className={`message-stream${showScrollToBottom ? '' : ' message-stream--following'}`}
+        ref={messageContainer}
+        tabIndex={0}
+        onScroll={handleMessageScroll}
+        onWheelCapture={handleMessageWheel}
+        onTouchStartCapture={handleMessageTouchStart}
+        onTouchMoveCapture={handleMessageTouchMove}
+        onTouchEndCapture={() => { messageTouchY.current = null }}
+        onTouchCancelCapture={() => { messageTouchY.current = null }}
+        onKeyDownCapture={handleMessageKeyDown}
+        onPointerDownCapture={handleMessagePointerDown}
+        aria-live="polite"
+        aria-label={uiFormat("{0} {1} 对话", activeTitle, activeEngineLabel)}
+      >
+        <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
+          {remote.handedOff ? <div className="handoff-notice" role="status"><strong>{ui("已交还给本机 Codex")}</strong><span>{ui("网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。")}</span></div> : null}
+          {remote.messages.length === 0 && !remote.loadingHistory ? (
+            <div className="welcome-state">
+              <WelcomeTypingTitle text={remote.activeEngine === 'claude-code' ? '与 Claude Code 完成一个伟大项目' : '与 Codex 完成一个伟大项目'} />
+            </div>
+          ) : null}
+          {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />{ui("正在加载对话…")}</div> : null}
+          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>{ui("查看更早对话（还有")} {visibleStartIndex} {ui("条消息）")}</button> : null}
+          {visibleMessages.map((message, visibleIndex) => {
+            const index = visibleStartIndex + visibleIndex
+            const turnComplete = !message.streaming && message.turnId !== remote.runningTurnId
+            const changes = turnComplete && message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
+              ? remote.fileChangesByTurn[message.turnId]
+              : undefined
+            const operations = message.role === 'assistant' && message.turnId
+              ? remote.operationsByTurn[message.turnId] ?? emptyOperations
+              : emptyOperations
+            const operationFileChanges = message.turnId
+              ? remote.fileChangesByTurn[message.turnId] ?? emptyFileChanges
+              : emptyFileChanges
+            const showOperations = message.role === 'assistant'
+              && (!message.turnId || lastAssistantMessageIndexByTurn.get(message.turnId) === index)
+            const activityTimeline = showOperations && message.turnId
+              ? remote.activityTimelineByTurn[message.turnId] ?? emptyActivityTimeline
+              : emptyActivityTimeline
+            return (
+              <Fragment key={message.id}>
+                <MessageBubble
+                  token={token}
+                  translation={translation}
+                  translationRevision={translationRevision}
+                  message={message}
+                  originalTextOverride={originalTextByMessageId.get(message.id)}
+                  assistantName={activeEngineLabel}
+                  operations={operations}
+                  fileChanges={operationFileChanges}
+                  activityTimeline={activityTimeline}
+                  showOperations={showOperations}
+                  choiceVisible={active && message.role === 'assistant'}
+                  choiceEnabled={active && message.role === 'assistant' && index >= choiceStartIndex}
+                  onUseChoices={fillChoiceReply}
+                  onSendChoices={sendChoiceReply}
+                  assistantModelOptions={assistantModelOptions}
+                  copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
+                  onCopy={onCopy}
+                  onResend={resendUserMessage}
+                  resendingMessageId={resendingMessageId}
+                  canResend={active && Boolean(activeThreadId)}
+                  onOpenOriginal={pauseFollowOnOriginalToggle}
+                  onOpenFile={openChangedFilePreview}
+                  onOpenImage={openViewedImagePreview}
+                />
+                {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
+              </Fragment>
+            )
+          })}
+          {!remote.loadingHistory && (remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant) ? (
+            <div className="running-indicator" role="status" aria-live="polite">
+              <div className="running-indicator__row">
+                <OperationActivityLine className={`running-indicator__activity${remote.activeEngine === 'claude-code' && !currentRunningOperation && (!remote.activity || remote.activity.label === '正在思考') ? ' running-indicator__activity--claude-thinking' : ''}`} operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+                {activeTurnStartedAt !== null ? <TurnElapsed startedAt={activeTurnStartedAt} /> : null}
+              </div>
+              {!hasStreamingAssistant && runningOperations.length > 0 ? (
+                runningOperationTimeline.length > 0
+                  ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
+                  : <OperationLog operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </section>
+      {active && remote.approval ? <div
+        ref={approvalModal}
+        className="approval-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={ui("Codex 授权请求")}
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (remote.approval?.method === 'item/tool/requestUserInput') remote.respondToApproval({ answers: {} })
+          else if (remote.approval?.method === 'mcpServer/elicitation/request') remote.respondToApproval({ action: 'decline' })
+          else remote.respondToApproval('decline')
+        }}
+      >
+        <ServerRequestCard
+          key={`${remote.approval.method}:${remote.approval.requestId}`}
+          request={remote.approval}
+          source={approvalSource}
+          sourceIsCurrent={approvalThreadId === activeThreadId}
+          onOpenSource={() => {
+            if (approvalThreadId && approvalThreadId !== activeThreadId) window.DevWispOpenThread?.(approvalThreadId)
+          }}
+          onRespond={remote.respondToApproval}
+        />
+      </div> : null}
+      {active && remote.claudePermission ? <div
+        ref={claudePermissionModal}
+        className="approval-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={ui("Claude 权限请求")}
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          void remote.respondToClaudePermission(false)
+        }}
+      >
+        <ClaudePermissionCard
+          key={remote.claudePermission.permissionId}
+          request={remote.claudePermission}
+          onRespond={remote.respondToClaudePermission}
+        />
+      </div> : null}
+      {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label={ui("回到底部")} title={ui("回到底部")}><ChevronDown size={16} /><span>{ui("回到底部")}</span></button> : null}
+      {remote.error ? (
+        <div className="remote-error" role="alert">
+          <AlertTriangle size={15} /><span>{uiMessage(remote.error)}</span>
+          {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />{ui("新建远程对话")}</button> : null}
+        </div>
+      ) : null}
+      {terminalMounted && terminalMountedThreadId === activeThreadId ? (
+        <TerminalRecoveryBoundary key={terminalSessionIsolated ? `run-${terminalSessionId}` : activeThreadId ?? 'no-thread'} onClose={closeTerminal} hidden={!terminalVisible}>
+          <Suspense fallback={(
+            <ChatOverlayPanel
+              ariaLabel={ui("本机终端")}
+              backdropLabel={ui("关闭本机终端")}
+              className="terminal-dialog"
+              onClose={closeTerminal}
+              hidden={!terminalVisible}
+              showCloseButton={false}
+              header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>{ui("本机终端")}</strong></div>}
+            >
+              <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />{ui("正在加载终端…")}</div>
+            </ChatOverlayPanel>
+          )}>
+            <TerminalDialog
+              key={terminalSessionId}
+              token={token}
+              engine={remote.activeEngine}
+              visible={terminalVisible}
+              threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
+              cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
+              directoryRequest={terminalDirectoryRequest}
+              onDirectoryRequestConsumed={handleTerminalDirectoryRequestConsumed}
+              runRequest={terminalRunRequest}
+              onRunRequestConsumed={handleTerminalRunRequestConsumed}
+              onClose={closeTerminal}
+              onInsertText={insertTerminalText}
+            />
+          </Suspense>
+        </TerminalRecoveryBoundary>
+      ) : null}
+    </main>
+  )
+})
+
+export function DevWispPage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
+  useUiLanguage()
+  const [initialPaneLayout] = useState(readPersistedPaneLayout)
+  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout?.openPaneIndexes ?? [0])
+  const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout?.selectedPaneIndex ?? 0)
+  const paneLayoutRef = useRef(initialPaneLayout)
+  const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const workspaceTerminalRequestSequence = useRef(0)
+  const composerHeightMemory = useRef<ComposerHeightMemory | null>(null)
+  const remote0 = useDevWisp(token, onUnauthorized, { persistActiveThread: true, initialThreadId: initialPaneLayout ? initialPaneLayout.threadIdsByPane['0'] ?? null : undefined, initialEngine: initialPaneLayout?.enginesByPane['0'], enabled: true })
+  const remote1 = useDevWisp(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['1'], initialEngine: initialPaneLayout?.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useDevWisp(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['2'], initialEngine: initialPaneLayout?.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote3 = useDevWisp(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['3'], initialEngine: initialPaneLayout?.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useDevWisp(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['4'], initialEngine: initialPaneLayout?.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remotes = [remote0, remote1, remote2, remote3, remote4]
+  const remotesRef = useRef(remotes)
+  remotesRef.current = remotes
+  const activeRemote = remotes[selectedPaneIndex] ?? remote0
+  const isClaudeCodeThread = activeRemote.activeEngine === 'claude-code'
+  const [continuation, setContinuation] = useState<{ paneIndex: number; threadId: string; turnId: string | null; phase: 'stopping' | 'ready' | 'continuing' } | null>(null)
+  const continuationRef = useRef(continuation)
+  continuationRef.current = continuation
+  const activeContinuation = continuation?.paneIndex === selectedPaneIndex
+    && continuation.threadId === activeRemote.activeThread?.id ? continuation : null
+  const canContinue = Boolean(activeContinuation?.phase === 'ready' && !activeRemote.isRunning && !activeRemote.isInterrupting
+    && activeRemote.connection === 'connected' && !activeRemote.writerConflict)
+
+  const updateContinuation = useCallback((next: typeof continuation) => {
+    continuationRef.current = next
+    setContinuation(next)
+  }, [])
+
+  const pauseCurrentReply = useCallback(() => {
+    if (!activeRemote.isRunning || activeRemote.isInterrupting) return
+    const threadId = activeRemote.activeThread?.id
+    if (!threadId) {
+      void activeRemote.interrupt()
+      return
+    }
+    const next = { paneIndex: selectedPaneIndex, threadId, turnId: activeRemote.runningTurnId, phase: 'stopping' as const }
+    updateContinuation(next)
+    void activeRemote.interrupt().then((accepted) => {
+      if (continuationRef.current !== next) return
+      updateContinuation(accepted ? { ...next, phase: 'ready' } : null)
+    })
+  }, [activeRemote.isRunning, activeRemote.isInterrupting, activeRemote.activeThread?.id, activeRemote.runningTurnId, activeRemote.interrupt, selectedPaneIndex, updateContinuation])
+
+  useEffect(() => {
+    if (activeContinuation?.turnId && activeRemote.isRunning && activeRemote.runningTurnId
+      && activeRemote.runningTurnId !== activeContinuation.turnId && !activeRemote.isInterrupting) {
+      updateContinuation(null)
+    }
+  }, [activeContinuation, activeRemote.isInterrupting, activeRemote.isRunning, activeRemote.runningTurnId, updateContinuation])
+
+  useLayoutEffect(() => {
+    const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
+      const threadId = remotes[paneIndex]?.activeThread?.id
+      return threadId ? [[String(paneIndex), threadId]] : []
+    }))
+    const enginesByPane = Object.fromEntries(openPaneIndexes.map((paneIndex) => [String(paneIndex), remotes[paneIndex].activeEngine]))
+    const layout = { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
+    paneLayoutRef.current = layout
+    savePersistedPaneLayout(layout)
+  }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id, remote0.activeEngine, remote1.activeEngine, remote2.activeEngine, remote3.activeEngine, remote4.activeEngine])
+
+  useLayoutEffect(() => {
+    const persistLayout = () => {
+      if (paneLayoutRef.current) savePersistedPaneLayout(paneLayoutRef.current)
+    }
+    window.addEventListener('pagehide', persistLayout)
+    return () => {
+      window.removeEventListener('pagehide', persistLayout)
+      persistLayout()
+    }
+  }, [])
+
+  const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
+    const remote = remotes[paneIndex]
+    return remote?.isRunning && remote.runningTurnId
+      && remote.fileChangesByTurn[remote.runningTurnId]?.some((change) => change.changes.length > 0)
+  })
+  const runningFileChangeSummary = useMemo(() => {
+    if (!activeRemote.isRunning || !activeRemote.runningTurnId) return null
+    return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
+  }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
+  const [claudeModelOptions, setClaudeModelOptions] = useState<ComposerMenuOption[]>(defaultClaudeModelOptions)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarSearch, setSidebarSearch] = useState('')
+  const [sidebarEngineFilter, setSidebarEngineFilter] = useState<ChatEngine | null>(null)
+  const newThreadEngine = sidebarEngineFilter ?? activeRemote.activeEngine
+  const [sidebarChatShortcuts, setSidebarChatShortcuts] = useState(readSidebarChatShortcuts)
+  useEffect(() => saveSidebarChatShortcuts(sidebarChatShortcuts), [sidebarChatShortcuts])
+  const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
+  const [selectedSidebarThreadIds, setSelectedSidebarThreadIds] = useState<Set<string>>(() => new Set())
+  const [sidebarSelectionBusy, setSidebarSelectionBusy] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaceCollapsed, setWorkspaceCollapsed] = useState(readWorkspaceExplorerCollapsed)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(workspaceExplorerCollapsedStorageKey, String(workspaceCollapsed))
+    } catch {
+      // Keep the current layout even when browser storage is unavailable.
+    }
+  }, [workspaceCollapsed])
+  const [workspaceDragging, setWorkspaceDragging] = useState(false)
+  const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
+  const [retroSidePanelWidth, setRetroSidePanelWidth] = useState(readRetroSidePanelWidth)
+  const [workspaceResizing, setWorkspaceResizing] = useState(false)
+  const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
+  const [sidebarDragging, setSidebarDragging] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(() => (getPanelRouteEntry() ?? getPanelHistoryEntry(window.history.state)) === 'settings')
+  const [usageStatsOpen, setUsageStatsOpen] = useState(() => (getPanelRouteEntry() ?? getPanelHistoryEntry(window.history.state)) === 'usage-stats')
+  const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
+  const [translationPreferences, setTranslationPreferences] = useState<TranslationPreferences>(readTranslationPreferences)
+  const [translationRevision, setTranslationRevision] = useState(0)
+  const updateTranslationPreferences = useCallback((next: TranslationPreferences) => {
+    saveTranslationPreferences(next)
+    setTranslationPreferences(next)
+  }, [])
+  useEffect(() => {
+    const syncTranslationPreferences = () => {
+      const stored = readTranslationPreferencesIfAvailable()
+      if (!stored) return
+      setTranslationPreferences((current) => JSON.stringify(current) === JSON.stringify(stored) ? current : stored)
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === translationPreferencesStorageKey) syncTranslationPreferences()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncTranslationPreferences()
+    }
+    window.addEventListener('storage', onStorage)
+    window.addEventListener('focus', syncTranslationPreferences)
+    window.addEventListener('pageshow', syncTranslationPreferences)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('focus', syncTranslationPreferences)
+      window.removeEventListener('pageshow', syncTranslationPreferences)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
+  const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
+  const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
+  const [copyFeedback, setCopyFeedback] = useState<{ id: string; label: string } | null>(null)
+  const [completionToast, setCompletionToast] = useState<CodexThreadCompletion | null>(null)
+  const [paneNotice, setPaneNotice] = useState<string | null>(null)
+  const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const threadContextMenuElement = useRef<HTMLDivElement>(null)
+  useContextMenuShortcuts(threadContextMenuElement, threadContextMenu)
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
+  const [scheduledThreadIds, setScheduledThreadIds] = useState<Set<string>>(() => new Set())
+  const [threadContextAction, setThreadContextAction] = useState<{ threadId: string; type: 'export' | 'quote' } | null>(null)
+  const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
+  const [threadRenameDraft, setThreadRenameDraft] = useState('')
+  const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
+  const [threadRenameSaving, setThreadRenameSaving] = useState(false)
+  const [threadDeleteTargets, setThreadDeleteTargets] = useState<CodexThread[] | null>(null)
+  const [threadDeleteError, setThreadDeleteError] = useState<string | null>(null)
+  const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
+  const [threadDeleteProgress, setThreadDeleteProgress] = useState(0)
+  const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
+
+  useEffect(() => {
+    const routePanel = getPanelRouteEntry()
+    const statePanel = getPanelHistoryEntry(window.history.state)
+    if (!routePanel) {
+      if (statePanel) {
+        window.history.replaceState(panelState(window.history.state, statePanel), '', panelRouteHref(statePanel))
+      }
+      return
+    }
+    if (statePanel === routePanel) return
+    if (statePanel) {
+      window.history.replaceState(panelState(window.history.state, routePanel), '', panelRouteHref(routePanel))
+      return
+    }
+
+    // A directly opened panel URL gets a chat entry before it, so closing the
+    // panel and browser back behave the same as opening it from the sidebar.
+    const rootState = panelState(window.history.state, null)
+    window.history.replaceState(rootState, '', panelRouteHref(null))
+    window.history.pushState(panelState(rootState, routePanel), '', panelRouteHref(routePanel))
+  }, [])
+
+  useEffect(() => {
+    setSidebarSelectionMode(false)
+    setSelectedSidebarThreadIds(new Set())
+  }, [isClaudeCodeThread])
+
+  useEffect(() => {
+    let current = true
+    let checking = false
+    setClaudeCodeAvailable(null)
+    const refreshClaudeStatus = async () => {
+      if (!current || checking || document.visibilityState === 'hidden') return
+      checking = true
+      try {
+        const [status, models] = await Promise.allSettled([
+          devwispClient.claudeStatus(token), devwispClient.claudeModels(token),
+        ])
+        if (current) {
+          setClaudeCodeAvailable(status.status === 'fulfilled' ? status.value.available : false)
+          if (models.status === 'fulfilled') setClaudeModelOptions((previous) =>
+            JSON.stringify(previous) === JSON.stringify(models.value) ? previous : models.value)
+        }
+      } catch {
+        if (current) setClaudeCodeAvailable(false)
+      } finally {
+        checking = false
+      }
+    }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshClaudeStatus()
+    }
+    void refreshClaudeStatus()
+    const interval = window.setInterval(() => void refreshClaudeStatus(), 30_000)
+    window.addEventListener('focus', refreshWhenVisible)
+    window.addEventListener('devwisp:native-config-changed', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      current = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshWhenVisible)
+      window.removeEventListener('devwisp:native-config-changed', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [token])
+  const openSettingsPanel = useCallback((section?: SettingsSectionId) => {
+    if (section) saveActiveSettingsSection(section)
+    openPanelHistoryEntry('settings')
+    setWorkspacePreviewRequest(null)
+    setUsageStatsOpen(false)
+    setSettingsOpen(true)
+    setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const openUsageStatsPanel = useCallback(() => {
+    openPanelHistoryEntry('usage-stats')
+    setWorkspacePreviewRequest(null)
+    setSettingsOpen(false)
+    setUsageStatsOpen(true)
+    setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const openSidebarPanel = useCallback(() => {
+    const focused = document.activeElement
+    if (isMobileLayout() && focused instanceof HTMLTextAreaElement && focused.closest('.message-composer')) focused.blur()
+    setWorkspaceOpen(false)
+    setSidebarOpen(true)
+  }, [])
+  const openWorkspacePanel = useCallback(() => {
+    const mobileLayout = isMobileLayout()
+    setSidebarOpen(false)
+    setWorkspaceOpen(mobileLayout)
+    if (mobileLayout) return
+    setWorkspaceCollapsed(false)
+  }, [])
+  const collapseWorkspacePanel = useCallback(() => {
+    setWorkspaceOpen(false)
+    setWorkspaceCollapsed(true)
+  }, [])
+  const closeSettingsPanel = useCallback(() => {
+    setSettingsOpen(false)
+    setUsageStatsOpen(false)
+    if (getPanelHistoryEntry(window.history.state)) window.history.back()
+    else if (getPanelRouteEntry()) window.history.replaceState(panelState(window.history.state, null), '', panelRouteHref(null))
+  }, [])
+  const closeUsageStatsPanel = useCallback(() => {
+    setUsageStatsOpen(false)
+    if (getPanelHistoryEntry(window.history.state)) window.history.back()
+    else if (getPanelRouteEntry()) window.history.replaceState(panelState(window.history.state, null), '', panelRouteHref(null))
+  }, [])
+  const updateCPAUsageSettings = useCallback((nextSettings: CPAUsageSettings) => {
+    saveCPAUsageSettings(nextSettings)
+    setCpaUsageSettings(nextSettings)
+  }, [])
+  const composerHandle = useRef<ComposerHandle>(null)
+  const focusComposerAfterThreadSwitch = useRef<string | null>(null)
+  const focusComposerAfterPaneShortcut = useRef(false)
+  const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
+  const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
+  const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
+  const panelDragFrame = useRef<number | null>(null)
+  const pendingPanelDragStyles = useRef<{
+    sidebarOffset?: number
+    sidebarBackdropOpacity?: number
+    workspaceOffset?: number
+    workspaceBackdropOpacity?: number
+  } | null>(null)
+  const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
+  const copyResetTimer = useRef<number | undefined>(undefined)
+  const paneNoticeTimer = useRef<number | undefined>(undefined)
+  const notifiedSystemEvents = useRef(new Set<string>())
+  const systemThreadOpener = useRef<(threadId: string) => void>(() => undefined)
+  const paneGrid = useRef<HTMLDivElement>(null)
+  const paneRects = useRef(new Map<number, DOMRect>())
+  const remoteShell = useRef<HTMLDivElement>(null)
+  const sidebarPanel = useRef<HTMLElement>(null)
+  const workspacePanel = useRef<HTMLElement>(null)
+  const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
+  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number; currentWidth: number; retro: boolean } | null>(null)
+  const workspacePreviewSequence = useRef(0)
+  const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
+  const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => {
+    if (panelDragFrame.current !== null) window.cancelAnimationFrame(panelDragFrame.current)
+  }, [])
+
+  const notifySystemOnce = useCallback((eventKey: string, title: string, body: string, threadId: string) => {
+    if (!themePreferences.systemNotificationsEnabled || notifiedSystemEvents.current.has(eventKey)) return false
+    if (!sendSystemNotification(title, body, threadId, eventKey)) return false
+    notifiedSystemEvents.current.add(eventKey)
+    if (notifiedSystemEvents.current.size > 256) {
+      const oldest = notifiedSystemEvents.current.values().next().value
+      if (typeof oldest === 'string') notifiedSystemEvents.current.delete(oldest)
+    }
+    return true
+  }, [themePreferences.systemNotificationsEnabled])
+
+  function openThreadContextMenu(thread: CodexThread, x: number, y: number) {
+    setThreadContextMenu({
+      thread,
+      x: Math.max(8, Math.min(x, window.innerWidth - 174)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 290)),
+    })
+  }
+
+  function clearThreadLongPress() {
+    const pending = threadLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+    threadLongPress.current = null
+  }
+
+  function handleThreadTouchStart(event: ReactTouchEvent<HTMLButtonElement>, thread: CodexThread) {
+    clearThreadLongPress()
+    if (!isMobileLayout() || event.touches.length !== 1) return
+    const touch = event.touches[0]
+    if (!touch) return
+    const pending = {
+      threadId: thread.id,
+      x: touch.clientX,
+      y: touch.clientY,
+      timer: 0,
+      triggered: false,
+    }
+    pending.timer = window.setTimeout(() => {
+      if (threadLongPress.current !== pending) return
+      pending.triggered = true
+      openThreadContextMenu(thread, pending.x, pending.y)
+    }, 520)
+    threadLongPress.current = pending
+  }
+
+  function handleThreadTouchMove(event: ReactTouchEvent<HTMLButtonElement>) {
+    const pending = threadLongPress.current
+    const touch = event.touches[0]
+    if (!pending || !touch || Math.abs(touch.clientX - pending.x) > 10 || Math.abs(touch.clientY - pending.y) > 10) {
+      clearThreadLongPress()
+    }
+  }
+
+  function startThreadRename(thread: CodexThread) {
+    setThreadContextMenu(null)
+    setThreadRenameTarget(thread)
+    setThreadRenameDraft((thread.name || thread.preview || '').slice(0, 72))
+    setThreadRenameError(null)
+  }
+
+  function closeThreadRename() {
+    if (threadRenameSaving) return
+    setThreadRenameTarget(null)
+    setThreadRenameError(null)
+  }
+
+  async function submitThreadRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!threadRenameTarget || threadRenameSaving) return
+    const name = threadRenameDraft.trim().replace(/\s+/g, ' ')
+    if (!name) {
+      setThreadRenameError('对话名称不能为空。')
+      return
+    }
+    if (name.length > 72) {
+      setThreadRenameError('对话名称不能超过 72 个字符。')
+      return
+    }
+    setThreadRenameSaving(true)
+    setThreadRenameError(null)
+    try {
+      await remote0.renameThread(threadRenameTarget.id, name)
+      setThreadRenameTarget(null)
+    } catch (reason) {
+      setThreadRenameError(reason instanceof Error ? reason.message : '重命名失败，请稍后重试。')
+    } finally {
+      setThreadRenameSaving(false)
+    }
+  }
+
+  function startThreadDelete(thread: CodexThread) {
+    setThreadContextMenu(null)
+    setThreadDeleteTargets([thread])
+    setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
+
+  function closeThreadDelete() {
+    if (threadDeleteSaving) return
+    setThreadDeleteTargets(null)
+    setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
+
+  function applyDeletedThread(thread: CodexThread, pinnedIds: string[]) {
+    const deletedPaneIndex = paneIndexForThread(thread.id)
+    if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex) {
+      setOpenPaneIndexes((current) => current.length > 1 ? current.filter((index) => index !== deletedPaneIndex) : current)
+    }
+    for (const remote of remotes) remote.removeDeletedThread(thread.id)
+    setPinnedThreadIds(new Set(pinnedIds))
+    setCompletionToast((current) => current?.threadId === thread.id ? null : current)
+    setThreadComposerPreferences((current) => {
+      if (!(thread.id in current)) return current
+      const next = { ...current }
+      delete next[thread.id]
+      return next
+    })
+    const draftScope = composerDraftScopeForThread(thread.id)
+    saveComposerDraft(draftScope, '')
+    forgetComposerTableDraft(draftScope)
+    forgetComposerImageDraftTarget(draftScope)
+    void saveComposerImageDraft(draftScope, []).catch(() => undefined)
+    setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
+  }
+
+  async function submitThreadDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!threadDeleteTargets?.length || threadDeleteSaving) return
+    const targets = threadDeleteTargets
+    const isBatch = sidebarSelectionMode
+    setThreadDeleteSaving(true)
+    setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+    const failed: CodexThread[] = []
+    let firstError = ''
+    for (const thread of targets) {
+      let pinnedIds: string[]
+      try {
+        const result = await devwispClient.deleteThread(token, thread.id)
+        pinnedIds = result.thread_ids
+      } catch (reason) {
+        failed.push(thread)
+        if (!firstError) firstError = reason instanceof Error ? reason.message : '删除聊天失败，请稍后重试。'
+        setThreadDeleteProgress((count) => count + 1)
+        continue
+      }
+      // The server has already deleted this thread; local cleanup must not turn it into a retry target.
+      try { applyDeletedThread(thread, pinnedIds) } catch (reason) { console.error('Failed to clean up deleted thread locally', reason) }
+      setThreadDeleteProgress((count) => count + 1)
+    }
+    const deletedCount = targets.length - failed.length
+    if (isBatch) {
+      setSelectedSidebarThreadIds(new Set(failed.map((thread) => thread.id)))
+      if (failed.length === 0) setSidebarSelectionMode(false)
+    }
+    if (failed.length > 0) {
+      setThreadDeleteTargets(failed)
+      setThreadDeleteError(isBatch ? `已删除 ${deletedCount} 个，${failed.length} 个失败：${firstError}` : firstError)
+    } else {
+      setThreadDeleteTargets(null)
+      showPaneNotice(isBatch ? `已删除 ${deletedCount} 个聊天` : `已删除“${titleOf(targets[0])}”`)
+    }
+    setThreadDeleteSaving(false)
+  }
+
+  function applyPendingPanelDragStyles() {
+    const pending = pendingPanelDragStyles.current
+    pendingPanelDragStyles.current = null
+    if (!pending) return
+    if (pending.sidebarOffset !== undefined) sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', `${pending.sidebarOffset}px`)
+    if (pending.sidebarBackdropOpacity !== undefined) remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(pending.sidebarBackdropOpacity))
+    if (pending.workspaceOffset !== undefined) workspacePanel.current?.style.setProperty('--workspace-drag-offset', `${pending.workspaceOffset}px`)
+    if (pending.workspaceBackdropOpacity !== undefined) remoteShell.current?.style.setProperty('--workspace-backdrop-opacity', String(pending.workspaceBackdropOpacity))
+  }
+
+  function cancelPanelDragFrame(flush = false) {
+    if (panelDragFrame.current !== null) {
+      window.cancelAnimationFrame(panelDragFrame.current)
+      panelDragFrame.current = null
+    }
+    if (flush) applyPendingPanelDragStyles()
+    else pendingPanelDragStyles.current = null
+  }
+
+  function schedulePanelDragStyles(styles: NonNullable<typeof pendingPanelDragStyles.current>) {
+    pendingPanelDragStyles.current = styles
+    if (panelDragFrame.current !== null) return
+    panelDragFrame.current = window.requestAnimationFrame(() => {
+      panelDragFrame.current = null
+      applyPendingPanelDragStyles()
+    })
+  }
+
+  function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    cancelPanelDragFrame()
+    if (!isMobileLayout() || event.touches.length !== 1) {
+      const previousStart = sidebarTouchStart.current
+      sidebarTouchStart.current = null
+      if (sidebarDrag.current?.active) {
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+        setSidebarDragging(false)
+        setSidebarOpen(previousStart?.panelWasOpen ?? sidebarOpen)
+      }
+      if (workspaceDrag.current?.active) {
+        remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
+        setWorkspaceDragging(false)
+        setWorkspaceOpen(previousStart?.panelWasOpen ?? workspaceOpen)
+      }
+      sidebarDrag.current = null
+      workspaceDrag.current = null
+      return
+    }
+    const touch = event.touches[0]
+    if (!touch) return
+    const globalOverlayOpen = settingsOpen || usageStatsOpen
+      || Boolean(threadRenameTarget)
+      || Boolean(threadDeleteTargets)
+      || Boolean(threadContextMenu)
+      || workspacePreviewModeRef.current === 'mobile'
+    if (globalOverlayOpen) {
+      sidebarTouchStart.current = beginMobileGlobalBackGesture(touch.clientX, touch.clientY, window.innerWidth, true)
+      sidebarDrag.current = null
+      workspaceDrag.current = null
+      return
+    }
+    const target = event.target
+    const targetElement = target instanceof Element ? target : null
+    const startedOnBackdrop = Boolean(targetElement?.closest('.sidebar-backdrop, .workspace-backdrop'))
+    const startedInsideSidebar = sidebarOpen && Boolean(targetElement?.closest('.remote-sidebar'))
+    const startedOnInteractiveSurface = Boolean(targetElement?.closest([
+      'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
+      '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
+      '.chat-message__code', '.workspace-file-preview__code', '.workspace-file-preview-panel',
+      '.chat-overlay-backdrop', '.theme-settings-panel', '.thread-context-menu',
+      '.thread-rename-backdrop', '.message-composer',
+    ].join(', ')))
+    const startedOnWorkspaceEntry = Boolean(targetElement?.closest('.workspace-explorer__entry'))
+    const startedInsideWorkspacePanel = workspaceOpen
+      && Boolean(targetElement?.closest('.workspace-explorer'))
+      && (!startedOnInteractiveSurface || startedOnWorkspaceEntry)
+    const start = startedInsideSidebar
+      ? { panel: 'sidebar' as const, x: touch.clientX, y: touch.clientY, panelWasOpen: true }
+      : startedInsideWorkspacePanel
+        ? { panel: 'workspace' as const, x: touch.clientX, y: touch.clientY, panelWasOpen: true }
+      : startedOnInteractiveSurface && !startedOnBackdrop
+        ? null
+        : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
+    const sidebarPanelWidth = sidebarPanel.current?.getBoundingClientRect().width || Math.min(window.innerWidth * 0.78, 320)
+    sidebarTouchStart.current = start
+    sidebarDrag.current = start?.panel === 'sidebar'
+      ? {
+        panelWidth: sidebarPanelWidth,
+        offset: sidebarOpen ? 0 : -sidebarPanelWidth * 1.05,
+        active: false,
+      }
+      : null
+    workspaceDrag.current = start?.panel === 'workspace'
+      ? {
+        panelWidth: Math.min(window.innerWidth * 0.67, 256),
+        offset: workspaceOpen ? 0 : Math.min(window.innerWidth * 0.67, 256) * 1.05,
+        active: false,
+      }
+      : null
+  }
+
+  function handleSidebarTouchMove(event: ReactTouchEvent<HTMLDivElement>) {
+    const drag = sidebarDrag.current
+    const workspace = workspaceDrag.current
+    const start = sidebarTouchStart.current
+    const touch = event.touches[0]
+    if ((!drag && !workspace) || !start || !touch || event.touches.length !== 1) return
+
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+    if ((!drag || !drag.active) && (!workspace || !workspace.active)) {
+      if (Math.abs(deltaX) < 8 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return
+      if (drag) drag.active = true
+      if (workspace) workspace.active = true
+      if (drag) setSidebarDragging(true)
+      if (workspace) setWorkspaceDragging(true)
+    }
+
+    if (drag) {
+      drag.offset = mobileSidebarDragOffset(sidebarOpen, drag.panelWidth, deltaX)
+      const visibleRatio = Math.max(0, Math.min(1, (drag.panelWidth + drag.offset) / drag.panelWidth))
+      schedulePanelDragStyles({
+        sidebarOffset: drag.offset,
+        sidebarBackdropOpacity: mobileSidebarBackdropOpacity(visibleRatio),
+      })
+    }
+    if (workspace) {
+      workspace.offset = mobileWorkspaceDragOffset(workspaceOpen, workspace.panelWidth, deltaX)
+      const visibleRatio = Math.max(0, Math.min(1, 1 - workspace.offset / (workspace.panelWidth * 1.05)))
+      schedulePanelDragStyles({
+        workspaceOffset: workspace.offset,
+        workspaceBackdropOpacity: mobileSidebarBackdropOpacity(visibleRatio),
+      })
+    }
+    if (event.cancelable) event.preventDefault()
+  }
+
+  function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
+    cancelPanelDragFrame(true)
+    const start = sidebarTouchStart.current
+    const drag = sidebarDrag.current
+    const workspace = workspaceDrag.current
+    sidebarTouchStart.current = null
+    sidebarDrag.current = null
+    workspaceDrag.current = null
+    const touch = event.changedTouches[0]
+    if (!start || !touch) {
+      if (drag?.active) {
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+        setSidebarDragging(false)
+        setSidebarOpen(start?.panelWasOpen ?? sidebarOpen)
+      }
+      if (workspace?.active) {
+        remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
+        setWorkspaceDragging(false)
+        setWorkspaceOpen(start?.panelWasOpen ?? workspaceOpen)
+      }
+      return
+    }
+    const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
+    if (drag?.active) {
+      const shouldOpen = shouldOpenMobileSidebarAfterDrag(drag.offset, drag.panelWidth, action)
+      if (shouldOpen) openSidebarPanel()
+      else setSidebarOpen(false)
+      window.requestAnimationFrame(() => {
+        setSidebarDragging(false)
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+      })
+      if (event.cancelable) event.preventDefault()
+      return
+    }
+    if (workspace?.active) {
+      const shouldOpen = shouldOpenMobileWorkspaceAfterDrag(workspace.offset, workspace.panelWidth, action)
+      if (shouldOpen) openWorkspacePanel()
+      else setWorkspaceOpen(false)
+      window.requestAnimationFrame(() => {
+        setWorkspaceDragging(false)
+        window.requestAnimationFrame(() => remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity'))
+      })
+      if (event.cancelable) event.preventDefault()
+      return
+    }
+    if (!action) return
+    event.preventDefault()
+    if (action === 'close-global') {
+      if (settingsOpen) closeSettingsPanel()
+      else if (usageStatsOpen) closeUsageStatsPanel()
+      else if (threadRenameTarget) closeThreadRename()
+      else if (threadDeleteTargets) closeThreadDelete()
+      else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
+      else if (threadContextMenu) setThreadContextMenu(null)
+    } else if (action === 'open-sidebar') openSidebarPanel()
+    else if (action === 'close-sidebar') setSidebarOpen(false)
+    else if (action === 'open-workspace') openWorkspacePanel()
+    else if (action === 'close-workspace') setWorkspaceOpen(false)
+  }
+
+  function handleSidebarTouchCancel() {
+    cancelPanelDragFrame()
+    const start = sidebarTouchStart.current
+    sidebarTouchStart.current = null
+    const drag = sidebarDrag.current
+    const workspace = workspaceDrag.current
+    sidebarDrag.current = null
+    workspaceDrag.current = null
+    if (drag?.active) {
+      remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+      setSidebarDragging(false)
+    }
+    if (workspace?.active) {
+      remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
+      setWorkspaceDragging(false)
+      setWorkspaceOpen(start?.panelWasOpen ?? workspaceOpen)
+    }
+  }
+
+  const activeThreadId = activeRemote.activeThread?.id
+  const composerDraftScope = composerDraftScopeForThread(activeThreadId)
+  useLayoutEffect(() => {
+    if (!focusComposerAfterPaneShortcut.current) return
+    focusComposerAfterPaneShortcut.current = false
+    if (shouldAutoFocusComposer()) composerHandle.current?.focusInput()
+  }, [selectedPaneIndex])
+  useLayoutEffect(() => {
+    if (!activeThreadId || focusComposerAfterThreadSwitch.current !== activeThreadId) return
+    focusComposerAfterThreadSwitch.current = null
+    composerHandle.current?.focusInput()
+  }, [activeThreadId])
+  function requestComposerFocusForThread(threadId: string) {
+    if (!shouldAutoFocusComposer()) {
+      focusComposerAfterThreadSwitch.current = null
+      return
+    }
+    focusComposerAfterThreadSwitch.current = threadId
+    if (activeThreadId !== threadId) return
+    window.requestAnimationFrame(() => {
+      if (focusComposerAfterThreadSwitch.current !== threadId) return
+      focusComposerAfterThreadSwitch.current = null
+      composerHandle.current?.focusInput()
+    })
+  }
+  const activeWorkspaceDraft = workspaceDraftSnapshot?.scope === composerDraftScope
+    ? workspaceDraftSnapshot.draft
+    : readComposerDraft(composerDraftScope)
+  const syncWorkspaceDraft = useCallback((draft: string) => {
+    setWorkspaceDraftSnapshot({ scope: composerDraftScope, draft })
+  }, [composerDraftScope])
+  const savedComposerPreferences = useMemo(() => activeThreadId
+    ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
+    : defaultComposerPreferences, [activeThreadId, defaultComposerPreferences, threadComposerPreferences])
+  const [temporaryPreferencesByScope, setTemporaryPreferencesByScope] = useState<Record<string, TemporaryModelPreferences>>({})
+  const preferencesScope = `${selectedPaneIndex}:${activeRemote.activeEngine}:${activeThreadId ?? 'new'}`
+  const temporaryPreferences = temporaryPreferencesByScope[preferencesScope]
+  const activeComposerPreferences = temporaryPreferences ? { ...savedComposerPreferences, ...temporaryPreferences } : savedComposerPreferences
+  const changeTemporaryPreferences = useCallback((enabled: boolean) => {
+    setTemporaryPreferencesByScope((current) => {
+      const next = { ...current }
+      if (enabled) next[preferencesScope] = {
+        model: savedComposerPreferences.model,
+        effort: savedComposerPreferences.effort,
+        claudeModel: savedComposerPreferences.claudeModel,
+        claudeEffort: savedComposerPreferences.claudeEffort,
+      }
+      else delete next[preferencesScope]
+      return next
+    })
+  }, [preferencesScope, savedComposerPreferences])
+  const selectedModel = isClaudeCodeThread
+    ? activeComposerPreferences.claudeModel ?? 'default'
+    : activeComposerPreferences.model ?? ''
+  const selectedEffort = isClaudeCodeThread
+    ? activeComposerPreferences.claudeEffort ?? 'default'
+    : activeComposerPreferences.effort ?? ''
+  const selectedApprovalPolicy = activeComposerPreferences.approvalPolicy ?? 'on-request'
+  const selectedClaudePermissionMode = activeComposerPreferences.claudePermissionMode ?? 'default'
+  const availableModels = useMemo(() => {
+    const source = remotes.find((remote) => remote.models.length > 0)
+    return source?.models ?? []
+  }, [remote0.models, remote1.models, remote2.models, remote3.models, remote4.models])
+  const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
+  const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
+  const darkStatusBarIcons = shouldUseDarkStatusBarIcons(themePreferences)
+  const themeStyle = {
+    ...themeRootStyle(themePreferences),
+    '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
+    '--retro-side-panel-width': retroSidePanelWidth === null
+      ? 'clamp(144px, 174.4px, min(40vw, calc(50vw - 124px)))'
+      : `clamp(144px, ${retroSidePanelWidth}px, min(40vw, calc(50vw - 124px)))`,
+  } as CSSProperties
+
+  useEffect(() => {
+    window.DevWispAndroid?.setStatusBarDarkIcons?.(darkStatusBarIcons)
+  }, [darkStatusBarIcons])
+
+  const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
+    if (temporaryPreferences && ('model' in changes || 'effort' in changes || 'claudeModel' in changes || 'claudeEffort' in changes)) {
+      setTemporaryPreferencesByScope((current) => ({
+        ...current,
+        [preferencesScope]: { ...current[preferencesScope], ...changes },
+      }))
+      return
+    }
+    if (!activeThreadId) {
+      setDefaultComposerPreferences((current) => mergeComposerPreferences(current, changes))
+      return
+    }
+    setThreadComposerPreferences((current) => ({
+      ...current,
+      [activeThreadId]: mergeComposerPreferences(
+        resolvedComposerPreferences(defaultComposerPreferences, current[activeThreadId]),
+        changes,
+      ),
+    }))
+  }, [activeThreadId, defaultComposerPreferences, preferencesScope, temporaryPreferences])
+
+  const rememberThreadComposerPreferences = useCallback((threadId: string, preferences: ComposerPreferences) => {
+    if (!threadId) return
+    const snapshot = composerPreferencesFrom(preferences)
+    setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
+  }, [])
+
+  useEffect(() => {
+    const onNativeConfigChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine?: string; model?: string }>).detail
+      if (detail?.engine !== 'codex' || !detail.model) return
+      const model = detail.model
+      setDefaultComposerPreferences((current) => mergeComposerPreferences(current, { model }))
+      if (!isClaudeCodeThread) updateComposerPreferences({ model })
+    }
+    window.addEventListener('devwisp:native-models-loaded', onNativeConfigChanged)
+    return () => window.removeEventListener('devwisp:native-models-loaded', onNativeConfigChanged)
+  }, [isClaudeCodeThread, updateComposerPreferences])
+
+  const changeModel = useCallback((model: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeModel: model } : { model }), [isClaudeCodeThread, updateComposerPreferences])
+  const changeEffort = useCallback((effort: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeEffort: effort } : { effort }), [isClaudeCodeThread, updateComposerPreferences])
+  const changeClaudePermissionMode = useCallback((claudePermissionMode: ClaudeCodePermissionMode) => updateComposerPreferences({ claudePermissionMode }), [updateComposerPreferences])
+  const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => {
+    updateComposerPreferences({ approvalPolicy })
+  }, [updateComposerPreferences])
+
+  useEffect(() => {
+    saveComposerPreferences(defaultComposerPreferences)
+  }, [defaultComposerPreferences])
+
+  useEffect(() => {
+    saveThreadComposerPreferences(threadComposerPreferences)
+  }, [threadComposerPreferences])
+
+  useEffect(() => {
+    const syncSettingsFromHistory = (event: PopStateEvent) => {
+      const panel = getPanelHistoryEntry(event.state) ?? getPanelRouteEntry()
+      setSettingsOpen(panel === 'settings')
+      setUsageStatsOpen(panel === 'usage-stats')
+    }
+    window.addEventListener('popstate', syncSettingsFromHistory)
+    return () => window.removeEventListener('popstate', syncSettingsFromHistory)
+  }, [])
+
+  useEffect(() => {
+    if (!settingsOpen && !usageStatsOpen) return
+    const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      if (isMobileLayout()) return
+      if (openSettingsSelectMenu()) return
+      event.preventDefault()
+      event.stopPropagation()
+      closeSettingsPanel()
+    }
+    document.addEventListener('keydown', closeOnDesktopEscape, true)
+    return () => document.removeEventListener('keydown', closeOnDesktopEscape, true)
+  }, [closeSettingsPanel, settingsOpen, usageStatsOpen])
+
+  useEffect(() => {
+    if (!threadContextMenu) return
+    const closeMenu = () => setThreadContextMenu(null)
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setThreadContextMenu(null)
+    }
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [threadContextMenu])
+
+  useEffect(() => () => {
+    const pending = threadLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+  }, [])
+
+  useEffect(() => {
+    if (!threadRenameTarget) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      closeThreadRename()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [threadRenameTarget, threadRenameSaving])
+
+  useEffect(() => {
+    if (!threadDeleteTargets) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      closeThreadDelete()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [threadDeleteTargets, threadDeleteSaving])
+
+  useLayoutEffect(() => {
+    const handleBack = () => {
+      const selectMenu = openSettingsSelectMenu()
+      if (selectMenu) {
+        selectMenu.hidePopover()
+        if (selectMenu.previousElementSibling instanceof HTMLElement) selectMenu.previousElementSibling.focus({ preventScroll: true })
+        return true
+      }
+      if (settingsOpen || usageStatsOpen) {
+        closeSettingsPanel()
+        return true
+      }
+      if (threadRenameTarget) {
+        closeThreadRename()
+        return true
+      }
+      if (threadDeleteTargets) {
+        closeThreadDelete()
+        return true
+      }
+      if (workspacePreviewModeRef.current === 'mobile') {
+        workspacePreviewCloseRef.current?.()
+        return true
+      }
+      if (composerHandle.current?.closeOpenMenu()) return true
+      if (threadContextMenu) {
+        setThreadContextMenu(null)
+        return true
+      }
+      if (workspaceOpen) {
+        setWorkspaceOpen(false)
+        return true
+      }
+      if (sidebarOpen) {
+        setSidebarOpen(false)
+        return true
+      }
+      return false
+    }
+    window.DevWispHandleBack = handleBack
+    return () => {
+      if (window.DevWispHandleBack === handleBack) delete window.DevWispHandleBack
+    }
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
+
+  useEffect(() => {
+    const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      if (document.querySelector('dialog[open]')) return
+      if (threadRenameTarget || threadDeleteTargets) return
+      if (workspacePreviewModeRef.current !== null) {
+        event.preventDefault()
+        workspacePreviewCloseRef.current?.()
+        return
+      }
+      if (composerHandle.current?.closeOpenMenu()) {
+        event.preventDefault()
+        return
+      }
+      if (composerHandle.current?.cancelQueuedEdit()) {
+        event.preventDefault()
+        return
+      }
+      const pending = continuationRef.current
+      if (pending?.paneIndex === selectedPaneIndex && pending.threadId === activeRemote.activeThread?.id) {
+        event.preventDefault()
+        if (pending.phase === 'stopping') return
+        updateContinuation({ ...pending, phase: 'stopping' })
+        void activeRemote.stopInterruptedThread(pending.threadId).then((stopped) => {
+          if (continuationRef.current?.threadId !== pending.threadId) return
+          updateContinuation(stopped ? null : { ...pending, phase: 'ready' })
+        })
+        return
+      }
+      if (!activeRemote.isRunning) return
+      event.preventDefault()
+      pauseCurrentReply()
+    }
+    document.addEventListener('keydown', interruptOnEscape)
+    return () => document.removeEventListener('keydown', interruptOnEscape)
+  }, [activeRemote.activeThread?.id, activeRemote.isRunning, activeRemote.stopInterruptedThread, pauseCurrentReply, selectedPaneIndex, threadDeleteTargets, threadRenameTarget, updateContinuation])
+
+  useEffect(() => {
+    if (isClaudeCodeThread || availableModels.length === 0) return
+    if (selectedModel && availableModels.some((model) => modelIdOf(model) === selectedModel)) return
+    const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0]
+    updateComposerPreferences({ model: modelIdOf(defaultModel) })
+  }, [availableModels, isClaudeCodeThread, selectedModel, updateComposerPreferences])
+
+  useEffect(() => {
+    if (isClaudeCodeThread || availableModels.length === 0 || !chosenModel) return
+    if (effortOptions.length === 0) {
+      if (selectedEffort) updateComposerPreferences({ effort: undefined })
+      return
+    }
+    if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
+    updateComposerPreferences({ effort: chosenModel.defaultReasoningEffort ?? effortOptions[0].reasoningEffort })
+  }, [availableModels.length, chosenModel, effortOptions, isClaudeCodeThread, selectedEffort, updateComposerPreferences])
+
+  useEffect(() => {
+    const completions = remotes
+      .map((remote) => remote.latestThreadCompletion)
+      .filter((completion): completion is CodexThreadCompletion => Boolean(completion))
+      .sort((left, right) => right.completedAt - left.completedAt)
+    const latest = completions[0]
+    if (!latest) return
+    setCompletionToast(latest)
+    const timer = window.setTimeout(() => {
+      setCompletionToast((current) => current?.completedAt === latest.completedAt ? null : current)
+    }, 2_800)
+    return () => window.clearTimeout(timer)
+  }, [remote0.latestThreadCompletion, remote1.latestThreadCompletion, remote2.latestThreadCompletion, remote3.latestThreadCompletion, remote4.latestThreadCompletion])
+
+  useEffect(() => {
+    const notifyWhileBackgrounded = () => {
+      if (!themePreferences.systemNotificationsEnabled) return
+      const android = window.DevWispAndroid
+      const inBackground = android?.isAppInBackground?.() ?? document.visibilityState === 'hidden'
+      if (!inBackground) return
+
+      const now = Date.now()
+      for (const remote of remotes) {
+        const completion = remote.latestThreadCompletion
+        if (completion && now - completion.completedAt < 120_000) {
+          const thread = remote0.threads.find((item) => item.id === completion.threadId)
+            ?? remotes.find((item) => item.activeThread?.id === completion.threadId)?.activeThread
+          const title = thread ? titleOf(thread) : 'Dev Wisp'
+          notifySystemOnce(
+            `completion:${completion.threadId}:${completion.completedAt}`,
+            uiFormat('{0} 已完成回复', title),
+            ui('点按通知查看对话。'),
+            completion.threadId,
+          )
+        }
+
+        const approval = remote.approval
+        const thread = remote.activeThread
+        if (approval && thread) {
+          notifySystemOnce(
+            `approval:${thread.id}:${String(approval.requestId)}`,
+            uiFormat('{0} 需要批准', titleOf(thread)),
+            ui('Codex 正在等待你批准一项操作。'),
+            thread.id,
+          )
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', notifyWhileBackgrounded)
+    window.addEventListener('devwisp-app-background', notifyWhileBackgrounded)
+    notifyWhileBackgrounded()
+    return () => {
+      document.removeEventListener('visibilitychange', notifyWhileBackgrounded)
+      window.removeEventListener('devwisp-app-background', notifyWhileBackgrounded)
+    }
+  }, [
+    notifySystemOnce,
+    remote0.latestThreadCompletion,
+    remote0.threads,
+    remote0.approval,
+    remote0.activeThread,
+    remote1.latestThreadCompletion,
+    remote1.approval,
+    remote1.activeThread,
+    remote2.latestThreadCompletion,
+    remote2.approval,
+    remote2.activeThread,
+    remote3.latestThreadCompletion,
+    remote3.approval,
+    remote3.activeThread,
+    remote4.latestThreadCompletion,
+    remote4.approval,
+    remote4.activeThread,
+    themePreferences.systemNotificationsEnabled,
+  ])
+
+  useLayoutEffect(() => {
+    const grid = paneGrid.current
+    if (!grid) return
+    const previous = paneRects.current
+    const next = new Map<number, DOMRect>()
+    grid.querySelectorAll<HTMLElement>('[data-pane-index]').forEach((node) => {
+      const index = Number(node.dataset.paneIndex)
+      const rect = node.getBoundingClientRect()
+      next.set(index, rect)
+      const before = previous.get(index)
+      if (!before) return
+      const deltaX = before.left - rect.left
+      const deltaY = before.top - rect.top
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return
+      if (typeof node.animate === 'function') {
+        node.animate([
+          { transform: 'translate(' + deltaX + 'px, ' + deltaY + 'px)' },
+          { transform: 'translate(0, 0)' },
+        ], { duration: 220, easing: 'cubic-bezier(.22, .8, .25, 1)' })
+      }
+    })
+    paneRects.current = next
+  }, [openPaneIndexes])
+
+  useEffect(() => () => {
+    if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
+    if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const legacy = readPinnedThreadIds()
+        const result = legacy.size > 0
+          ? await devwispClient.initializePins(token, [...legacy])
+          : await devwispClient.pins(token)
+        if (legacy.size > 0) window.localStorage.removeItem(pinnedThreadIdsStorageKey)
+        if (cancelled) return
+        setPinnedThreadIds(new Set(result.thread_ids))
+      } catch (reason) {
+        if (cancelled) return
+        setPaneNotice(reason instanceof Error ? `同步置顶失败：${reason.message}` : '同步置顶失败')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [remote0.pinRevision, token])
+
+  useEffect(() => {
+    let cancelled = false
+    void devwispClient.scheduledThreadIds(token).then((result) => {
+      if (!cancelled) setScheduledThreadIds(new Set(result.thread_ids))
+    }).catch((reason: unknown) => {
+      if (!cancelled && reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+    })
+    return () => { cancelled = true }
+  }, [onUnauthorized, remote0.queueRevision, token])
+
+  function showPaneNotice(message: string) {
+    setPaneNotice(message)
+    if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
+    paneNoticeTimer.current = window.setTimeout(() => {
+      paneNoticeTimer.current = undefined
+      setPaneNotice(null)
+    }, 2_400)
+  }
+
+  async function toggleThreadPin(thread: CodexThread) {
+    const pinned = !pinnedThreadIds.has(thread.id)
+    setThreadContextMenu(null)
+    try {
+      const result = await devwispClient.setThreadPin(token, thread.id, pinned)
+      setPinnedThreadIds(new Set(result.thread_ids))
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? reason.message : '置顶操作失败')
+    }
+  }
+
+  async function readThreadTranscript(thread: CodexThread) {
+    const details = await devwispClient.readThread(token, thread.id)
+    return createThreadTranscript({ ...thread, ...details }, messagesFromThread(details))
+  }
+
+  function downloadThreadTranscript(thread: CodexThread, content: string) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = threadTranscriptFilename(thread, '对话导出')
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
+
+  async function exportThread(thread: CodexThread) {
+    if (threadContextAction) return
+    setThreadContextAction({ threadId: thread.id, type: 'export' })
+    try {
+      const transcript = await readThreadTranscript(thread)
+      downloadThreadTranscript(thread, transcript)
+      setThreadContextMenu(null)
+      showPaneNotice('已导出完整对话 Markdown')
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? `导出失败：${reason.message}` : '导出失败，请稍后重试。')
+    } finally {
+      setThreadContextAction(null)
+    }
+  }
+
+  async function quoteThread(thread: CodexThread) {
+    if (threadContextAction) return
+    setThreadContextAction({ threadId: thread.id, type: 'quote' })
+    try {
+      const transcript = await readThreadTranscript(thread)
+      const composer = composerHandle.current
+      if (!composer) throw new Error('当前输入框尚未准备好，请稍后重试。')
+      const added = composer.addDocumentAttachment({
+        name: threadTranscriptFilename(thread, '对话引用'),
+        content: transcript,
+      })
+      setThreadContextMenu(null)
+      setSidebarOpen(false)
+      if (!added) {
+        showPaneNotice('引用未加入：该对话已在输入框中，或文档数量已达上限。')
+        return
+      }
+      showPaneNotice('对话引用已加入输入框')
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? `引用失败：${reason.message}` : '引用失败，请稍后重试。')
+    } finally {
+      setThreadContextAction(null)
+    }
+  }
+
+  function paneIndexForThread(threadId: string) {
+    return openPaneIndexes.find((index) => remotes[index]?.activeThread?.id === threadId)
+  }
+
+  async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine?: ChatEngine) {
+    const target = remotes[paneIndex] ?? remote0
+    const selectedEngine = engine ?? sidebarEngineFilter ?? target.activeEngine
+    if (selectedEngine === 'claude-code' && claudeCodeAvailable === false) {
+      showPaneNotice('Claude Code 不可用')
+      return null
+    }
+    const targetThreadId = target.activeThread?.id
+    const targetPreferences = targetThreadId
+      ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
+      : savedComposerPreferences
+    const thread = await target.createThread(
+      selectedEngine === 'codex' ? targetPreferences.model : undefined,
+      selectedEngine === 'codex' ? targetPreferences.approvalPolicy : undefined,
+      undefined,
+      cwd,
+      selectedEngine,
+    )
+    if (!thread) return null
+    if (paneIndex === selectedPaneIndex && !activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
+    rememberThreadComposerPreferences(thread.id, selectedEngine === 'codex'
+      ? {
+          model: targetPreferences.model,
+          effort: targetPreferences.effort,
+          approvalPolicy: targetPreferences.approvalPolicy,
+        }
+      : {
+          claudeModel: targetPreferences.claudeModel ?? 'default',
+          claudeEffort: targetPreferences.claudeEffort ?? 'default',
+          claudePermissionMode: targetPreferences.claudePermissionMode ?? 'default',
+        })
+    if (target !== remote0) remote0.upsertThread(thread)
+    return thread
+  }
+
+  async function switchEngineForPane(paneIndex: number, engine: 'codex' | 'claude-code') {
+    const targetRemote = remotes[paneIndex] ?? remote0
+    const cwd = targetRemote.activeThread?.cwd || targetRemote.runtime.workspace || undefined
+    const threadsForEngine = (threads: CodexThread[]) => threads.filter((thread) => (thread.engine ?? 'codex') === engine)
+    const openTargetThread = remotes
+      .map((remote) => remote.activeThread)
+      .find((thread) => thread && (thread.engine ?? 'codex') === engine && (!cwd || thread.cwd === cwd))
+    let targetThreads = threadsForEngine(remote0.threads)
+    if (targetThreads.length === 0) {
+      const refreshedThreads = await remote0.refreshThreads(true)
+      targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
+    }
+    const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
+    setSidebarOpen(false)
+    if (targetThread) {
+      const existingPane = paneIndexForThread(targetThread.id)
+      if (existingPane !== undefined) {
+        setSelectedPaneIndex(existingPane)
+        return targetThread
+      }
+      activatePane(paneIndex)
+      await targetRemote.selectThread(targetThread)
+      return targetThread
+    }
+    activatePane(paneIndex)
+    return createThreadForPane(paneIndex, cwd, engine)
+  }
+
+  async function createThread() {
+    setSidebarOpen(false)
+    await createThreadForPane(selectedPaneIndex)
+  }
+
+  async function selectThread(thread: CodexThread, options?: SelectThreadOptions, focusComposer = true) {
+    if (focusComposer) requestComposerFocusForThread(thread.id)
+    else focusComposerAfterThreadSwitch.current = null
+    setSidebarOpen(false)
+    setThreadContextMenu(null)
+    const existingPane = paneIndexForThread(thread.id)
+    if (existingPane !== undefined) {
+      setSelectedPaneIndex(existingPane)
+      if (options?.refreshHistory) await remotes[existingPane].selectThread(thread, options)
+      return
+    }
+    const targetIndex = openPaneIndexes.includes(selectedPaneIndex) ? selectedPaneIndex : (openPaneIndexes[0] ?? 0)
+    setSelectedPaneIndex(targetIndex)
+    await remotes[targetIndex].selectThread(thread, options)
+  }
+
+  function openSystemNotificationThread(threadId: string) {
+    if (!threadId) return
+    if (settingsOpen || usageStatsOpen) closeSettingsPanel()
+    setWorkspaceOpen(false)
+    const thread = remote0.threads.find((item) => item.id === threadId)
+      ?? remotes.find((remote) => remote.activeThread?.id === threadId)?.activeThread
+      ?? { id: threadId } as CodexThread
+    void selectThread(thread)
+  }
+
+  systemThreadOpener.current = openSystemNotificationThread
+
+  useEffect(() => {
+    const openRequestedThread = (threadId: string) => systemThreadOpener.current(threadId)
+    window.DevWispOpenThread = openRequestedThread
+    const pendingThreadId = window.__devwispPendingThreadId
+      ?? window.DevWispAndroid?.consumeNotificationThreadId?.()
+    delete window.__devwispPendingThreadId
+    if (pendingThreadId) openRequestedThread(pendingThreadId)
+    return () => {
+      if (window.DevWispOpenThread === openRequestedThread) delete window.DevWispOpenThread
+    }
+  }, [])
+
+  async function openConcurrentThread(thread: CodexThread) {
+    setThreadContextMenu(null)
+    setSidebarOpen(false)
+    const existingPane = paneIndexForThread(thread.id)
+    if (existingPane !== undefined) {
+      if (existingPane === selectedPaneIndex) {
+        showPaneNotice('这条对话已在当前窗口；请从左侧选择另一条对话并发打开')
+        return
+      }
+      requestComposerFocusForThread(thread.id)
+      setSelectedPaneIndex(existingPane)
+      return
+    }
+    const paneLimit = concurrentPaneLimit()
+    const freePane = Array.from({ length: paneLimit }, (_, index) => index).find((index) => !openPaneIndexes.includes(index))
+    if (openPaneIndexes.length >= paneLimit || freePane === undefined) {
+      showPaneNotice(`最多同时打开 ${paneLimit} 个对话窗口`)
+      return
+    }
+    requestComposerFocusForThread(thread.id)
+    setOpenPaneIndexes((current) => [...current, freePane])
+    setSelectedPaneIndex(freePane)
+    await remotes[freePane].selectThread(thread)
+  }
+  function closePane(paneIndex: number) {
+    if (openPaneIndexes.length <= 1) return
+    forgetOpenTerminalThread(paneIndex)
+    const position = openPaneIndexes.indexOf(paneIndex)
+    const nextOpen = openPaneIndexes.filter((index) => index !== paneIndex)
+    setOpenPaneIndexes(nextOpen)
+    if (selectedPaneIndex === paneIndex) {
+      setSelectedPaneIndex(nextOpen[Math.min(Math.max(position, 0), nextOpen.length - 1)] ?? nextOpen[0] ?? 0)
+    }
+  }
+
+  function activatePane(paneIndex: number) {
+    if (openPaneIndexes.includes(paneIndex)) setSelectedPaneIndex(paneIndex)
+  }
+
+  function findCompletedThread() {
+    if (!completionToast) return undefined
+    return remote0.threads.find((item) => item.id === completionToast.threadId)
+      ?? remotes.find((remote) => remote.activeThread?.id === completionToast.threadId)?.activeThread
+  }
+
+  function openCompletedThread() {
+    if (!completionToast) return
+    const thread = findCompletedThread() ?? { id: completionToast.threadId, engine: completionToast.engine }
+    void selectThread(thread, { refreshHistory: true })
+    setCompletionToast(null)
+  }
+
+  const copyMessage = useCallback(async (message: CodexMessage, displayedText?: string) => {
+    const documentText = message.documents?.map((document) => document.sourceFileId
+      ? `\n\n[原始 PDF 附件：${document.name}]`
+      : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
+    const value = ((displayedText ?? message.text) + documentText).trim()
+    let label = '复制失败'
+    if (message.images?.length) {
+      const result = await copyTextAndImagesToClipboard(value, message.images)
+      if (result.copied) label = result.imageCount === message.images.length
+        ? '已复制'
+        : result.imageCount > 0 ? '部分图片已复制' : '仅复制文字'
+    } else if (value && await copyTextToClipboard(value)) {
+      label = '已复制'
+    }
+    setCopyFeedback({ id: message.id, label })
+    if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
+    copyResetTimer.current = window.setTimeout(() => setCopyFeedback(null), 2200)
+  }, [])
+
+  const sendComposerMessage = useCallback(async (input: ComposerSendInput) => {
+    const target = remotesRef.current[selectedPaneIndex] ?? remotesRef.current[0]
+    if (!target) return false
+    const preferences = temporaryPreferences ? savedComposerPreferences : composerPreferencesFrom(input)
+    let submittedPreferencesScope = preferencesScope
+    const sent = await target.sendMessage({
+      ...input,
+      onThreadCreated: (thread) => {
+        composerHandle.current?.adoptUnassignedDraft(thread.id, false)
+        rememberThreadComposerPreferences(thread.id, preferences)
+        if (temporaryPreferences) {
+          submittedPreferencesScope = `${selectedPaneIndex}:${target.activeEngine}:${thread.id}`
+          const nextScope = submittedPreferencesScope
+          setTemporaryPreferencesByScope((current) => {
+            if (current[preferencesScope] !== temporaryPreferences) return current
+            const next = { ...current, [nextScope]: temporaryPreferences }
+            delete next[preferencesScope]
+            return next
+          })
+        }
+      },
+    })
+    if (sent && temporaryPreferences) {
+      setTemporaryPreferencesByScope((current) => {
+        if (current[submittedPreferencesScope] !== temporaryPreferences) return current
+        const next = { ...current }
+        delete next[submittedPreferencesScope]
+        return next
+      })
+    }
+    if (sent && continuationRef.current?.paneIndex === selectedPaneIndex
+      && continuationRef.current.threadId === target.activeThread?.id) updateContinuation(null)
+    return sent
+  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences, updateContinuation])
+
+  // Keep pane event handlers stable while reading the latest committed
+  // selection and controller when the user actually performs an action.
+  const currentPaneActions = useRef({ activatePane, closePane, createThreadForPane, switchEngineForPane, createThread })
+  useLayoutEffect(() => {
+    currentPaneActions.current = { activatePane, closePane, createThreadForPane, switchEngineForPane, createThread }
+  })
+  const paneActions = useMemo(() => Array.from({ length: maxConcurrentPaneCount }, (_, paneIndex) => ({
+    onActivate: () => currentPaneActions.current.activatePane(paneIndex),
+    onClose: () => currentPaneActions.current.closePane(paneIndex),
+    onCreateThread: () => { void currentPaneActions.current.createThreadForPane(paneIndex) },
+    onSwitchEngine: (engine: ChatEngine) => currentPaneActions.current.switchEngineForPane(paneIndex, engine),
+    onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => {
+      currentPaneActions.current.activatePane(paneIndex)
+      workspacePreviewSequence.current += 1
+      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
+    },
+    onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => {
+      currentPaneActions.current.activatePane(paneIndex)
+      workspacePreviewSequence.current += 1
+      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image', viewedByCodexThreadId })
+    },
+    onDirectoryRequestHandled: (id: number) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current),
+  })), [])
+  const createComposerThread = useCallback(() => { void currentPaneActions.current.createThread() }, [])
+  const composerPortalThemeStyle = useMemo(() => themeRootStyle(themePreferences), [themePreferences])
+
+  const continueInterruptedReply = useCallback(() => {
+    if (!canContinue || !activeContinuation || continuationRef.current !== activeContinuation) return
+    const pending = { ...activeContinuation, phase: 'continuing' as const }
+    updateContinuation(pending)
+    void sendComposerMessage({ prompt: isClaudeCodeThread ? '请继续刚才中断的任务。' : '', images: [], documents: [], continuePaused: true }).then((sent) => {
+      if (!sent && continuationRef.current === pending) updateContinuation({ ...pending, phase: 'ready' })
+    })
+  }, [activeContinuation, canContinue, isClaudeCodeThread, sendComposerMessage, updateContinuation])
+
+  const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
+  const insertWorkspacePath = useCallback((path: string, focus = true) => {
+    composerHandle.current?.appendDraft(path, focus)
+  }, [])
+  const addWorkspaceDocument = useCallback((document: CodexDocumentAttachment, focus = true) => {
+    composerHandle.current?.addDocumentAttachment(document, focus)
+  }, [])
+
+  function setWorkspaceExplorerWidthValue(value: number, persist = false) {
+    const width = clampWorkspaceExplorerWidth(value)
+    workspaceExplorerWidthRef.current = width
+    remoteShell.current?.style.setProperty('--workspace-explorer-width', `${width}px`)
+    if (!persist) return width
+    setWorkspaceExplorerWidth(width)
+    try {
+      window.localStorage.setItem(workspaceExplorerWidthStorageKey, String(width))
+    } catch {
+      // The current tab still keeps the chosen width when storage is unavailable.
+    }
+    return width
+  }
+
+  function setRetroSidePanelWidthValue(value: number | null, persist = false) {
+    const width = value === null ? null : clampRetroSidePanelWidth(value)
+    setRetroSidePanelWidth(width)
+    if (!persist) return width
+    try {
+      if (width === null) window.localStorage.removeItem(retroSidePanelWidthStorageKey)
+      else window.localStorage.setItem(retroSidePanelWidthStorageKey, String(width))
+    } catch {
+      // The current tab still keeps the chosen width when storage is unavailable.
+    }
+    return width
+  }
+
+  const handleWorkspacePreviewStateChange = useCallback((open: boolean, closePreview?: () => void) => {
+    if (open) {
+      setWorkspacePreviewRequest(null)
+      workspacePreviewModeRef.current = workspacePreviewModeRef.current ?? (desktopWorkspacePreviewAvailable() ? 'desktop' : 'mobile')
+      workspacePreviewCloseRef.current = closePreview ?? null
+      return
+    }
+    workspacePreviewModeRef.current = null
+    workspacePreviewCloseRef.current = null
+  }, [])
+
+  function startWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const retro = themePreferences.theme === 'retro'
+    const startWidth = retro
+      ? sidebarPanel.current?.getBoundingClientRect().width || retroSidePanelWidth || defaultRetroSidePanelWidth()
+      : workspaceExplorerWidthRef.current
+    workspaceResizePointer.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth,
+      currentWidth: startWidth,
+      retro,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setWorkspaceResizing(true)
+  }
+
+  function moveWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = workspaceResizePointer.current
+    if (!current || current.pointerId !== event.pointerId) return
+    const requestedWidth = current.startWidth + current.startX - event.clientX
+    current.currentWidth = requestedWidth
+    if (current.retro) {
+      const width = clampRetroSidePanelWidth(requestedWidth)
+      remoteShell.current?.style.setProperty('--retro-side-panel-width', `${width}px`)
+      setRetroSidePanelWidthValue(width)
+    } else {
+      setWorkspaceExplorerWidthValue(requestedWidth)
+    }
+  }
+
+  function finishWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = workspaceResizePointer.current
+    if (!current || current.pointerId !== event.pointerId) return
+    workspaceResizePointer.current = null
+    if (current.retro) setRetroSidePanelWidthValue(current.currentWidth, true)
+    else setWorkspaceExplorerWidthValue(workspaceExplorerWidthRef.current, true)
+    setWorkspaceResizing(false)
+  }
+
+  useEffect(() => {
+    workspaceExplorerWidthRef.current = workspaceExplorerWidth
+  }, [workspaceExplorerWidth])
+
+  useEffect(() => {
+    const clampForViewport = () => {
+      const width = clampWorkspaceExplorerWidth(workspaceExplorerWidthRef.current)
+      if (width !== workspaceExplorerWidthRef.current) setWorkspaceExplorerWidthValue(width, true)
+    }
+    window.addEventListener('resize', clampForViewport)
+    return () => window.removeEventListener('resize', clampForViewport)
+  }, [])
+
+  const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : ui('新对话')
+  const sidebarCodexStatus = activeRemote.handedOff
+    ? { label: ui('Codex 已交还给本机'), state: 'handoff' }
+    : activeRemote.connection === 'connected'
+      ? { label: ui('Codex 已连接'), state: 'connected' }
+      : activeRemote.connection === 'connecting'
+        ? { label: ui('Codex 正在连接'), state: 'connecting' }
+        : activeRemote.connection === 'unavailable'
+          ? { label: ui('Codex 不可用'), state: 'unavailable' }
+          : { label: ui('Codex 连接已断开'), state: 'disconnected' }
+  const sidebarClaudeStatus = claudeCodeAvailable === null
+    ? { label: ui('正在检查 Claude Code'), state: 'connecting' }
+    : claudeCodeAvailable
+      ? { label: ui('Claude Code 可用'), state: 'connected' }
+      : { label: ui('Claude Code 不可用'), state: 'unavailable' }
+  const androidEndpointBridgeAvailable = typeof window !== 'undefined' && typeof window.DevWispAndroid?.changeEndpoint === 'function'
+  const modelSupportsImages = isClaudeCodeThread || !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
+  const modelOptions = useMemo<ComposerMenuOption[]>(() => availableModels.flatMap((model) => {
+    const id = modelIdOf(model)
+    return id ? [{ value: id, label: modelLabelOf(model) }] : []
+  }), [availableModels])
+  const reasoningOptions = useMemo<ComposerMenuOption[]>(() => effortOptions.map((option) => ({
+    value: option.reasoningEffort,
+    label: option.reasoningEffort,
+  })), [effortOptions])
+  const reasoningOptionsByModel = useMemo<Record<string, ModelReasoningOptions>>(() => {
+    const byModel: Record<string, ModelReasoningOptions> = {}
+    for (const model of availableModels) {
+      const id = modelIdOf(model)
+      if (!id) continue
+      byModel[id] = {
+        options: (model.supportedReasoningEfforts ?? []).map((option) => ({
+          value: option.reasoningEffort,
+          label: option.reasoningEffort,
+        })),
+        defaultEffort: model.defaultReasoningEffort,
+      }
+    }
+    return byModel
+  }, [availableModels])
+  const sidebarThreads = useMemo(() => [...remote0.threads]
+    .sort((left, right) => {
+      const leftPinned = pinnedThreadIds.has(left.id)
+      const rightPinned = pinnedThreadIds.has(right.id)
+      return Number(rightPinned) - Number(leftPinned)
+    }), [pinnedThreadIds, remote0.threads])
+  const normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase()
+  const visibleSidebarThreads = useMemo(() => filterSidebarThreads(sidebarThreads, sidebarEngineFilter, normalizedSidebarSearch), [normalizedSidebarSearch, sidebarEngineFilter, sidebarThreads])
+  const sidebarHasActiveFilter = Boolean(normalizedSidebarSearch || sidebarEngineFilter)
+  const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
+  const sidebarShortcutHint = `${formatSidebarChatShortcut(sidebarChatShortcuts.previous)} / ${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`
+
+  useEffect(() => {
+    const switchSidebarThread = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      const direction = matchesSidebarChatShortcut(event, sidebarChatShortcuts.previous)
+        ? -1
+        : matchesSidebarChatShortcut(event, sidebarChatShortcuts.next) ? 1 : 0
+      if (direction === 0) return
+      if (sidebarSelectionMode || sidebarSelectionBusy || activeRemote.handedOff || settingsOpen || usageStatsOpen
+        || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      const editableTarget = target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')
+      if (editableTarget && !editableTarget.matches('textarea[data-chat-composer]')) return
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return
+
+      const threads = groupedSidebarThreads.flatMap((section) => section.threads)
+      if (threads.length === 0) return
+
+      const currentIndex = threads.findIndex((thread) => thread.id === activeRemote.activeThread?.id)
+      const nextIndex = currentIndex < 0
+        ? direction > 0 ? 0 : threads.length - 1
+        : (currentIndex + direction + threads.length) % threads.length
+      const nextThread = threads[nextIndex]
+
+      event.preventDefault()
+      if (nextThread.id !== activeRemote.activeThread?.id) void selectThread(nextThread, undefined, true)
+    }
+
+    document.addEventListener('keydown', switchSidebarThread)
+    return () => document.removeEventListener('keydown', switchSidebarThread)
+  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, usageStatsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
+
+  useEffect(() => {
+    const switchConcurrentPane = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229
+        || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
+      if (direction === 0 || openPaneIndexes.length < 2) return
+      if (sidebarOpen || sidebarSelectionMode || sidebarSelectionBusy || settingsOpen || usageStatsOpen
+        || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      const editableTarget = target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')
+      if (editableTarget && !editableTarget.matches('textarea[data-chat-composer]')) return
+      if (document.querySelector('dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
+
+      const currentPosition = openPaneIndexes.indexOf(selectedPaneIndex)
+      if (currentPosition < 0) return
+      const nextPaneIndex = openPaneIndexes[(currentPosition + direction + openPaneIndexes.length) % openPaneIndexes.length]
+      if (nextPaneIndex === undefined || nextPaneIndex === selectedPaneIndex) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      focusComposerAfterPaneShortcut.current = true
+      setSelectedPaneIndex(nextPaneIndex)
+    }
+
+    document.addEventListener('keydown', switchConcurrentPane, true)
+    return () => document.removeEventListener('keydown', switchConcurrentPane, true)
+  }, [openPaneIndexes, selectedPaneIndex, sidebarOpen, sidebarSelectionMode, sidebarSelectionBusy, settingsOpen, usageStatsOpen, threadContextMenu, threadRenameTarget, threadDeleteTargets])
+
+  const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
+  const completedThread = findCompletedThread()
+
+  function toggleSidebarSelectionMode() {
+    if (sidebarSelectionBusy) return
+    setSidebarSelectionMode((current) => !current)
+    setSelectedSidebarThreadIds(new Set())
+    setThreadContextMenu(null)
+    clearThreadLongPress()
+  }
+
+  function toggleSidebarEngineFilter(engine: ChatEngine) {
+    setSidebarEngineFilter((current) => current === engine ? null : engine)
+  }
+
+  function toggleSidebarThreadSelection(threadId: string) {
+    if (sidebarSelectionBusy) return
+    setSelectedSidebarThreadIds((current) => {
+      const next = new Set(current)
+      if (next.has(threadId)) next.delete(threadId)
+      else next.add(threadId)
+      return next
+    })
+  }
+
+  async function pinSelectedSidebarThreads() {
+    if (sidebarSelectionBusy || selectedSidebarThreads.length === 0) return
+    const selected = selectedSidebarThreads
+    setSidebarSelectionBusy(true)
+    const failedIds = new Set<string>()
+    let latestPinnedIds: string[] | null = null
+    for (const thread of selected) {
+      try {
+        const result = await devwispClient.setThreadPin(token, thread.id, true)
+        latestPinnedIds = result.thread_ids
+      } catch {
+        failedIds.add(thread.id)
+      }
+    }
+    if (latestPinnedIds) setPinnedThreadIds(new Set(latestPinnedIds))
+    setSelectedSidebarThreadIds(failedIds)
+    setSidebarSelectionMode(failedIds.size > 0)
+    setSidebarSelectionBusy(false)
+    showPaneNotice(failedIds.size > 0 ? `${failedIds.size} 个聊天置顶失败，仍保持选中` : `已置顶 ${selected.length} 个聊天`)
+  }
+
+  function startBulkThreadDelete() {
+    if (sidebarSelectionBusy || selectedSidebarThreads.length === 0) return
+    setThreadDeleteTargets(selectedSidebarThreads)
+    setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
+
+  const sidebarBackdropVisible = sidebarOpen || sidebarDragging
+
+  return (
+    <div
+      ref={remoteShell}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceCollapsed ? ' remote-shell--workspace-collapsed' : '') + (settingsOpen || usageStatsOpen ? ' remote-shell--global-panel' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      style={themeStyle}
+      onTouchStartCapture={handleSidebarTouchStart}
+      onTouchMoveCapture={handleSidebarTouchMove}
+      onTouchEndCapture={handleSidebarTouchEnd}
+      onTouchCancelCapture={handleSidebarTouchCancel}
+    >
+      {!settingsOpen && !usageStatsOpen ? (
+        <button
+          className="icon-button workspace-panel-toggle"
+          type="button"
+          aria-label={workspaceCollapsed ? ui('展开文件树侧栏') : ui('收起文件树侧栏')}
+          title={workspaceCollapsed ? ui('展开文件树侧栏') : ui('收起文件树侧栏')}
+          aria-expanded={!workspaceCollapsed}
+          aria-controls="workspace-explorer-panel"
+          onClick={workspaceCollapsed ? openWorkspacePanel : collapseWorkspacePanel}
+        >
+          {workspaceCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+        </button>
+      ) : null}
+      {completionToast ? (
+        <div className={`thread-completion-toast thread-completion-toast--${completionToast.engine}`} role="status" aria-live="polite">
+          <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
+            <span className={`thread-completion-toast__icon thread-completion-toast__icon--${completionToast.engine}`}><EngineBrandIcon engine={completionToast.engine} size={16} /></span>
+            <span className="thread-completion-toast__copy"><strong>{completedThread ? uiFormat("“{0}”已完成回复", titleOf(completedThread)) : ui('一条对话已完成回复')}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} {ui("· 点击查看这条对话")}</small></span>
+          </button>
+          <button className="thread-completion-toast__close" type="button" aria-label={ui("关闭完成提示")} onClick={() => setCompletionToast(null)}><X size={15} /></button>
+        </div>
+      ) : null}
+      {paneNotice ? <div className="pane-limit-notice" role="status">{uiMessage(paneNotice)}</div> : null}
+      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label={ui("聊天记录")} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
+        <div className="remote-sidebar__heading">
+          <div className="remote-brand"><img className="remote-brand__logo" src="/devwisp-mark.png" alt="" /><span className="remote-brand__copy"><strong>Dev Wisp</strong><small>{ui("远程开发工作台")}</small></span></div>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
+            {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </button>
+          <button className="icon-button remote-sidebar__close" type="button" aria-label={ui("关闭对话列表")} onClick={() => setSidebarOpen(false)}><X size={18} /></button>
+        </div>
+        <div className="sidebar-search">
+          <Search size={15} aria-hidden="true" />
+          <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder={ui("搜索聊天记录")} aria-label={ui("搜索聊天记录")} autoComplete="off" enterKeyHint="search" />
+          {sidebarSearch ? <button type="button" aria-label={ui("清空搜索")} title={ui("清空搜索")} onClick={() => setSidebarSearch('')}><X size={14} /></button> : null}
+        </div>
+        <div className="new-thread-control">
+          <div className="sidebar-engine-filters" role="group" aria-label={ui("按聊天模式筛选")}>
+            {(['codex', 'claude-code'] as const).map((engine) => {
+              const engineLabel = engine === 'claude-code' ? 'Claude' : 'Codex'
+              const active = sidebarEngineFilter === engine
+              return <button className={`sidebar-engine-filter sidebar-engine-filter--${engine}`} type="button" key={engine} onClick={() => toggleSidebarEngineFilter(engine)} aria-label={active ? uiFormat("取消{0}筛选，显示全部聊天", engineLabel) : uiFormat("只显示{0}聊天", engineLabel)} aria-pressed={active} title={active ? uiFormat("取消{0}筛选，显示全部聊天", engineLabel) : uiFormat("只显示{0}聊天", engineLabel)}><EngineBrandIcon engine={engine} size={17} /></button>
+            })}
+          </div>
+        </div>
+        <div className="thread-list-heading">
+          <span>{normalizedSidebarSearch ? ui('搜索结果') : sidebarEngineFilter === 'codex' ? ui('Codex 对话') : sidebarEngineFilter === 'claude-code' ? ui('Claude 对话') : ui('聊天记录')}</span>
+          <small className="thread-list-heading__shortcut" title={uiFormat("上一条：{0}；下一条：{1}", formatSidebarChatShortcut(sidebarChatShortcuts.previous), formatSidebarChatShortcut(sidebarChatShortcuts.next))}>{sidebarShortcutHint}</small>
+          <div className="thread-list-heading__actions">
+            <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? ui('取消') : ui('选择')}</button>
+          </div>
+        </div>
+        {sidebarSelectionMode ? <div className="sidebar-selection-bar">
+          <div className="sidebar-selection-bar__summary"><span>{ui("已选")} {selectedSidebarThreads.length} {ui("个聊天")}</span><button type="button" onClick={() => setSelectedSidebarThreadIds((current) => new Set([...current, ...visibleSidebarThreads.map((thread) => thread.id)]))} disabled={sidebarSelectionBusy || visibleSidebarThreads.length === 0}>{ui("全选")}</button><button type="button" onClick={() => setSelectedSidebarThreadIds(new Set())} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{ui("清空")}</button></div>
+          <div className="sidebar-selection-bar__actions"><button type="button" onClick={() => void pinSelectedSidebarThreads()} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{sidebarSelectionBusy ? <LoaderCircle className="spin" size={14} /> : <Pin size={14} />}{ui("置顶")}</button><button className="sidebar-selection-bar__delete" type="button" onClick={startBulkThreadDelete} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}><Trash2 size={14} />{ui("删除")}</button></div>
+        </div> : null}
+        <nav className="thread-list">
+          {groupedSidebarThreads.map((section) => <Fragment key={section.label}>
+            <div className="thread-list__section">{ui(section.label)}</div>
+            {section.threads.map((thread) => {
+              const paneIndex = paneIndexForThread(thread.id)
+              const threadRemote = paneIndex === undefined ? null : remotes[paneIndex]
+              const isReplying = threadRemote
+                ? threadRemote.isRunning || threadRemote.runningTurnId !== null || threadRemote.messages.at(-1)?.streaming === true
+                : threadIsRunning(thread)
+              const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
+              const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
+              const isPinned = pinnedThreadIds.has(thread.id)
+              const hasScheduledMessage = scheduledThreadIds.has(thread.id)
+              const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
+              const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+              return (
+                <div className={'thread-row-item' + (isActive ? ' thread-row-item--active' : '') + (isSelected ? ' thread-row-item--selected' : '') + (isReplying ? ' thread-row-item--replying' : '')} key={thread.id}>
+                  <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe' || event.animationName === 'thread-row-reply-breathe') scheduleReplyBreatheSync() }} onClick={(event) => {
+                    const pending = threadLongPress.current
+                    if (pending?.threadId === thread.id && pending.triggered) {
+                      event.preventDefault()
+                      clearThreadLongPress()
+                      return
+                    }
+                    clearThreadLongPress()
+                    if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
+                    else void selectThread(thread)
+                  }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? ui('正在回复') : undefined}>
+                    <span className="thread-row__breath" data-reply-breath-layer aria-hidden="true" />
+                    <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
+                    <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label={ui("已置顶")} /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label={ui("有定时发送")} /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label={ui("回复已完成")} title={ui("回复已完成")} /> : null}<small>{timeOf(thread)}</small></span></span>
+                    {paneIndex !== undefined ? <span className="thread-row__pane-dot" title={ui("已打开")} /> : null}
+                  </button>
+                </div>
+              )
+            })}
+          </Fragment>)}
+          {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? ui('没有找到匹配的对话') : ui('还没有聊天记录')}</p> : null}
+          {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />{ui("读取对话中")}</p> : null}
+        </nav>
+        <div className="remote-sidebar__actions">
+          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label={ui("切换电脑地址")} title={ui("切换电脑地址")} onClick={() => window.DevWispAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>{ui("切换电脑地址")}</span></button> : null}
+          <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label={ui("Token 用量统计")} title={ui("Token 用量统计")} onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>{ui("Token 用量")}</span></button>
+          <a className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} href={panelRouteHref('settings')} aria-label={ui("设置")} title={ui("设置")} onClick={(event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            event.preventDefault()
+            openSettingsPanel()
+          }}><Settings2 size={16} /><span>{ui("设置")}</span></a>
+        </div>
+        <footer className="remote-sidebar__footer">
+          <div className="remote-sidebar__engine-statuses" role="group" aria-label={ui("引擎状态")}>
+            {[sidebarCodexStatus, sidebarClaudeStatus].map((status) => (
+              <span key={status.label} className="remote-sidebar__engine-status" role="img" aria-label={status.label} title={status.label}>
+                <i className={'status-dot status-dot--' + status.state} aria-hidden="true" />
+                <span className="remote-sidebar__engine-status-label">{status.label}</span>
+              </span>
+            ))}
+          </div>
+        </footer>
+      </aside>
+
+      <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label={ui("关闭侧栏")} aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
+      {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label={ui("关闭文件树")} onClick={() => setWorkspaceOpen(false)} /> : null}
+      {threadContextMenu ? (
+        <div ref={threadContextMenuElement} className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
+          <ShortcutContextMenuButton shortcut={1} onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />{ui("并发打开")}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={2} onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? ui('取消置顶') : ui('置顶')}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={3} disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? ui('导出中…') : ui('导出')}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={4} disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? ui('引用中…') : ui('引用')}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={5} onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />{ui("重命名")}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger" disabled={threadContextAction !== null} onClick={() => startThreadDelete(threadContextMenu.thread)}><Trash2 size={14} />{ui("删除聊天")}</ShortcutContextMenuButton>
+        </div>
+      ) : null}
+
+      {threadRenameTarget ? (
+        <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadRename() }}>
+          <form className="thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-rename-title" onSubmit={(event) => { void submitThreadRename(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <h2 id="thread-rename-title">{ui("重命名对话")}</h2>
+              <p>{ui("名称会同步到连接的设备和后续刷新。")}</p>
+            </div>
+            <label htmlFor="thread-rename-input">{ui("对话名称")}</label>
+            <input id="thread-rename-input" type="text" value={threadRenameDraft} maxLength={72} autoComplete="off" autoFocus disabled={threadRenameSaving} aria-describedby={threadRenameError ? 'thread-rename-error' : undefined} onChange={(event) => { setThreadRenameDraft(event.target.value); setThreadRenameError(null) }} />
+            {threadRenameError ? <p className="thread-rename-dialog__error" id="thread-rename-error" role="alert">{uiMessage(threadRenameError)}</p> : null}
+            <div className="thread-rename-dialog__actions">
+              <button type="button" onClick={closeThreadRename} disabled={threadRenameSaving}>{ui("取消")}</button>
+              <button type="submit" disabled={threadRenameSaving || !threadRenameDraft.trim()}>{threadRenameSaving ? <><LoaderCircle className="spin" size={14} />{ui("保存中")}</> : ui('确定')}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {threadDeleteTargets?.length ? (
+        <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadDelete() }}>
+          <form className="thread-rename-dialog thread-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-delete-title" aria-describedby="thread-delete-description" onSubmit={(event) => { void submitThreadDelete(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">{sidebarSelectionMode ? ui('批量删除聊天') : ui('删除聊天')}</h2></div>
+              <p id="thread-delete-description">{sidebarSelectionMode ? uiFormat("删除选中的 {0} 个聊天？此操作无法撤销。", threadDeleteTargets.length) : ui('这会永久删除聊天记录，删除后无法恢复。')}</p>
+            </div>
+            {sidebarSelectionMode ? <ul className="thread-delete-dialog__list">{threadDeleteTargets.slice(0, 5).map((thread) => <li key={thread.id} title={titleOf(thread)}>{titleOf(thread)}</li>)}{threadDeleteTargets.length > 5 ? <li>{ui("另有")} {threadDeleteTargets.length - 5} {ui("个聊天")}</li> : null}</ul> : <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTargets[0])}>{titleOf(threadDeleteTargets[0])}</div>}
+            {threadDeleteError ? <p className="thread-rename-dialog__error" role="alert">{uiMessage(threadDeleteError)}</p> : null}
+            <div className="thread-rename-dialog__actions thread-delete-dialog__actions">
+              <button type="button" onClick={closeThreadDelete} disabled={threadDeleteSaving}>{ui("取消")}</button>
+              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />{sidebarSelectionMode ? uiFormat("删除中 {0}/{1}", threadDeleteProgress, threadDeleteTargets.length) : ui('删除中')}</> : <><Trash2 size={14} />{threadDeleteError ? ui('重试删除') : ui('确认删除')}</>}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={updateTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
+      ) : usageStatsOpen ? (
+        <CPAUsageStatsPanel settings={cpaUsageSettings} token={token} onSourceChange={(source) => updateCPAUsageSettings({ ...cpaUsageSettings, source })} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
+      ) : (
+        <>
+          <section className="remote-workspace">
+            <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
+              {openPaneIndexes.map((paneIndex) => (
+                <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-thread`}>
+                  <RemoteChatPane
+                    {...paneActions[paneIndex]}
+                    paneIndex={paneIndex}
+                    token={token}
+                    translation={translationPreferences}
+                    translationRevision={translationRevision}
+                    remote={remotes[paneIndex]}
+                    active={paneIndex === selectedPaneIndex}
+                    showActiveFrame={openPaneIndexes.length > 1}
+                    showPaneClose={openPaneIndexes.length > 1}
+                    claudeCodeAvailable={claudeCodeAvailable}
+                    claudeModelOptions={claudeModelOptions}
+                    onOpenSidebar={openSidebarPanel}
+                    onOpenWorkspace={openWorkspacePanel}
+                    directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
+                    composerHandle={composerHandle}
+                    copyFeedback={copyFeedback}
+                    onCopy={copyMessage}
+                  />
+                </div>
+              ))}
+            </div>
+            <MessageComposer
+              token={token}
+              translation={translationPreferences}
+              translationRevision={translationRevision}
+              portalTheme={themePreferences.theme}
+              portalThemeStyle={composerPortalThemeStyle}
+              key={composerDraftScope}
+              ref={composerHandle}
+              draftScope={composerDraftScope}
+              onDraftChange={syncWorkspaceDraft}
+              composerHeightMemory={composerHeightMemory}
+              connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
+              isRunning={activeRemote.isRunning}
+              isReplying={activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true}
+              canInterrupt={activeRemote.activeEngine === 'claude-code' || activeRemote.activeThread?.canInterrupt !== false}
+              fileChangeSummary={runningFileChangeSummary}
+              fileChangeSummaryKey={activeRemote.runningTurnId}
+              reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
+              stableQueueHeight={openPaneIndexes.length > 1}
+              showCodexPreferences={!isClaudeCodeThread}
+              isInterrupting={activeRemote.isInterrupting}
+              writerConflict={activeRemote.writerConflict}
+              modelSupportsImages={modelSupportsImages}
+              selectedModel={selectedModel}
+              selectedEffort={selectedEffort}
+              selectedApprovalPolicy={selectedApprovalPolicy}
+              selectedClaudePermissionMode={selectedClaudePermissionMode}
+              temporaryPreferences={Boolean(temporaryPreferences)}
+              onTemporaryPreferencesChange={changeTemporaryPreferences}
+              modelOptions={modelOptions}
+              reasoningOptions={reasoningOptions}
+              reasoningOptionsByModel={reasoningOptionsByModel}
+              authorizationOptions={approvalPolicyOptions}
+              claudeModelOptions={claudeModelOptions}
+              claudeEffortOptions={claudeEffortOptions}
+              claudePermissionModeOptions={claudePermissionModeOptions}
+              onModelChange={changeModel}
+              onEffortChange={changeEffort}
+              onApprovalPolicyChange={changeApprovalPolicy}
+              onClaudePermissionModeChange={changeClaudePermissionMode}
+              approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
+              onUploadPdf={activeRemote.uploadPdfAttachment}
+              onSend={sendComposerMessage}
+              queuedMessages={activeRemote.queuedMessages}
+              onSendQueuedNow={activeRemote.sendQueuedMessageNow}
+              onRetryQueuedTranslation={activeRemote.retryQueuedTranslation}
+              onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
+              onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
+              onEndQueuedEdit={activeRemote.endEditQueuedMessage}
+              onRemoveQueued={activeRemote.removeQueuedMessage}
+              onMoveQueued={activeRemote.moveQueuedMessage}
+              onInterrupt={pauseCurrentReply}
+              onContinue={continueInterruptedReply}
+              canContinue={canContinue}
+              continuationPending={Boolean(activeContinuation)}
+              onRefresh={activeRemote.refreshActiveThread}
+              onCreateThread={createComposerThread}
+              createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (newThreadEngine === 'claude-code' && claudeCodeAvailable === false)}
+              createThreadTitle={newThreadEngine === 'claude-code' && claudeCodeAvailable === false ? ui('Claude Code 不可用') : uiFormat('新建{0}对话', newThreadEngine === 'claude-code' ? ' Claude Code' : ' Codex')}
+            />
+          </section>
+          <div
+            className="workspace-resize-handle"
+            role="separator"
+            aria-label={themePreferences.theme === 'retro' ? ui('调整左右侧边栏宽度') : ui('调整右侧文件区宽度')}
+            aria-orientation="vertical"
+            aria-valuemin={themePreferences.theme === 'retro' ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()}
+            aria-valuemax={themePreferences.theme === 'retro' ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()}
+            aria-valuenow={themePreferences.theme === 'retro' ? clampRetroSidePanelWidth(retroSidePanelWidth ?? defaultRetroSidePanelWidth()) : workspaceExplorerWidth}
+            tabIndex={0}
+            onPointerDown={startWorkspaceResize}
+            onPointerMove={moveWorkspaceResize}
+            onPointerUp={finishWorkspaceResize}
+            onPointerCancel={finishWorkspaceResize}
+            onLostPointerCapture={finishWorkspaceResize}
+            onDoubleClick={() => themePreferences.theme === 'retro'
+              ? setRetroSidePanelWidthValue(null, true)
+              : setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
+            onKeyDown={(event) => {
+              const retro = themePreferences.theme === 'retro'
+              const currentWidth = retro ? retroSidePanelWidth ?? defaultRetroSidePanelWidth() : workspaceExplorerWidthRef.current
+              const minimumWidth = retro ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()
+              const limits = retro ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()
+              const nextWidth = event.key === 'ArrowLeft'
+                ? currentWidth + 24
+                : event.key === 'ArrowRight'
+                  ? currentWidth - 24
+                  : event.key === 'Home'
+                    ? minimumWidth
+                    : event.key === 'End'
+                      ? limits
+                      : null
+              if (nextWidth === null) return
+              event.preventDefault()
+              if (retro) setRetroSidePanelWidthValue(nextWidth, true)
+              else setWorkspaceExplorerWidthValue(nextWidth, true)
+            }}
+          />
+          <WorkspaceExplorer
+            token={token}
+            eyebrow="当前窗口"
+            theme={themePreferences.theme}
+            themePreferences={themePreferences}
+            engine={activeRemote.activeEngine}
+            cwd={activeWorkspaceCwd}
+            threadId={activeRemote.activeThread?.id}
+            canBindThreadWorkspace={activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
+            onBindDirectory={async (cwd) => {
+              const threadId = activeRemote.activeThread?.id
+              if (!threadId) return false
+              await activeRemote.bindThreadWorkspace(threadId, cwd)
+              showPaneNotice('当前聊天已绑定；下一轮使用此目录')
+              return true
+            }}
+            previewRequest={workspacePreviewRequest}
+            previewContainerRef={paneGrid}
+            onPreviewStateChange={handleWorkspacePreviewStateChange}
+            draft={activeWorkspaceDraft}
+            onInsertPath={(path, focus) => {
+              insertWorkspacePath(path, focus)
+            }}
+            onAddToTerminal={(path) => {
+              workspaceTerminalRequestSequence.current += 1
+              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path, action: 'directory' })
+              if (isMobileLayout() || Boolean(window.DevWispAndroid?.changeEndpoint)) setWorkspaceOpen(false)
+            }}
+            onRunInTerminal={(path) => {
+              workspaceTerminalRequestSequence.current += 1
+              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path, action: 'run' })
+              if (isMobileLayout() || Boolean(window.DevWispAndroid?.changeEndpoint)) setWorkspaceOpen(false)
+            }}
+            onAddDocument={addWorkspaceDocument}
+            mobileOpen={workspaceOpen}
+            mobileDragging={workspaceDragging}
+            onOpenMobile={openWorkspacePanel}
+            onCloseMobile={() => setWorkspaceOpen(false)}
+            panelRef={workspacePanel}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+function MCPApprovalsCard({ token }: { token: string }) {
+  useUiLanguage()
+  const [approvals, setApprovals] = useState<MCPApprovalGrant[]>([])
+  const [loading, setLoading] = useState(true)
+  const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setMessage(null)
+    void devwispClient.mcpApprovals(token).then(({ approvals: next }) => {
+      if (!cancelled) setApprovals(next)
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : '读取 MCP 授权失败。')
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [token])
+
+  async function revoke(grant: MCPApprovalGrant) {
+    setRevokingId(grant.id)
+    setError(null)
+    setMessage(null)
+    try {
+      await devwispClient.revokeMCPApproval(token, grant.id)
+      setApprovals((current) => current.filter((item) => item.id !== grant.id))
+      setMessage('已撤销；下一次匹配的调用会重新询问。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '撤销失败。')
+    } finally {
+      setRevokingId(null)
+    }
+  }
+
+  return <section className="theme-settings-card theme-settings-card--page mcp-approvals-card" aria-label={ui("MCP 自动批准")}>
+    <div className="theme-settings-card__heading">
+      <div><h2><ShieldCheck size={17} />{ui("MCP 自动批准")}</h2><p>{ui("这里保存了你在聊天弹窗中选择的「始终允许」。")}</p></div>
+    </div>
+    <div className="mcp-approvals-body">
+      {loading ? <p className="mcp-approvals-empty" role="status">{ui("正在读取授权…")}</p> : null}
+      {!loading && approvals.length === 0 && !error ? <p className="mcp-approvals-empty">{ui("还没有「始终允许」的 MCP 授权。")}</p> : null}
+      {approvals.map((grant) => <div className="mcp-approvals-grant" key={grant.id}>
+        <div className="mcp-approvals-grant__info">
+          <strong>{grant.serverName}{grant.scope === 'tool' ? ` · ${grant.toolName ?? ''}` : ''}</strong>
+          <small>{grant.scope === 'tool' ? ui('仅此工具') : ui('该 MCP 服务器的所有工具')}</small>
+        </div>
+        <div className="mcp-approvals-actions"><button type="button" disabled={revokingId !== null} onClick={() => void revoke(grant)}>{revokingId === grant.id ? ui('撤销中…') : ui('撤销授权')}</button></div>
+      </div>)}
+      {message ? <p className="mcp-approvals-feedback" role="status">{uiMessage(message)}</p> : null}
+      {error ? <p className="mcp-approvals-feedback mcp-approvals-feedback--error" role="alert">{uiMessage(error)}</p> : null}
+      <p className="mcp-approvals-note">{ui("自动批准仅跳过 MCP 工具调用确认，工具自身的权限限制仍然生效。")}</p>
+    </div>
+  </section>
+}
+
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved }: {
+  token: string
+  preferences: ThemePreferences
+  onChange: (next: ThemePreferences) => void
+  onClose: () => void
+  onUnpair: () => void | Promise<void>
+  chatShortcuts: SidebarChatShortcuts
+  onChatShortcutsChange: (next: SidebarChatShortcuts) => void
+  cpaUsageSettings: CPAUsageSettings
+  onCPAUsageSettingsChange: (next: CPAUsageSettings) => void
+  translation: TranslationPreferences
+  onTranslationChange: (next: TranslationPreferences) => void
+  onTranslationConfigSaved: () => void
+}) {
+  const uiLanguage = useUiLanguage()
+  const [imageError, setImageError] = useState<string | null>(null)
+  const [imageProcessing, setImageProcessing] = useState(false)
+  const [notificationError, setNotificationError] = useState<string | null>(null)
+  const [notificationRequestPending, setNotificationRequestPending] = useState(false)
+  const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
+  const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(readActiveSettingsSection)
+  const [nativeConfigDirty, setNativeConfigDirty] = useState(false)
+  const settingsNavRef = useRef<HTMLElement>(null)
+  const settingsContentRef = useRef<HTMLDivElement>(null)
+  const backgroundCropDrag = useRef<{
+    pointerId: number
+    clientX: number
+    clientY: number
+    width: number
+    height: number
+    positionX: number
+    positionY: number
+  } | null>(null)
+  const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
+  const letterSpacingPercent = normalizeLetterSpacingPercent(preferences.letterSpacingPercent)
+  const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
+    { value: 'light', label: ui('白色'), description: ui('清爽明亮'), previewClass: 'theme-option__preview--light' },
+    { value: 'dark', label: ui('黑色'), description: ui('低光阅读'), previewClass: 'theme-option__preview--dark' },
+    { value: 'warm', label: ui('暖色'), description: ui('柔和纸感'), previewClass: 'theme-option__preview--warm' },
+    { value: 'chinese-retro', label: ui('中国复古'), description: ui('青黛山水与冷白灰青纹样'), previewClass: 'theme-option__preview--chinese-retro' },
+    { value: 'retro', label: ui('旧网页'), description: ui('早期 WWW 文档'), previewClass: 'theme-option__preview--retro' },
+    { value: 'pixel', label: ui('像素风'), description: ui('8-bit 像素界面'), previewClass: 'theme-option__preview--pixel' },
+    { value: 'custom', label: ui('自定义主题'), description: ui('颜色、图片与透明度'), previewClass: 'theme-option__preview--custom' },
+  ]
+  const shortcutReferenceGroups = [
+    { title: '消息与导航', shortcuts: [
+      { label: '发送消息', description: '在消息输入框中按 Enter 发送，Shift+Enter 换行。', keys: ['Enter', 'Shift+Enter'] },
+      { label: '立即发送或插队', description: '排队消息编辑时请先结束编辑；Ctrl+Enter 在 Codex 模式立即发送或插队，Claude Code 模式提交到当前会话并在当前回复结束后处理。', keys: ['Ctrl+Enter'] },
+      { label: '展开或收起排队消息', description: '有排队消息且输入框为空时使用。', keys: ['Ctrl+↑', 'Ctrl+↓'] },
+      { label: '切换并发窗口', description: '打开多个并发窗口时，在窗口之间切换。', keys: ['Ctrl+←', 'Ctrl+→'] },
+      { label: '提交自定义回答', description: '在需要 AI 回答的文本框中提交；Shift+Enter 换行。', keys: ['Enter', 'Shift+Enter'] },
+      { label: '关闭或中断当前操作', description: '关闭菜单或浮层、取消编辑；审批弹窗中会拒绝请求，回复进行中时会暂停回复。', keys: ['Esc'] },
+    ] },
+    { title: '文件编辑', shortcuts: [
+      { label: '保存文件修改', description: '文件预览处于编辑状态时保存修改。', keys: ['Ctrl/⌘+S'] },
+      { label: '插入缩进', description: '在文件预览编辑器中插入两个空格。', keys: ['Tab'] },
+    ] },
+    { title: '上下文菜单', shortcuts: [
+      { label: '执行菜单项', description: '菜单打开且焦点不在输入框时，按项目旁显示的数字；Delete 执行删除。', keys: ['1–9', '0', 'Delete'] },
+      { label: '复制选中文本', description: '选中文本的操作菜单打开时，复制选中内容。', keys: ['Ctrl/⌘+C'] },
+    ] },
+    { title: '下拉菜单与取景', shortcuts: [
+      { label: '浏览下拉选项', description: '聚焦自定义下拉框后打开并浏览选项；Home/End 跳到首尾，Esc 关闭。', keys: ['↑/↓', 'Home/End', 'Enter/Space', 'Esc'] },
+      { label: '微调背景取景', description: '上传背景图片后，先聚焦预览图；方向键移动 2%，Shift+方向键移动 10%。', keys: ['方向键', 'Shift+方向键'] },
+    ] },
+    { title: '面板尺寸', shortcuts: [
+      { label: '调整文件区宽度', description: '先聚焦右侧文件区分隔条；Home/End 调到最窄或最宽。', keys: ['←/→', 'Home', 'End'] },
+      { label: '调整浮层高度', description: '先聚焦浮层底部手柄；Shift 加大步幅，Home/End 调到最小或最大。', keys: ['↑/↓', 'Shift+↑/↓', 'Home/End'] },
+    ] },
+  ] as const
+  const navigationGroups: Array<{ label: string; items: Array<{ id: SettingsSectionId; label: string; icon: ReactNode }> }> = [
+    { label: ui('外观'), items: [
+      { id: 'theme', label: ui('主题'), icon: <Palette size={17} /> },
+      { id: 'display', label: ui('显示'), icon: <Monitor size={17} /> },
+    ] },
+    { label: ui('聊天'), items: [
+      { id: 'translation', label: ui('聊天翻译'), icon: <Languages size={17} /> },
+      { id: 'chat-shortcuts', label: ui('快捷键'), icon: <Keyboard size={17} /> },
+    ] },
+    { label: ui('连接'), items: [
+      { id: 'codex-config', label: 'Codex API', icon: <EngineBrandIcon engine="codex" size={17} /> },
+      { id: 'claude-config', label: 'Claude Code API', icon: <EngineBrandIcon engine="claude-code" size={17} /> },
+      { id: 'cpa-manager', label: ui('token使用量查询'), icon: <Link2 size={17} /> },
+      { id: 'ssh-mcp', label: ui('SSH MCP 服务器'), icon: <Server size={17} /> },
+      { id: 'mcp-approvals', label: ui('MCP 自动批准'), icon: <ShieldCheck size={17} /> },
+    ] },
+    { label: ui('其他'), items: [
+      { id: 'system-notifications', label: ui('系统通知'), icon: <Bell size={17} /> },
+      { id: 'about', label: ui('关于'), icon: <Info size={17} /> },
+    ] },
+  ]
+
+  useLayoutEffect(() => {
+    const nav = settingsNavRef.current
+    const selected = nav?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (!nav || !selected) return
+
+    const navBounds = nav.getBoundingClientRect()
+    const selectedBounds = selected.getBoundingClientRect()
+    if (selectedBounds.left < navBounds.left) nav.scrollLeft -= navBounds.left - selectedBounds.left + 12
+    if (selectedBounds.right > navBounds.right) nav.scrollLeft += selectedBounds.right - navBounds.right + 12
+    if (selectedBounds.top < navBounds.top) nav.scrollTop -= navBounds.top - selectedBounds.top + 12
+    if (selectedBounds.bottom > navBounds.bottom) nav.scrollTop += selectedBounds.bottom - navBounds.bottom + 12
+  }, [activeSection])
+
+  function selectSection(sectionId: SettingsSectionId) {
+    if (sectionId === activeSection) return
+    if (nativeConfigDirty && !window.confirm(ui('未保存的 API 配置会丢失，继续切换吗？'))) return
+    if (activeSection === 'chat-shortcuts' && recordingShortcut) {
+      setRecordingShortcut(null)
+      setShortcutMessage('已取消录制。')
+    }
+    const switchingEngineConfig = (activeSection === 'codex-config' || activeSection === 'claude-config')
+      && (sectionId === 'codex-config' || sectionId === 'claude-config')
+    setActiveSection(sectionId)
+    saveActiveSettingsSection(sectionId)
+    if (!switchingEngineConfig) settingsContentRef.current?.scrollTo({ top: 0 })
+  }
+
+  function closeWithConfigCheck() {
+    if (nativeConfigDirty && !window.confirm(ui('未保存的 API 配置会丢失，继续离开吗？'))) return
+    onClose()
+  }
+
+  function unpairWithConfigCheck() {
+    if (nativeConfigDirty && !window.confirm(ui('未保存的 API 配置会丢失，继续退出吗？'))) return
+    void onUnpair()
+  }
+
+  useEffect(() => {
+    if (!recordingShortcut) return
+    const handleShortcutRecording = (event: globalThis.KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (event.key === 'Escape') {
+        event.stopImmediatePropagation()
+        setRecordingShortcut(null)
+        setShortcutMessage('已取消录制。')
+        return
+      }
+      if (isSidebarChatShortcutModifierKey(event.key)) return
+      if (isReservedSidebarChatShortcut(event)) {
+        setShortcutMessage('这个组合键已被占用或由浏览器保留，请换一个。')
+        return
+      }
+
+      const recordedShortcut = sidebarChatShortcutFromEvent(event)
+      if (!recordedShortcut) {
+        setShortcutMessage('请同时按住 Ctrl、Alt、Shift 或 ⌘，再按一个按键。')
+        return
+      }
+      const otherAction = recordingShortcut === 'previous' ? 'next' : 'previous'
+      if (sameSidebarChatShortcut(recordedShortcut, chatShortcuts[otherAction])) {
+        setShortcutMessage('这个快捷键已分配给另一个方向，请换一个。')
+        return
+      }
+
+      onChatShortcutsChange({ ...chatShortcuts, [recordingShortcut]: recordedShortcut })
+      setRecordingShortcut(null)
+      setShortcutMessage(`${recordingShortcut === 'previous' ? '上一条' : '下一条'}快捷键已更新为 ${formatSidebarChatShortcut(recordedShortcut)}。`)
+    }
+
+    window.addEventListener('keydown', handleShortcutRecording, true)
+    return () => window.removeEventListener('keydown', handleShortcutRecording, true)
+  }, [chatShortcuts, onChatShortcutsChange, recordingShortcut])
+
+  function toggleShortcutRecording(action: SidebarChatShortcutAction) {
+    if (recordingShortcut === action) {
+      setRecordingShortcut(null)
+      setShortcutMessage('已取消录制。')
+      return
+    }
+    setRecordingShortcut(action)
+    setShortcutMessage(`正在录制${action === 'previous' ? '上一条' : '下一条'}快捷键；按下组合键，Esc 取消。`)
+  }
+
+  function resetChatShortcuts() {
+    setRecordingShortcut(null)
+    onChatShortcutsChange({
+      previous: { ...defaultSidebarChatShortcuts.previous },
+      next: { ...defaultSidebarChatShortcuts.next },
+    })
+    setShortcutMessage('已恢复默认快捷键。')
+  }
+
+  async function updateBackgroundImage(file: File | undefined) {
+    setImageError(null)
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setImageError('请选择图片文件。')
+      return
+    }
+    if (file.size > maxThemeImageUploadSize) {
+      setImageError('背景原图不能超过 20 MB。')
+      return
+    }
+    setImageProcessing(true)
+    try {
+      const customBackgroundImage = await optimizeThemeBackgroundImage(file)
+      onChange({
+        ...preferences,
+        customBackgroundImage,
+        customBackgroundPositionX: 50,
+        customBackgroundPositionY: 50,
+        customBackgroundZoom: 100,
+      })
+    } catch (reason) {
+      setImageError(reason instanceof Error ? reason.message : '背景图片处理失败。')
+    } finally {
+      setImageProcessing(false)
+    }
+  }
+
+  async function updateSystemNotifications(enabled: boolean) {
+    setNotificationError(null)
+    if (!enabled) {
+      onChange({ ...preferences, systemNotificationsEnabled: false })
+      return
+    }
+    if (!canRequestSystemNotifications()) {
+      setNotificationError('系统通知需要安装 Android 应用，或通过 HTTPS 安全连接打开网页。')
+      return
+    }
+    setNotificationRequestPending(true)
+    try {
+      const granted = await requestSystemNotificationPermission()
+      if (granted) onChange({ ...preferences, systemNotificationsEnabled: true })
+      else setNotificationError('没有获得通知权限。请在系统设置中允许 Dev Wisp 发送通知后重试。')
+    } catch {
+      setNotificationError('请求通知权限失败，请重试。')
+    } finally {
+      setNotificationRequestPending(false)
+    }
+  }
+
+  function updateBackgroundPosition(positionX: number, positionY: number) {
+    onChange({
+      ...preferences,
+      customBackgroundPositionX: normalizeBackgroundPosition(positionX),
+      customBackgroundPositionY: normalizeBackgroundPosition(positionY),
+    })
+  }
+
+  function handleBackgroundPreviewPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!preferences.customBackgroundImage) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    backgroundCropDrag.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      width: bounds.width,
+      height: bounds.height,
+      positionX: normalizeBackgroundPosition(preferences.customBackgroundPositionX),
+      positionY: normalizeBackgroundPosition(preferences.customBackgroundPositionY),
+    }
+  }
+
+  function handleBackgroundPreviewPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = backgroundCropDrag.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    updateBackgroundPosition(
+      drag.positionX - ((event.clientX - drag.clientX) / drag.width) * 100,
+      drag.positionY - ((event.clientY - drag.clientY) / drag.height) * 100,
+    )
+  }
+
+  function endBackgroundPreviewPointer(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (backgroundCropDrag.current?.pointerId !== event.pointerId) return
+    backgroundCropDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  return (
+    <main className="theme-settings-panel theme-settings-panel--navigation" aria-label={ui("设置")}>
+      <header className="theme-settings-panel__header">
+        <h1>{ui("设置")}</h1>
+        <button className="icon-button theme-settings-panel__close" type="button" aria-label={ui("返回对话")} onClick={closeWithConfigCheck}><X size={18} /></button>
+      </header>
+
+      <div className="theme-settings-panel__layout">
+        <nav className="theme-settings-panel__nav" ref={settingsNavRef} aria-label={ui("设置分类")}>
+          {navigationGroups.map((group) => <div className="theme-settings-panel__nav-group" key={group.label}>
+            <h2>{group.label}</h2>
+            {group.items.map((item) => <button
+              className={`theme-settings-panel__nav-item${activeSection === item.id ? ' theme-settings-panel__nav-item--active' : ''}`}
+              key={item.id}
+              type="button"
+              aria-current={activeSection === item.id ? 'page' : undefined}
+              aria-controls={`settings-section-${item.id}`}
+              onClick={() => selectSection(item.id)}
+            >{item.icon}<span>{item.label}</span></button>)}
+          </div>)}
+          <div className="theme-settings-panel__session">
+            <button className="theme-settings-panel__nav-item" type="button" onClick={unpairWithConfigCheck} title={ui("退出当前设备的配对")}>
+              <LogOut size={17} /><span>{ui("退出配对")}</span>
+            </button>
+          </div>
+        </nav>
+        <div className="theme-settings-panel__content" ref={settingsContentRef}>
+        <div id="settings-section-codex-config" className="theme-settings-panel__section" hidden={activeSection !== 'codex-config'}>
+          {activeSection === 'codex-config' ? <NativeEngineConfigCard token={token} engine="codex" onDirtyChange={setNativeConfigDirty} /> : null}
+        </div>
+        <div id="settings-section-claude-config" className="theme-settings-panel__section" hidden={activeSection !== 'claude-config'}>
+          {activeSection === 'claude-config' ? <NativeEngineConfigCard token={token} engine="claude" onDirtyChange={setNativeConfigDirty} /> : null}
+        </div>
+        <div id="settings-section-mcp-approvals" className="theme-settings-panel__section" hidden={activeSection !== 'mcp-approvals'}>
+          <MCPApprovalsCard token={token} />
+        </div>
+        <div id="settings-section-ssh-mcp" className="theme-settings-panel__section" hidden={activeSection !== 'ssh-mcp'}>
+          {activeSection === 'ssh-mcp' ? <SshMcpSettingsCard token={token} /> : null}
+        </div>
+        <div id="settings-section-cpa-manager" className="theme-settings-panel__section" hidden={activeSection !== 'cpa-manager'}>
+          <CPAUsageSettingsCard settings={cpaUsageSettings} token={token} onChange={onCPAUsageSettingsChange} />
+        </div>
+        <div id="settings-section-translation" className="theme-settings-panel__section" hidden={activeSection !== 'translation'}>
+          <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />
+        </div>
+        <div id="settings-section-theme" className="theme-settings-panel__section" hidden={activeSection !== 'theme'}>
+
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("主题")}>
+          <div className="theme-settings-card__heading">
+            <div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />{ui("主题")}</h2><p>{ui("选择工作区的基础色彩。")}</p></div>
+            <span className="theme-settings-card__badge">{ui("即时预览")}</span>
+          </div>
+          <div className="theme-options" role="radiogroup" aria-label={ui("界面主题")}>
+            {themeOptions.map((option) => (
+              <button
+                className={`theme-option${preferences.theme === option.value ? ' theme-option--active' : ''}`}
+                type="button"
+                role="radio"
+                aria-checked={preferences.theme === option.value}
+                key={option.value}
+                onClick={() => onChange({ ...preferences, theme: option.value })}
+              >
+                <span
+                  className={`theme-option__preview ${option.previewClass}`}
+                  style={option.value === 'custom' ? {
+                    backgroundColor: preferences.customBackgroundColor,
+                    opacity: (100 - preferences.customBackgroundTransparency) / 100,
+                  } : undefined}
+                  aria-hidden="true"
+                >
+                  {option.value === 'custom' && preferences.customBackgroundImage ? (
+                    <span
+                      className="theme-option__preview-image"
+                      style={{
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`,
+                        backgroundPosition: `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+                        transform: `scale(${normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100})`,
+                      }}
+                    />
+                  ) : null}
+                </span>
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+              </button>
+            ))}
+          </div>
+
+          {preferences.theme === 'custom' ? (
+            <div className="theme-custom-controls">
+              <label className="theme-control-row">
+                <span><strong>{ui("背景颜色")}</strong><small>{ui("作为半透明面板背后的底色。")}</small></span>
+                <span className="theme-color-input"><input type="color" value={preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customBackgroundColor: normalizeHexColor(event.target.value, preferences.customBackgroundColor) })} aria-label={ui("自定义背景颜色")} /><code>{preferences.customBackgroundColor}</code></span>
+              </label>
+              <div className="theme-control-row">
+                <span><strong>{ui("模块颜色")}</strong><small>{ui("应用于侧栏、输入框、卡片和菜单。")}</small></span>
+                <span className="theme-color-input">
+                  <input type="color" value={preferences.customModuleColor ?? preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customModuleColor: normalizeHexColor(event.target.value, preferences.customModuleColor ?? preferences.customBackgroundColor) })} aria-label={ui("自定义模块颜色")} />
+                  <code>{preferences.customModuleColor ?? preferences.customBackgroundColor}</code>
+                  {preferences.customModuleColor ? <button className="theme-image-clear" type="button" onClick={() => onChange({ ...preferences, customModuleColor: undefined })}>{ui("跟随背景")}</button> : <small>{ui("跟随背景")}</small>}
+                </span>
+              </div>
+              <label className="theme-control-row theme-control-row--stacked">
+                <span><strong>{ui("模块透明度")}</strong><small>{ui("调整界面模块的透明程度，0% 为实色。")}</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customModuleTransparency} onChange={(event) => onChange({ ...preferences, customModuleTransparency: normalizeModuleTransparency(Number(event.target.value)) })} aria-label={ui("自定义模块透明度")} /><output>{preferences.customModuleTransparency}%</output></span>
+              </label>
+              <label className="theme-control-row">
+                <span><strong>{ui("字体颜色")}</strong><small>{ui("应用于工作区界面文字和控件。")}</small></span>
+                <span className="theme-color-input"><input type="color" value={preferences.customTextColor} onChange={(event) => onChange({ ...preferences, customTextColor: normalizeHexColor(event.target.value, preferences.customTextColor) })} aria-label={ui("自定义字体颜色")} /><code>{preferences.customTextColor}</code></span>
+              </label>
+              <label className="theme-control-row theme-control-row--stacked">
+                <span><strong>{ui("背景透明度")}</strong><small>{ui("数值越高，全局背景图片和底色越透明；界面面板不变。")}</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label={ui("自定义背景透明度")} /><output>{preferences.customBackgroundTransparency}%</output></span>
+              </label>
+              <div className="theme-control-row theme-image-row">
+                <span><strong>{ui("背景图片")}</strong><small>{ui("原图最大 20 MB，上传后自动压缩保存。")}</small></span>
+                <span className="theme-image-input">
+                  <span className={`theme-image-preview${preferences.customBackgroundImage ? '' : ' theme-image-preview--empty'}`}>
+                    {preferences.customBackgroundImage ? <img src={preferences.customBackgroundImage} alt={ui("当前背景图片预览")} /> : <span>{ui("未设置")}</span>}
+                  </span>
+                  <span className="theme-image-actions">
+                    <label className="theme-image-upload">
+                      {imageProcessing ? <LoaderCircle className="spin" size={14} /> : <ImagePlus size={14} />}
+                      <span>{imageProcessing ? ui('正在压缩…') : ui('选择图片')}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        disabled={imageProcessing}
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0]
+                          event.currentTarget.value = ''
+                          void updateBackgroundImage(file)
+                        }}
+                        aria-label={ui("上传背景图片")}
+                      />
+                    </label>
+                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 }) }}><X size={13} />{ui("清除")}</button> : null}
+                  </span>
+                </span>
+              </div>
+              {preferences.customBackgroundImage ? (
+                <section className="theme-background-framing" aria-label={ui("背景图片取景调整")}>
+                  <div className="theme-background-framing__heading">
+                    <span><strong>{ui("调整背景区域")}</strong><small>{ui("拖动图片调整位置，也可以用滑块微调。")}</small></span>
+                    <button
+                      className="theme-background-framing__reset"
+                      type="button"
+                      onClick={() => onChange({ ...preferences, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 })}
+                    >{ui("重置取景")}</button>
+                  </div>
+                  <button
+                    className="theme-background-framing__preview"
+                    type="button"
+                    aria-label={ui("拖动图片调整背景位置")}
+                    onPointerDown={handleBackgroundPreviewPointerDown}
+                    onPointerMove={handleBackgroundPreviewPointerMove}
+                    onPointerUp={endBackgroundPreviewPointer}
+                    onPointerCancel={endBackgroundPreviewPointer}
+                    onLostPointerCapture={() => { backgroundCropDrag.current = null }}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 10 : 2
+                      if (event.key === 'ArrowLeft') updateBackgroundPosition(preferences.customBackgroundPositionX + step, preferences.customBackgroundPositionY)
+                      else if (event.key === 'ArrowRight') updateBackgroundPosition(preferences.customBackgroundPositionX - step, preferences.customBackgroundPositionY)
+                      else if (event.key === 'ArrowUp') updateBackgroundPosition(preferences.customBackgroundPositionX, preferences.customBackgroundPositionY + step)
+                      else if (event.key === 'ArrowDown') updateBackgroundPosition(preferences.customBackgroundPositionX, preferences.customBackgroundPositionY - step)
+                      else return
+                      event.preventDefault()
+                    }}
+                  >
+                    <span
+                      className="theme-background-framing__image"
+                      style={{
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`,
+                        backgroundPosition: `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+                        transform: `scale(${normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100})`,
+                      }}
+                      aria-hidden="true"
+                    />
+                    <span className="theme-background-framing__hint">{ui("拖动调整取景")}</span>
+                  </button>
+                  <div className="theme-background-framing__controls">
+                    <label className="theme-background-framing__control">
+                      <span><strong>{ui("水平位置")}</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionX)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionX)} onChange={(event) => updateBackgroundPosition(Number(event.target.value), preferences.customBackgroundPositionY)} aria-label={ui("背景图片水平位置")} />
+                    </label>
+                    <label className="theme-background-framing__control">
+                      <span><strong>{ui("垂直位置")}</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionY)} onChange={(event) => updateBackgroundPosition(preferences.customBackgroundPositionX, Number(event.target.value))} aria-label={ui("背景图片垂直位置")} />
+                    </label>
+                    <label className="theme-background-framing__control">
+                      <span><strong>{ui("缩放")}</strong><output>{normalizeBackgroundZoom(preferences.customBackgroundZoom)}%</output></span>
+                      <input type="range" min="100" max="250" step="1" value={normalizeBackgroundZoom(preferences.customBackgroundZoom)} onChange={(event) => onChange({ ...preferences, customBackgroundZoom: normalizeBackgroundZoom(Number(event.target.value)) })} aria-label={ui("背景图片缩放")} />
+                    </label>
+                  </div>
+                </section>
+              ) : null}
+              {imageError ? <p className="theme-image-error" role="alert">{uiMessage(imageError)}</p> : null}
+            </div>
+          ) : <p className="theme-settings-hint">{ui("切换主题后会立即应用到侧边栏、聊天区和输入框。")}</p>}
+        </section>
+        </div>
+
+        <div id="settings-section-display" className="theme-settings-panel__section" hidden={activeSection !== 'display'}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("显示")}>
+          <div className="theme-settings-card__heading">
+            <div><h2><PixelThemeIcon name="display" theme={preferences.theme} />{ui("显示")}</h2><p>{ui("调整当前浏览器中的界面阅读大小。")}</p></div>
+            <span className="theme-settings-card__badge">{ui("即时预览")}</span>
+          </div>
+          <div className="theme-display-controls theme-display-controls--typography">
+            <div className="theme-control-row">
+              <span><strong>{ui('语言')}</strong><small>{ui('选择网页界面使用的语言；聊天和文件内容保持原文。')}</small></span>
+              <TranslationSelect
+                className="theme-language-select"
+                label={ui('语言')}
+                hideLabel
+                value={uiLanguage}
+                onChange={(value) => setUiLanguage(value as UiLanguage)}
+                options={[{ value: 'zh-CN', label: '简体中文' }, { value: 'en', label: 'English' }]}
+              />
+            </div>
+            <label className="theme-control-row theme-control-row--stacked">
+              <span><strong>{ui("字体大小")}</strong><small>{ui("同时调整聊天、输入框、侧栏、文件区和设置页。")}</small></span>
+              <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label={ui("全局字体大小")} /><output>{fontSizeAdjustment === 0 ? ui('标准') : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
+            </label>
+            <label className="theme-control-row theme-control-row--stacked">
+              <span><strong>{ui("字间距")}</strong><small>{ui("同时调整聊天、输入框、侧栏、文件区和设置页的普通文字。")}</small></span>
+              <span className="theme-range-input"><input type="range" min="0" max="8" step="1" value={letterSpacingPercent} onChange={(event) => onChange({ ...preferences, letterSpacingPercent: normalizeLetterSpacingPercent(Number(event.target.value)) })} aria-label={ui("全局字间距")} /><output>{letterSpacingPercent}%</output></span>
+            </label>
+          </div>
+        </section>
+        </div>
+
+        <div id="settings-section-chat-shortcuts" className="theme-settings-panel__section" hidden={activeSection !== 'chat-shortcuts'}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("快捷键")}>
+          <div className="theme-settings-card__heading">
+            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />{ui("快捷键")}</h2><p>{ui("查看应用内快捷键，并自定义聊天切换组合键。")}</p></div>
+          </div>
+          <div className="theme-display-controls sidebar-chat-shortcut-controls">
+            <div className="sidebar-chat-shortcut-actions"><button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>{ui("恢复默认")}</button></div>
+            {(['previous', 'next'] as const).map((action) => {
+              const label = action === 'previous' ? ui('上一条聊天') : ui('下一条聊天')
+              const isRecording = recordingShortcut === action
+              return (
+                <div className="theme-control-row sidebar-chat-shortcut-row" key={action}>
+                  <span><strong>{label}</strong><small>{action === 'previous' ? ui('切换到列表中的上一条聊天。') : ui('切换到列表中的下一条聊天。')}</small></span>
+                  <kbd className="sidebar-chat-shortcut-key">{formatSidebarChatShortcut(chatShortcuts[action])}</kbd>
+                  <button
+                    className={`theme-notification-toggle${isRecording ? ' theme-notification-toggle--enabled' : ''}`}
+                    type="button"
+                    aria-pressed={isRecording}
+                    onClick={() => toggleShortcutRecording(action)}
+                  >{isRecording ? ui('按下组合键…') : ui('录制')}</button>
+                </div>
+              )
+            })}
+            <div className="sidebar-chat-shortcut-reference">
+              <h3>{ui('其他快捷键')}</h3>
+              {shortcutReferenceGroups.map((group) => (
+                <section className="sidebar-chat-shortcut-reference__group" key={group.title}>
+                  <h4>{ui(group.title)}</h4>
+                  {group.shortcuts.map((shortcut) => (
+                    <div className="theme-control-row sidebar-chat-shortcut-reference__row" key={shortcut.label}>
+                      <span><strong>{ui(shortcut.label)}</strong><small>{ui(shortcut.description)}</small></span>
+                      <span className="sidebar-chat-shortcut-reference__keys">{shortcut.keys.map((key) => <kbd className="sidebar-chat-shortcut-key" key={key}>{key}</kbd>)}</span>
+                    </div>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </div>
+          <p className="theme-settings-hint">{ui("设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。")}</p>
+          {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{uiMessage(shortcutMessage)}</p> : null}
+        </section>
+        </div>
+
+        <div id="settings-section-system-notifications" className="theme-settings-panel__section" hidden={activeSection !== 'system-notifications'}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("系统通知")}>
+          <div className="theme-settings-card__heading">
+            <div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />{ui("系统通知")}</h2><p>{ui("应用在后台且连接在线时，提醒回复完成和待批准操作。")}</p></div>
+          </div>
+          <div className="theme-display-controls">
+            <div className="theme-control-row">
+              <span><strong>{ui("回复与审批提醒")}</strong><small>{ui("通知不包含聊天正文或命令内容。")}</small></span>
+              <button
+                className={`theme-notification-toggle${preferences.systemNotificationsEnabled ? ' theme-notification-toggle--enabled' : ''}`}
+                type="button"
+                aria-pressed={preferences.systemNotificationsEnabled}
+                disabled={notificationRequestPending}
+                onClick={() => { void updateSystemNotifications(!preferences.systemNotificationsEnabled) }}
+              >
+                {notificationRequestPending ? <LoaderCircle className="spin" size={14} /> : preferences.systemNotificationsEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+                {notificationRequestPending ? ui('正在请求权限…') : preferences.systemNotificationsEnabled ? ui('已开启') : ui('开启通知')}
+              </button>
+            </div>
+            {notificationError ? <p className="theme-notification-error" role="alert">{uiMessage(notificationError)}</p> : null}
+          </div>
+        </section>
+        </div>
+
+        <div id="settings-section-about" className="theme-settings-panel__section" hidden={activeSection !== 'about'}>
+        <section className="theme-settings-card theme-settings-card--page theme-about-card" aria-label={ui("关于")}>
+          <div className="theme-settings-card__heading">
+            <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />{ui("关于")}</h2><p>{ui("项目介绍、源代码与更新。")}</p></div>
+          </div>
+          <div className="theme-about-card__body">
+            <img className="theme-about-card__logo" src="/devwisp-mark.png" alt="Dev Wisp logo" />
+            <strong className="theme-about-card__name">Dev Wisp</strong>
+            <p className="theme-about-card__description">{ui("在浏览器里完成构建、部署你的伟大项目。")}</p>
+            <a className="theme-about-card__link" href="https://github.com/wottyup/devwisp" target="_blank" rel="noopener noreferrer">
+              <strong>{ui("GitHub 项目地址")}</strong>
+              <span>https://github.com/wottyup/devwisp</span>
+            </a>
+          </div>
+        </section>
+        </div>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+function stripStandaloneSeparators(text: string) {
+  // Codex sometimes emits terminal-style divider rows outside code blocks. They
+  // are not message content, and render as a full-width line on narrow screens.
+  return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
+}
+
+function renderMessageInlineLinks(value: string, keyPrefix: string, preferWebUrlLabel: boolean): ReactNode {
+  return splitMessageInlineLinks(value, preferWebUrlLabel).map((part, index) => part.type === 'link'
+    ? <a key={`${keyPrefix}-link-${index}`} href={part.href} target="_blank" rel="noopener noreferrer">{part.value}</a>
+    : part.value)
+}
+
+function renderMessageInlineMarkdown(value: string, keyPrefix: string, preferWebUrlLabel: boolean, depth = 0): ReactNode {
+  if (depth >= 8) return renderMessageInlineLinks(value, keyPrefix, preferWebUrlLabel)
+
+  const inlinePattern = /(`+)([^`\n]+?)\1|\*\*([^\n]+?)\*\*|__([^\n]+?)__/g
+  const parts: ReactNode[] = []
+  let cursor = 0
+  let index = 0
+  for (const match of value.matchAll(inlinePattern)) {
+    const matchIndex = match.index ?? cursor
+    if (matchIndex > cursor) {
+      parts.push(<Fragment key={`${keyPrefix}-plain-${index++}`}>{renderMessageInlineLinks(value.slice(cursor, matchIndex), `${keyPrefix}-links-${index}`, preferWebUrlLabel)}</Fragment>)
+    }
+
+    if (match[1]) {
+      parts.push(<code key={`${keyPrefix}-code-${index++}`}>{renderMessageInlineLinks(match[2], `${keyPrefix}-code-links-${index}`, preferWebUrlLabel)}</code>)
+    } else {
+      const strongText = match[3] ?? match[4]
+      parts.push(<strong key={`${keyPrefix}-strong-${index++}`}>{renderMessageInlineMarkdown(strongText, `${keyPrefix}-strong-inner-${index}`, preferWebUrlLabel, depth + 1)}</strong>)
+    }
+    cursor = matchIndex + match[0].length
+  }
+
+  if (cursor < value.length) {
+    parts.push(<Fragment key={`${keyPrefix}-plain-${index}`}>{renderMessageInlineLinks(value.slice(cursor), `${keyPrefix}-links-${index}`, preferWebUrlLabel)}</Fragment>)
+  }
+  return parts.length > 0 ? parts : renderMessageInlineLinks(value, keyPrefix, preferWebUrlLabel)
+}
+
+const ClaudeFormattingContext = createContext(false)
+
+function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: boolean, claudeFormatting = false): ReactNode[] {
+  const lines = value.replace(/\r\n?/g, '\n').split('\n')
+  const elements: ReactNode[] = []
+  let plainLines: string[] = []
+  let plainIndex = 0
+  let tableIndex = 0
+  let lineIndex = 0
+
+  const flushPlainText = () => {
+    if (plainLines.length === 0) return
+    const textKey = `${keyPrefix}-text-${plainIndex++}`
+    elements.push(claudeFormatting
+      ? <ClaudeReplyText key={textKey} text={plainLines.join('\n')} />
+      : <div className="chat-message__text" key={textKey}>{renderMessageInlineMarkdown(plainLines.join('\n'), textKey, preferWebUrlLabel)}</div>)
+    plainLines = []
+  }
+
+  while (lineIndex < lines.length) {
+    const table = parseMarkdownTableBlock(lines, lineIndex)
+    if (!table) {
+      plainLines.push(lines[lineIndex])
+      lineIndex += 1
+      continue
+    }
+
+    flushPlainText()
+    elements.push(
+      <div className="chat-message__table-scroll" key={`${keyPrefix}-table-${tableIndex++}`}>
+        <table className="chat-message__table">
+          <thead>
+            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{renderMessageInlineMarkdown(cell, `${keyPrefix}-table-${tableIndex}-header-${index}`, preferWebUrlLabel)}</th>)}</tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{renderMessageInlineMarkdown(cell, `${keyPrefix}-table-${tableIndex}-row-${rowIndex}-cell-${index}`, preferWebUrlLabel)}</td>)}</tr>)}
+          </tbody>
+        </table>
+      </div>,
+    )
+    lineIndex = table.nextLine
+  }
+
+  flushPlainText()
+  return elements
+}
+
+const MessageContent = memo(function MessageContent({ text, hideStandaloneSeparators = false, preferWebUrlLabel = false }: { text: string; hideStandaloneSeparators?: boolean; preferWebUrlLabel?: boolean }) {
+  const claudeFormatting = useContext(ClaudeFormattingContext)
+  const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
+  const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = codePattern.exec(text)) !== null) {
+    if (match.index > cursor) blocks.push({ type: 'text', value: text.slice(cursor, match.index) })
+    blocks.push({ type: 'code', value: match[2].replace(/\n$/, ''), language: match[1].trim() || undefined })
+    cursor = match.index + match[0].length
+  }
+  if (cursor < text.length) blocks.push({ type: 'text', value: text.slice(cursor) })
+  if (blocks.length === 0) blocks.push({ type: 'text', value: text })
+
+  return (
+    <div className="chat-message__content">
+      {blocks.map((block, index) => {
+        if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
+        // Claude can leave whitespace-only text around tool calls. Display the
+        // same paragraph spacing during streaming and after history refresh;
+        // code blocks and user-authored whitespace remain untouched.
+        const value = hideStandaloneSeparators
+          ? stripStandaloneSeparators(block.value).replace(/\r\n?/g, '\n').replace(/\n(?:[\t ]*\n){2,}/g, '\n\n').trim()
+          : block.value
+        return value ? renderMessageText(value, `text-${index}`, preferWebUrlLabel, claudeFormatting) : null
+      })}
+    </div>
+  )
+})
+
+const CodeBlock = memo(function CodeBlock({ value, language }: { value: string; language?: string }) {
+  useUiLanguage()
+  const [copied, setCopied] = useState(false)
+  const [highlighted, setHighlighted] = useState<{
+    value: string
+    language?: string
+    lines: Array<Array<{ text: string; className: string }>>
+  } | null>(null)
+  const resetTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    let cancelled = false
+    setHighlighted(null)
+    void import('../lib/codeHighlight').then(({ highlightCodeLines }) => highlightCodeLines('', value, language, false)).then((lines) => {
+      if (!cancelled) setHighlighted({ value, language, lines })
+    }).catch(() => {
+      if (!cancelled) setHighlighted(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [value, language])
+
+  useEffect(() => () => {
+    if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
+  }, [])
+
+  async function copyCode() {
+    if (!(await copyTextToClipboard(value))) return
+    setCopied(true)
+    if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
+    resetTimer.current = window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  const highlightedLines = highlighted?.value === value && highlighted.language === language ? highlighted.lines : null
+
+  return (
+    <div className="chat-message__code-wrap">
+      <pre className="chat-message__code">
+        <code className="syntax-highlighted" data-language={language}>{highlightedLines
+          ? highlightedLines.map((line, lineIndex) => (
+            <Fragment key={lineIndex}>
+              {line.length > 0
+                ? line.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+                : ' '}
+              {lineIndex < highlightedLines.length - 1 ? '\n' : null}
+            </Fragment>
+          ))
+          : value}</code>
+      </pre>
+      <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? ui('代码已复制') : ui('复制代码')}>
+        {copied ? <Check size={13} /> : <Copy size={13} />}
+        {copied ? ui('已复制') : ui('复制')}
+      </button>
+    </div>
+  )
+})
+
+interface NumberedDiffLine {
+  line: string
+  kind: 'added' | 'deleted' | 'hunk' | 'context'
+  oldLine: number | null
+  newLine: number | null
+}
+
+function numberDiffLines(diff: string): NumberedDiffLine[] {
+  let oldLine: number | null = null
+  let newLine: number | null = null
+  let oldRemaining = 0
+  let newRemaining = 0
+
+  return diff.split(/\r?\n/).map((line) => {
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+    if (hunk) {
+      oldLine = Number(hunk[1])
+      oldRemaining = hunk[2] === undefined ? 1 : Number(hunk[2])
+      newLine = Number(hunk[3])
+      newRemaining = hunk[4] === undefined ? 1 : Number(hunk[4])
+      return { line, kind: 'hunk', oldLine: null, newLine: null }
+    }
+
+    if (line.startsWith('\\')) return { line, kind: 'context', oldLine: null, newLine: null }
+    if (oldRemaining > 0 || newRemaining > 0) {
+      if (line.startsWith(' ') && oldRemaining > 0 && newRemaining > 0) {
+        const numbered = { line, kind: 'context' as const, oldLine, newLine }
+        oldLine = (oldLine ?? 0) + 1
+        newLine = (newLine ?? 0) + 1
+        oldRemaining -= 1
+        newRemaining -= 1
+        return numbered
+      }
+      if (line.startsWith('-') && oldRemaining > 0) {
+        const numbered = { line, kind: 'deleted' as const, oldLine, newLine: null }
+        oldLine = (oldLine ?? 0) + 1
+        oldRemaining -= 1
+        return numbered
+      }
+      if (line.startsWith('+') && newRemaining > 0) {
+        const numbered = { line, kind: 'added' as const, oldLine: null, newLine }
+        newLine = (newLine ?? 0) + 1
+        newRemaining -= 1
+        return numbered
+      }
+    }
+    return { line, kind: 'context', oldLine: null, newLine: null }
+  })
+}
+
+interface FileChangeSummary {
+  files: CodexFileChange['changes'][number][]
+  additions: number
+  deletions: number
+}
+
+function summarizeFileChanges(changes: CodexFileChange[]): FileChangeSummary {
+  const files = [...changes.reduce((entries, change) => {
+    for (const item of change.changes) {
+      const previous = entries.get(item.path)
+      if (!previous) {
+        entries.set(item.path, { ...item })
+        continue
+      }
+      const diffs = [previous.diff, item.diff].filter((diff): diff is string => Boolean(diff))
+      entries.set(item.path, {
+        ...previous,
+        kind: item.kind ?? previous.kind,
+        diff: diffs.length > 0 ? diffs.join('\n\n') : undefined,
+        additions: previous.additions + item.additions,
+        deletions: previous.deletions + item.deletions,
+      })
+    }
+    return entries
+  }, new Map<string, CodexFileChange['changes'][number]>()).values()]
+  return {
+    files,
+    additions: files.reduce((total, item) => total + item.additions, 0),
+    deletions: files.reduce((total, item) => total + item.deletions, 0),
+  }
+}
+
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile, readOnly = false }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void; readOnly?: boolean }) {
+  useUiLanguage()
+  const [expanded, setExpanded] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const { files, additions, deletions } = summarizeFileChanges(changes)
+  const hasLineStats = additions > 0 || deletions > 0
+  const inProgress = changes.some((change) => change.status === 'inProgress')
+  const showAll = expanded || reviewing
+  const visibleFiles = showAll ? files : files.slice(0, 1)
+  const hiddenCount = files.length - 1
+
+  function toggleFiles() {
+    if (showAll) {
+      setExpanded(false)
+      setReviewing(false)
+      return
+    }
+    setExpanded(true)
+  }
+
+  return (
+    <article className={`file-change-card${showAll ? ' file-change-card--expanded' : ''}${reviewing ? ' file-change-card--reviewing' : ''}${inProgress ? ' file-change-card--inProgress' : ''}`}>
+      <header className="file-change-card__heading">
+        <span className="file-change-card__icon"><FileText size={15} /></span>
+        <div className="file-change-card__summary">
+          <strong>{inProgress ? uiFormat("正在编辑 {0} 个文件", files.length) : uiFormat("本次已编辑 {0} 个文件", files.length)}</strong>
+          {hasLineStats ? <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span> : null}
+        </div>
+        <button className={`file-change-card__review${reviewing ? ' file-change-card__review--active' : ''}`} type="button" aria-expanded={reviewing} onClick={() => setReviewing((current) => !current)}>
+          {reviewing ? ui('收起审核') : ui('审核')}
+        </button>
+      </header>
+      <div className="file-change-card__files">
+        {visibleFiles.map((item) => (
+          <div className="file-change-card__file" key={item.path}>
+            <div className="file-change-card__file-row">
+              {readOnly ? <span className="file-change-card__path-readonly" title={item.path}>{item.path}</span> : <><button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={uiFormat("预览 {0}", item.path)} aria-label={uiFormat("预览文件 {0}", item.path)}>{item.path}</button>
+              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={uiFormat("预览 {0}", item.path)} aria-label={uiFormat("预览文件 {0}", item.path)}>{item.path}</button></>}
+              {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
+              {!readOnly ? <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={uiFormat("插入 {0} 到对话", item.path)} title={ui("插入对话")}><MessagesSquare size={13} /><span>{ui("插入对话")}</span></button> : null}
+            </div>
+            {reviewing ? (
+              item.diff
+                ? <pre>{numberDiffLines(item.diff).map((diffLine, index) => {
+                  const lineClass = diffLine.kind === 'added'
+                    ? 'file-change-card__diff-line file-change-card__diff-line--added'
+                    : diffLine.kind === 'deleted'
+                      ? 'file-change-card__diff-line file-change-card__diff-line--deleted'
+                      : diffLine.kind === 'hunk'
+                        ? 'file-change-card__diff-line file-change-card__diff-line--hunk'
+                        : 'file-change-card__diff-line'
+                  return (
+                    <span className={lineClass} key={index}>
+                      <span className="file-change-card__line-number">{diffLine.oldLine ?? ''}</span>
+                      <span className="file-change-card__line-number">{diffLine.newLine ?? ''}</span>
+                      <span className="file-change-card__diff-code">{diffLine.line || ' '}</span>
+                    </span>
+                  )
+                })}</pre>
+                : <small>{item.kind === 'add' ? ui('新增文件') : item.kind === 'delete' ? ui('删除文件') : ui('文件已更新')}</small>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {hiddenCount > 0 ? (
+        <button className="file-change-card__more" type="button" aria-expanded={showAll} onClick={toggleFiles}>
+          {showAll ? ui('收起文件') : uiFormat("查看另外 {0} 个文件", hiddenCount)}
+          <ChevronDown size={14} />
+        </button>
+      ) : null}
+    </article>
+  )
+})
+
+const OperationLog = memo(function OperationLog({
+  operations,
+  fileChanges = [],
+  onOpenFile,
+  onOpenImage,
+  title = '操作记录',
+}: {
+  operations: CodexOperation[]
+  fileChanges?: CodexFileChange[]
+  onOpenFile: (path: string, diff?: string) => void
+  onOpenImage: (path: string) => void
+  title?: string
+}) {
+  useUiLanguage()
+  const [expanded, setExpanded] = useState(false)
+  const revealedTerminalOutput = useRef(false)
+  useEffect(() => {
+    if (!revealedTerminalOutput.current && operations.some((operation) => Boolean(operation.terminalOutput))) {
+      revealedTerminalOutput.current = true
+      setExpanded(true)
+    }
+  }, [operations])
+  if (operations.length === 0) return null
+  const runningCount = operations.filter((operation) => operation.status === 'running').length
+  const failedCount = operations.filter((operation) => operation.status === 'failed').length
+  const stoppedCount = operations.filter((operation) => operation.status === 'stopped').length
+  const completedCount = operations.filter((operation) => operation.status === 'completed').length
+  const statusText = runningCount > 0
+    ? `${runningCount} 项进行中`
+    : failedCount > 0 ? `${failedCount} 项失败`
+      : stoppedCount > 0 ? `${completedCount} 项完成 · ${stoppedCount} 项停止`
+        : `${completedCount} 项完成`
+
+  return (
+    <details className="operation-log" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary><ChevronDown size={13} /><span>{ui(title)}</span><small>{uiMessage(statusText)}</small></summary>
+      <ul>
+        {operations.map((operation) => {
+          const fileChange = fileChanges.find((change) => change.id === operation.id)
+          const linkedPaths = new Set([
+            ...(fileChange?.changes.map((change) => change.path) ?? []),
+            ...(operation.steps?.flatMap((step) => step.path ? [step.path] : []) ?? []),
+          ])
+          const additionalPaths = operation.paths?.filter((path) => !linkedPaths.has(path)) ?? []
+          return (
+          <li className={`operation-log__item operation-log__item--${operation.status}`} key={operation.id}>
+            <span className="operation-log__status" aria-label={operation.status === 'running' ? ui('进行中') : operation.status === 'failed' ? ui('失败') : operation.status === 'stopped' ? ui('已停止') : ui('已完成')}>
+              {operation.status === 'running' ? <LoaderCircle className="spin" size={12} /> : operation.status === 'completed' ? <Check size={12} /> : operation.status === 'failed' ? <AlertTriangle size={12} /> : <Square size={10} />}
+            </span>
+            <span className="operation-log__content">
+              <strong>{ui(operation.label)}</strong>
+              {operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}
+              {operation.terminalOutput ? <pre className="operation-log__terminal-output">{operation.terminalOutput}</pre> : null}
+              {operation.imagePath ? (
+                <span className="operation-log__actions">
+                  <button type="button" onClick={() => onOpenImage(operation.imagePath!)} title={operation.imagePath}><Eye size={12} />{ui("打开图片")}</button>
+                </span>
+              ) : null}
+              {fileChange?.changes.map((change) => (
+                <span className="operation-log__actions" key={`${operation.id}:${change.path}`}>
+                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><WorkspaceFileTypeIcon path={change.path} size={13} />{ui("查看更改 ·")} {change.path.split(/[\\/]/).at(-1) || change.path}</button>
+                </span>
+              ))}
+              {additionalPaths.map((path) => (
+                <span className="operation-log__actions" key={`${operation.id}:path:${path}`}>
+                  <button type="button" onClick={() => onOpenFile(path)} title={path}><WorkspaceFileTypeIcon path={path} size={13} />{ui("打开文件 ·")} {path.split(/[\\/]/).at(-1) || path}</button>
+                </span>
+              ))}
+              {operation.steps?.length ? (
+                <span className="operation-log__steps">
+                  {operation.steps.map((step, index) => (
+                    <span className="operation-log__step" key={`${operation.id}-step-${index}`}>
+                      <i aria-hidden="true">└</i>
+                      {step.path
+                        ? <button className="operation-log__step-action" type="button" onClick={() => onOpenFile(step.path!)} title={step.path}><Eye size={11} />{ui(step.label)} · {step.detail ?? step.path}</button>
+                        : <><strong>{ui(step.label)}</strong>{step.detail ? <code title={step.detail}>{step.detail}</code> : null}</>}
+                    </span>
+                  ))}
+                </span>
+              ) : null}
+            </span>
+            <small>{operation.status === 'running' ? ui('进行中') : operation.status === 'failed' ? ui('失败') : operation.status === 'stopped' ? ui('已停止') : ui('完成')}</small>
+          </li>
+          )
+        })}
+      </ul>
+    </details>
+  )
+})
+
+function activityTimelineMatchesText(text: string, timeline: CodexActivityTimelineEntry[], messageId?: string) {
+  const messageEntries = timeline.filter((entry): entry is Extract<CodexActivityTimelineEntry, { type: 'message' }> => entry.type === 'message' && entry.length > 0)
+  if (messageEntries.length === 0) return true
+  if (messageId && !messageId.startsWith('streaming-') && messageEntries[0].itemId !== messageId) return false
+
+  let offset = 0
+  for (const [index, entry] of messageEntries.entries()) {
+    if (index > 0) {
+      if (text.slice(offset, offset + 2) !== '\n\n') return false
+      offset += 2
+    }
+    if (offset + entry.length > text.length) return false
+    offset += entry.length
+  }
+  return offset === text.length
+}
+
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, preferWebUrlLabel = false, streaming = false, messageId, choiceItemId, choicePromptText, choiceCard }: {
+  text: string
+  timeline: CodexActivityTimelineEntry[]
+  operations: CodexOperation[]
+  fileChanges?: CodexFileChange[]
+  onOpenFile: (path: string, diff?: string) => void
+  onOpenImage: (path: string) => void
+  preferWebUrlLabel?: boolean
+  streaming?: boolean
+  messageId?: string
+  choiceItemId?: string
+  choicePromptText?: string
+  choiceCard?: ReactNode
+}) {
+  useUiLanguage()
+  const keepStreamingLayout = useRef(streaming)
+  if (streaming) keepStreamingLayout.current = true
+  const operationById = new Map(operations.map((operation) => [operation.id, operation]))
+  const renderStableContent = () => {
+    const choiceStart = choiceCard && choicePromptText ? text.indexOf(choicePromptText) : -1
+    const beforeChoiceText = choiceStart >= 0 ? text.slice(0, choiceStart).trim() : text
+    const afterChoiceText = choiceStart >= 0 ? text.slice(choiceStart + choicePromptText!.length).trim() : ''
+    return <div className="activity-timeline">
+      {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
+      {choiceCard}
+      {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
+      <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} />
+    </div>
+  }
+  // Keep one DOM layout throughout a live reply. Timeline lengths and text
+  // render in separate updates, so switching layouts per chunk makes it jump.
+  if (keepStreamingLayout.current) return renderStableContent()
+  // Message lengths can lag behind the already rendered streaming text. When
+  // there are no visible operations, splitting on those lengths only creates
+  // a second block that makes one sentence appear to reflow between rows.
+  if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
+    return text ? <MessageContent text={text} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null
+  }
+  // A restored or streamed turn can retain message lengths from an older
+  // snapshot. Never use those offsets to cut the current reply mid-sentence.
+  if (text && !activityTimelineMatchesText(text, timeline, messageId)) return renderStableContent()
+  const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] } | { type: 'choice'; key: string }> = []
+  let textOffset = 0
+  let messageCount = 0
+  let hasTextEntry = false
+
+  for (const entry of timeline) {
+    if (entry.type === 'message') {
+      if (entry.length <= 0) continue
+      hasTextEntry = true
+      const separator = messageCount > 0 && text.slice(textOffset, textOffset + 2) === '\n\n' ? '\n\n' : ''
+      textOffset += separator.length
+      const segment = text.slice(textOffset, textOffset + entry.length)
+      textOffset += segment.length
+      messageCount += 1
+      if (choiceCard && entry.itemId === choiceItemId) {
+        blocks.push({ type: 'choice', key: `choice-${entry.itemId}` })
+        continue
+      }
+      if (!segment) continue
+      const lastBlock = blocks.at(-1)
+      if (lastBlock?.type === 'message') lastBlock.text += separator + segment
+      else blocks.push({ type: 'message', key: `message-${entry.itemId}`, text: segment })
+      continue
+    }
+
+    const operation = operationById.get(entry.operationId)
+    if (!operation) continue
+    const lastBlock = blocks.at(-1)
+    if (lastBlock?.type === 'operations') lastBlock.operations.push(operation)
+    else blocks.push({ type: 'operations', key: `operation-${operation.id}`, operations: [operation] })
+  }
+
+  if (text && !hasTextEntry) blocks.unshift({ type: 'message', key: 'message-fallback', text })
+  else if (textOffset < text.length) {
+    const trailingText = text.slice(textOffset)
+    const lastBlock = blocks.at(-1)
+    if (lastBlock?.type === 'message') lastBlock.text += trailingText
+    else blocks.push({ type: 'message', key: 'message-trailing', text: trailingText })
+  }
+
+  if (blocks.length === 0) return null
+
+  return (
+    <div className="activity-timeline">
+      {blocks.map((block) => block.type === 'message'
+        ? <MessageContent key={block.key} text={block.text} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} />
+        : block.type === 'choice' ? <Fragment key={block.key}>{choiceCard}</Fragment>
+        : <OperationLog
+          key={block.key}
+          operations={block.operations}
+          fileChanges={fileChanges}
+          onOpenFile={onOpenFile}
+          onOpenImage={onOpenImage}
+          title={block.operations.length === 1 ? block.operations[0].label : uiFormat("{0} 个连续操作", block.operations.length)}
+        />)}
+    </div>
+  )
+})
+
+function operationActivityDetail(operation: CodexOperation, activity: CodexActivity | null) {
+  if (operation.kind === 'file' && operation.label === '查看文件' && operation.detail) {
+    const paths = operation.detail.match(/(?:[A-Za-z]:)?(?:\.{1,2}[\\/])?[\w@.-]+(?:[\\/][\w@.-]+)*\.[A-Za-z0-9_-]+/g)
+    const path = paths?.at(-1)
+    if (path) return path.split(/[\\/]/).at(-1)
+  }
+  return operation.kind === 'command' ? operation.detail : activity?.detail ?? operation.detail
+}
+
+const OperationActivityLine = memo(function OperationActivityLine({ className, operation, activity, iconSize }: {
+  className: string
+  operation: CodexOperation | null
+  activity: CodexActivity | null
+  iconSize: number
+}) {
+  useUiLanguage()
+  const isReadingFile = operation?.kind === 'file' && operation.label === '查看文件'
+  const label = isReadingFile
+    ? '正在读取'
+    : operation?.kind === 'command'
+      ? '正在运行'
+      : operation?.kind === 'search'
+        ? '正在搜索文件'
+        : activity?.label ?? '正在思考'
+  const detail = operation ? operationActivityDetail(operation, activity) : activity?.detail
+  const text = [ui(label), detail].filter(Boolean).join(' ')
+
+  return (
+    <span className={`operation-activity ${className}`} aria-live="polite">
+      {isReadingFile ? <BookOpen size={iconSize} /> : <LoaderCircle className="spin" size={iconSize} />}
+      <span className="operation-activity__text" title={text}>{text}</span>
+    </span>
+  )
+})
+
+const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number }) {
+  useUiLanguage()
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [startedAt])
+
+  return <time className="running-indicator__elapsed" aria-live="off">{ui("已用")} {formatTurnDuration(now - startedAt)}</time>
+})
+
+function MessageChoiceForm({ groups, replyGroups = groups, enabled, onUse, onSend }: { groups: MessageChoiceGroup[]; replyGroups?: MessageChoiceGroup[]; enabled: boolean; onUse: (reply: string) => boolean; onSend: (reply: string) => Promise<ChoiceReplyDelivery | false> }) {
+  useUiLanguage()
+  const [selected, setSelected] = useState(() => groups.map(() => -1))
+  const [customAnswers, setCustomAnswers] = useState(() => groups.map(() => ''))
+  const [inserted, setInserted] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [submitted, setSubmitted] = useState<ChoiceReplyDelivery | null>(null)
+  const [notice, setNotice] = useState('选好后可直接发送，也可填入输入框修改')
+  const sendingRef = useRef(false)
+  const submittedRef = useRef(false)
+  const composingRef = useRef(false)
+  const lastCompositionEndAt = useRef(0)
+  const complete = selected.every((optionIndex, index) => optionIndex >= 0 || optionIndex === -2 && Boolean(customAnswers[index].trim()))
+  // The displayed groups may be translated while the reply must still be
+  // composed from the original (English) option labels so the AI receives
+  // text consistent with the conversation.
+  const reply = () => formatAssistantChoiceReply(replyGroups, selected, customAnswers)
+
+  async function sendAnswer() {
+    if (!enabled || !complete || inserted || submittedRef.current || sendingRef.current) return
+    sendingRef.current = true
+    setSending(true)
+    try {
+      const result = await onSend(reply())
+      if (result) {
+        submittedRef.current = true
+        setSubmitted(result)
+        setNotice(result === 'sent' ? '答案已发送，AI 会继续回复'
+          : result === 'queued' ? '暂未立即送达，答案已加入排队；可在排队消息中点击“插队”'
+            : '送达状态未确认，请核对聊天记录和排队消息，避免重复发送')
+      } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
+  }
+
+  function handleCustomAnswerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
+      || composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (Date.now() - lastCompositionEndAt.current < 100 || event.repeat
+      || sendingRef.current || submittedRef.current || inserted || !enabled) return
+    if (!complete) {
+      setNotice('请先填写所有答案，再按 Enter 发送')
+      return
+    }
+    void sendAnswer()
+  }
+
+  return (
+    <div className="message-choices" aria-label={enabled ? ui('助手提出的选择题') : ui('历史选择题，已有后续消息')}>
+      <strong className="message-choices__heading">{ui("快速选择")}</strong>
+      {groups.map((group, groupIndex) => (
+        <fieldset className="message-choices__group" key={`${groupIndex}-${group.question}`}>
+          <legend>{group.question}</legend>
+          <div className="message-choices__options">
+            {group.options.map((option, optionIndex) => (
+              <button
+                className={`message-choices__option${selected[groupIndex] === optionIndex ? ' message-choices__option--selected' : ''}`}
+                type="button"
+                key={`${optionIndex}-${option}`}
+                aria-pressed={selected[groupIndex] === optionIndex}
+                disabled={!enabled || inserted || sending || submitted !== null}
+                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex
+                  ? (value === optionIndex ? -1 : optionIndex)
+                  : value))}
+              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}<span>{option}{group.descriptions?.[optionIndex] ? <small>{group.descriptions[optionIndex]}</small> : null}</span></button>
+            ))}
+            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || submitted !== null} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>{ui("其他答案（没有合适选项时填写）")}</button>
+          </div>
+          {selected[groupIndex] === -2 ? <>
+            <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={uiFormat("{0}的其他答案", group.question)} aria-keyshortcuts="Enter" enterKeyHint="send" title={ui("Enter 发送；Shift+Enter 换行")} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} onCompositionStart={() => { composingRef.current = true }} onCompositionEnd={() => { composingRef.current = false; lastCompositionEndAt.current = Date.now() }} onBlur={() => { composingRef.current = false }} onKeyDown={handleCustomAnswerKeyDown} />
+            {enabled && !inserted && submitted === null ? <small className="message-choices__custom-hint">{ui("Enter 发送 · Shift+Enter 换行")}</small> : null}
+          </> : null}
+        </fieldset>
+      ))}
+      {enabled ? <div className="message-choices__footer">
+        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => void sendAnswer()}>{sending ? ui('正在发送…') : submitted === 'sent' ? ui('答案已发送') : submitted === 'queued' ? ui('已加入排队') : submitted === 'unverified' ? ui('送达未确认') : ui('发送并继续')}</button>
+        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => {
+          if (onUse(reply())) setInserted(true)
+          else setNotice('请先结束当前编辑，再填入回答')
+        }}>{inserted ? ui('已填入输入框') : ui('填入输入框')}</button>
+        <small>{uiMessage(notice)}</small>
+      </div> : <small className="message-choices__history-notice">{ui("该问题已有后续消息")}</small>}
+    </div>
+  )
+}
+
+const assistantTranslationCache = new Map<string, string>()
+const assistantQuestionsTranslationCache = new Map<string, MessageChoiceGroup[]>()
+
+function AssistantTranslation({ token, text, preferences, revision, streaming, questions, choiceEnabled, onUseChoices, onSendChoices, children, renderCopyAction, onOpenOriginal }: {
+  token: string
+  text: string
+  preferences: TranslationPreferences
+  revision: number
+  streaming: boolean
+  questions?: MessageChoiceGroup[]
+  choiceEnabled?: boolean
+  onUseChoices?: (reply: string) => boolean
+  onSendChoices?: (reply: string) => Promise<ChoiceReplyDelivery | false>
+  children: ReactNode
+  renderCopyAction: (text: string) => ReactNode
+  onOpenOriginal?: () => void
+}) {
+  useUiLanguage()
+  const translationProfileId = selectedTranslationProfileId(preferences)
+  const container = useRef<HTMLDivElement>(null)
+  const [visible, setVisible] = useState(false)
+  const [result, setResult] = useState<{ key: string; text?: string; error?: string } | null>(null)
+  const [retry, setRetry] = useState(0)
+  const [copied, setCopied] = useState(false)
+  const tooLong = preferences.enabled && preferences.showTranslated && text.length > 30_000 && containsEnglish(text)
+  const eligible = preferences.enabled && preferences.showTranslated && !tooLong && containsEnglish(text)
+  const waitingForText = preferences.enabled && preferences.showTranslated && streaming && !text
+  const key = `${revision}:${preferences.provider}:${translationProfileId ?? 'default'}:${preferences.style}:${text}`
+  // Structured questions come from Codex's machine-readable item.questions;
+  // otherwise choices are parsed from the reply body text and need to be
+  // re-derived from the translation once it is available.
+  // Untranslated choices belong to MessageBubble's body/timeline/footer.
+  // The wrapper owns a choice form only while displaying translated replies.
+  const translateChoices = preferences.enabled && preferences.showTranslated
+  const parsedFromText = translateChoices && !questions?.length ? parseAssistantChoiceContent(text).groups : []
+  const originGroups = questions?.length ? questions : parsedFromText
+  const questionsEligible = Boolean(questions?.length)
+  const questionSource = questionsEligible ? questions!
+    .map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n'))
+    .join('\n\n') : ''
+  const questionsKey = questionsEligible
+    ? `${revision}:${preferences.provider}:${translationProfileId ?? 'default'}:${preferences.style}:${JSON.stringify(questions)}` : ''
+  const [translatedQuestions, setTranslatedQuestions] = useState<MessageChoiceGroup[] | null>(null)
+
+  useEffect(() => {
+    if (!questionsEligible || !visible || !preferences.enabled || !preferences.showTranslated) return
+    const cached = assistantQuestionsTranslationCache.get(questionsKey)
+    if (cached) {
+      setTranslatedQuestions(cached)
+      return
+    }
+    const controller = new AbortController()
+    void devwispClient.translateText(token, {
+      provider: preferences.provider, profileId: translationProfileId, source: 'en', target: 'zh', style: preferences.style, text: questionSource,
+    }, controller.signal).then((response) => {
+      if (controller.signal.aborted) return
+      const groups = parseAssistantChoiceContent(response.text).groups
+      const ok = groups.length === questions!.length
+        && groups.every((group, index) => group.options.length === questions![index].options.length)
+        && groups.every((group) => Boolean(group.question) && group.options.every(Boolean))
+      const resolved = ok ? groups : questions!
+      assistantQuestionsTranslationCache.set(questionsKey, resolved)
+      setTranslatedQuestions(resolved)
+    }).catch(() => {
+      if (!controller.signal.aborted) setTranslatedQuestions(questions!)
+    })
+    return () => controller.abort()
+  }, [questionsEligible, visible, questionsKey, questionSource, preferences.provider, translationProfileId, preferences.style, preferences.enabled, preferences.showTranslated, token])
+
+  useEffect(() => {
+    if (!eligible) return
+    const element = container.current
+    if (!element) return
+    if (!('IntersectionObserver' in window)) {
+      setVisible(true)
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setVisible(true)
+    }, { rootMargin: '240px' })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [eligible])
+
+  useEffect(() => {
+    if (!eligible || !visible) return
+    const cached = assistantTranslationCache.get(key)
+    if (cached) {
+      setResult({ key, text: cached })
+      return
+    }
+    const controller = new AbortController()
+    setResult({ key })
+    void devwispClient.translateText(token, {
+      provider: preferences.provider, profileId: translationProfileId, source: 'en', target: 'zh', style: preferences.style, text,
+    }, controller.signal).then((response) => {
+      if (controller.signal.aborted) return
+      assistantTranslationCache.set(key, response.text)
+      if (assistantTranslationCache.size > 300) assistantTranslationCache.delete(assistantTranslationCache.keys().next().value ?? '')
+      setResult({ key, text: response.text })
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setResult({ key, error: reason instanceof Error ? reason.message : '翻译失败。' })
+    })
+    return () => controller.abort()
+  }, [eligible, visible, key, retry, text, token, preferences.provider, translationProfileId, preferences.style])
+
+  const translated = eligible ? (result?.key === key && result.text ? result.text : assistantTranslationCache.get(key)) : undefined
+  const error = eligible && result?.key === key ? result.error ?? (result.text === '' ? '翻译结果为空，请重试。' : undefined) : undefined
+  // For parsed-from-text choices, recover translated groups from the translated
+  // body; fall back to the original groups when the translation is not ready
+  // or does not preserve the choice structure.
+  const translatedParsedGroups = !questionsEligible && parsedFromText.length && translated
+    ? parseAssistantChoiceContent(translated).groups : []
+  const parsedOk = translatedParsedGroups.length === parsedFromText.length
+    && translatedParsedGroups.every((group, index) => group.options.length === parsedFromText[index].options.length)
+    && translatedParsedGroups.every((group) => Boolean(group.question) && group.options.every(Boolean))
+  const displayGroups = questionsEligible
+    ? (translatedQuestions ?? questions!)
+    : (parsedFromText.length ? (parsedOk ? translatedParsedGroups : parsedFromText) : [])
+  const hasChoices = translateChoices && (questionsEligible || parsedFromText.length > 0)
+  const renderedChoiceCard = hasChoices && onUseChoices && onSendChoices
+    ? <MessageChoiceForm key={JSON.stringify(displayGroups)} groups={displayGroups} replyGroups={originGroups} enabled={Boolean(choiceEnabled)} onUse={onUseChoices} onSend={onSendChoices} />
+    : null
+  return <div ref={container} className="assistant-translation">
+    {waitingForText ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{ui("AI 正在回复，完成后显示译文…")}</small> : null}
+    {tooLong ? <small className="assistant-translation__status">{ui("回复超过 30000 字符，无法整条翻译。")}</small> : null}
+    {eligible && translated ? <div className="assistant-translation__result">
+      <div className="assistant-translation__heading"><strong>{ui("中文译文")}</strong><button type="button" onClick={() => { void copyTextToClipboard(translated).then((success) => { if (success) setCopied(true) }) }}>{copied ? ui('已复制') : ui('复制译文')}</button></div>
+      <MessageContent text={translated} hideStandaloneSeparators preferWebUrlLabel />
+    </div> : null}
+    {eligible && !translated && !error ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{ui("回复已生成，正在翻译…")}</small> : null}
+    {eligible && error ? <div className="assistant-translation__error"><span>{uiMessage(error)}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>{ui("重试")}</button></div> : null}
+    {eligible || tooLong
+      ? translated || error || tooLong
+        ? <details className="assistant-translation__original"><summary onClick={onOpenOriginal}>{ui("查看英文原文")}</summary>{children}{renderCopyAction(text)}</details>
+        : null
+      : waitingForText ? null : children}
+    {renderedChoiceCard}
+    {translated ? renderCopyAction(translated) : !eligible && !tooLong && !waitingForText ? renderCopyAction(text) : null}
+  </div>
+}
+
+const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, originalTextOverride, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, assistantModelOptions, copyFeedback, onCopy, onResend, resendingMessageId, canResend, onOpenOriginal, onOpenFile, onOpenImage }: {
+  token: string
+  translation: TranslationPreferences
+  translationRevision: number
+  message: CodexMessage
+  originalTextOverride?: string
+  assistantName: string
+  operations: CodexOperation[]
+  fileChanges: CodexFileChange[]
+  activityTimeline: CodexActivityTimelineEntry[]
+  showOperations: boolean
+  choiceVisible?: boolean
+  choiceEnabled?: boolean
+  onUseChoices?: (reply: string) => boolean
+  onSendChoices?: (reply: string) => Promise<ChoiceReplyDelivery | false>
+  assistantModelOptions: ComposerMenuOption[]
+  copyFeedback: string | null
+  onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
+  onResend: (message: CodexMessage) => boolean | Promise<boolean>
+  resendingMessageId: string | null
+  canResend: boolean
+  onOpenOriginal?: () => void
+  onOpenFile: (path: string, diff?: string) => void
+  onOpenImage: (path: string) => void
+}) {
+  useUiLanguage()
+  // Whole-message copy waits for the turn; closed code blocks can be copied immediately.
+  const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length || message.images?.length)
+  const resendImages = message.role === 'user' ? resendImageAttachments(message.images) : []
+  const resendingThisMessage = resendingMessageId === message.id
+  const renderCopyAction = (displayedText: string, includeResend = false) => showCopyAction ? <div className="chat-message__actions">
+    {includeResend ? <button className="chat-message__resend" type="button" onClick={() => void onResend(message)} disabled={!canResend || !resendImages || resendingMessageId !== null} aria-label={ui('重新发送')} title={ui('重新发送')}><RefreshCw className={resendingThisMessage ? 'spin' : undefined} size={13} /></button> : null}
+    <button type="button" onClick={() => void onCopy(message, displayedText)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ? uiMessage(copyFeedback) : ui('复制')}</button>
+  </div> : null
+  const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
+  const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
+  const revealedText = useStreamingTextReveal(message.text, Boolean(message.role === 'assistant' && message.streaming
+    && !(translation.enabled && translation.showTranslated) && !message.questions?.length))
+  const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
+  const structuredQuestions = choiceVisible && message.questions?.length ? message.questions : null
+  const choiceContent = useMemo(() => choiceVisible && message.role === 'assistant'
+    ? structuredQuestions ? { groups: structuredQuestions, onlyChoices: false } : parseAssistantChoiceContent(choiceText)
+    : null, [choiceVisible, choiceText, message.role, structuredQuestions])
+  const choiceGroups = choiceContent?.groups ?? []
+  const choiceCard = choiceGroups.length > 0 && onUseChoices && onSendChoices
+    ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} enabled={Boolean(choiceEnabled)} onUse={onUseChoices} onSend={onSendChoices} />
+    : null
+  const assistantModelLabel = message.role === 'assistant' && message.model
+    ? assistantModelOptions.find((option) => option.value === message.model)?.label
+    ?? (message.model === 'default' ? ui('本机默认模型') : message.model)
+    : null
+  const assistantEffortLabel = message.role === 'assistant' && message.effort
+    ? message.effort === 'default' ? assistantName === 'Claude Code' ? ui('本机默认') : ui('默认') : message.effort
+    : null
+  const showAssistantPreferences = message.role === 'assistant' && !message.streaming && Boolean(assistantModelLabel || assistantEffortLabel)
+  const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
+    && activityTimeline.some((entry) => entry.type === 'message' && entry.itemId === message.choiceItemId && entry.length > 0))
+  const promptStart = choiceCard && structuredQuestions && message.choicePromptText
+    ? message.text.indexOf(message.choicePromptText) : -1
+  const splitStructuredChoice = Boolean(choiceCard && structuredQuestions && !choiceInTimeline && promptStart >= 0
+    && !activityTimeline.some((entry) => entry.type === 'operation'))
+  const originalText = message.originalText ?? originalTextOverride
+  const originalUserText = message.role === 'user' && originalText && originalText !== message.text ? originalText : undefined
+  const showTranslatedUser = Boolean(translation.enabled && translation.showTranslated)
+  const translateAssistant = message.role === 'assistant' && showTranslatedUser
+  const completedAssistantText = message.streaming && choiceCard
+    ? message.text.slice(0, message.completedTextLength ?? 0)
+    : message.streaming ? '' : message.text
+  const displayedUserText = originalUserText && !showTranslatedUser ? originalUserText : message.text
+  const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : revealedText
+  const preferWebUrlLabel = message.role === 'assistant'
+  const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
+  const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
+  const bodyContent = splitStructuredChoice ? <>
+    {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
+    {choiceCard}
+    {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
+  </> : message.role === 'assistant' && (activityTimeline.length > 0 || message.streaming || message.id.startsWith('streaming-assistant-'))
+    ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={showOperations ? operations : emptyOperations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} preferWebUrlLabel={preferWebUrlLabel} streaming={message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
+    : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} preferWebUrlLabel={preferWebUrlLabel} /> : null
+
+  return (
+    <ClaudeFormattingContext.Provider value={message.role === 'assistant' && assistantName === 'Claude Code'}>
+    <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
+      <span className="chat-message__avatar">{message.role === 'user' ? ui('你') : 'C'}</span>
+      <div className="chat-message__body">
+        <div className="chat-message__meta">
+          {message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
+          {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString(getUiLanguage()) : undefined}>{ui("开始")} {replyStartedAtLabel}</time> : null}
+          {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">{ui("用时")} {formatTurnDuration(message.replyDurationMs)}</time> : null}
+        </div>
+        {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
+        {message.documents?.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId
+          ? <PastedTablePreview key={`${document.name}-${index}`} content={document.content} maxRows={60} />
+          : <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? ui('原始文件 · Codex 读取原件') : uiFormat("{0} 个字符", document.charCount.toLocaleString())}</small></span></div>)}
+        {message.role === 'assistant' && (translateAssistant || !message.streaming)
+          ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} questions={translateAssistant ? structuredQuestions ?? undefined : undefined} choiceEnabled={choiceEnabled} onUseChoices={onUseChoices} onSendChoices={onSendChoices} renderCopyAction={renderCopyAction} onOpenOriginal={onOpenOriginal}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
+          : bodyContent}
+        {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? ui('查看中文原文') : ui('查看英文发送内容')}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
+        {message.replyError ? <div className="chat-message__reply-error" role="status"><AlertTriangle size={13} aria-hidden="true" /><span>{uiMessage(message.replyError)}</span></div> : null}
+        {showOperations && operations.length > 0 && !message.streaming && (translateAssistant || activityTimeline.length === 0) && (!message.id.startsWith('streaming-assistant-') || translateAssistant) ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {!translateAssistant && !choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
+      </div>
+      {showAssistantPreferences ? (
+        <div className="chat-message__footer chat-message__footer--assistant">
+          <small className="chat-message__assistant-settings">{ui("模型")} {assistantModelLabel ?? ui('本机默认模型')} {ui("· 思考")} {assistantEffortLabel ?? (assistantName === 'Claude Code' ? ui('本机默认') : ui('默认'))}</small>
+        </div>
+      ) : null}
+      {message.role === 'user' && (sentAtLabel || showCopyAction) ? (
+        <div className="chat-message__footer">
+          {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString(getUiLanguage()) : undefined}>{ui("发送")} {sentAtLabel}</time> : null}
+          {renderCopyAction(displayedUserText, true)}
+        </div>
+      ) : null}
+    </article>
+    </ClaudeFormattingContext.Provider>
+  )
+})

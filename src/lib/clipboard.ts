@@ -1,14 +1,14 @@
 import { maxImagesPerTurn } from './imageAttachmentRules'
 
 interface ClipboardBridgeWindow extends Window {
-  CodexRemoteAndroid?: {
+  DevWispAndroid?: {
     copyToClipboard?: (text: string) => boolean
     readClipboardText?: () => string | null
   }
 }
 
 export async function readTextFromClipboard(): Promise<string | null> {
-  const androidBridge = (window as ClipboardBridgeWindow).CodexRemoteAndroid
+  const androidBridge = (window as ClipboardBridgeWindow).DevWispAndroid
   if (typeof androidBridge?.readClipboardText === 'function') {
     try {
       const value = androidBridge.readClipboardText()
@@ -28,7 +28,7 @@ export async function readTextFromClipboard(): Promise<string | null> {
 
 export async function copyTextToClipboard(value: string): Promise<boolean> {
   lastCopiedRichMessage = null
-  const androidBridge = (window as ClipboardBridgeWindow).CodexRemoteAndroid
+  const androidBridge = (window as ClipboardBridgeWindow).DevWispAndroid
   if (typeof androidBridge?.copyToClipboard === 'function') {
     try {
       if (androidBridge.copyToClipboard(value)) return true
@@ -78,7 +78,8 @@ interface CopiedRichMessage {
 
 let lastCopiedRichMessage: CopiedRichMessage | null = null
 const copiedRichMessageMaxAgeMs = 5 * 60 * 1000
-const messageTextAttribute = 'data-code-remote-message-text'
+const messageTextAttribute = 'data-devwisp-message-text'
+const legacyMessageTextAttribute = 'data-code-remote-message-text'
 
 const embeddedImagePattern = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i
 const maxEmbeddedImageBytes = 8 * 1024 * 1024
@@ -106,10 +107,11 @@ function embeddedImageFile(source: string, name: string): File | null {
 }
 
 export function richMessageContentFromClipboardHtml(html: string): { text: string | null; images: File[] } {
-  if (!html.includes('data:image/') && !html.includes(messageTextAttribute)) return { text: null, images: [] }
+  if (!html.includes('data:image/') && !html.includes(messageTextAttribute) && !html.includes(legacyMessageTextAttribute)) return { text: null, images: [] }
   try {
     const document = new DOMParser().parseFromString(html, 'text/html')
-    const text = document.querySelector(`[${messageTextAttribute}]`)?.getAttribute(messageTextAttribute) ?? null
+    const messageElement = document.querySelector(`[${messageTextAttribute}]`) ?? document.querySelector(`[${legacyMessageTextAttribute}]`)
+    const text = messageElement?.getAttribute(messageTextAttribute) ?? messageElement?.getAttribute(legacyMessageTextAttribute) ?? null
     const images = Array.from(document.querySelectorAll('img[src^="data:image/"]')).slice(0, maxImagesPerTurn)
       .flatMap((image, index) => {
         const file = embeddedImageFile(image.getAttribute('src') ?? '', image.getAttribute('alt') || `image-${index + 1}`)

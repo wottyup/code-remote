@@ -1,1 +1,1 @@
-# Code Remote currently has no custom ProGuard rules.
+# DevWisp currently has no custom ProGuard rules.

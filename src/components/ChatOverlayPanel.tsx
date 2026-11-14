@@ -2,7 +2,7 @@ import { ui, uiFormat, useUiLanguage } from '../lib/uiLanguage'
 import { X } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 
-const heightStorageKey = 'codex-remote:chat-overlay-height'
+const heightStorageKey = 'devwisp:chat-overlay-height'
 const minimumPanelHeight = 180
 
 interface ChatOverlayPanelProps {

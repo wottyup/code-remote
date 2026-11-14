@@ -9,7 +9,7 @@
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_package"
-        android:label="Code Remote"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_package"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"

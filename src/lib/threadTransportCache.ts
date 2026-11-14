@@ -1,5 +1,5 @@
 import { gzip, gunzip, strFromU8, strToU8 } from 'fflate'
-import type { CodexThreadDetails } from './codexRemoteClient'
+import type { CodexThreadDetails } from './devwispClient'
 import { deleteThreadHistoryCache, readThreadHistoryCache, writeThreadHistoryCache } from './threadHistoryStorage'
 
 export interface ThreadTransportSnapshot {

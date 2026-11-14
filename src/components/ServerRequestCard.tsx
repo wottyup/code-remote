@@ -1,7 +1,7 @@
 import { ui, useUiLanguage } from '../lib/uiLanguage'
 import { useState } from 'react'
 import { AlertTriangle, Check, X } from 'lucide-react'
-import type { MCPApprovalScope } from '../lib/codexRemoteClient'
+import type { MCPApprovalScope } from '../lib/devwispClient'
 
 type Decision = 'accept' | 'decline' | 'cancel'
 type RequestResponse = Decision | Record<string, unknown>

@@ -1,0 +1,28 @@
+[Unit]
+Description=DevWisp service
+After=network-online.target
+After=devwisp-tmux.service
+Requires=devwisp-tmux.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/code
+EnvironmentFile=-/etc/environment
+EnvironmentFile=-/etc/devwisp.env
+Environment=HOME=/root
+Environment=DEVWISP_WORKSPACE=/code
+Environment=PATH=/usr/local/lib/node-v24.19.0-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/local/bin/node /code/devwisp/node_modules/vite/bin/vite.js build /code/devwisp
+ExecStart=/usr/local/bin/node /code/devwisp/scripts/dev.mjs --production
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

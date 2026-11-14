@@ -1,4 +1,4 @@
-import type { CodexThread } from './codexRemoteClient'
+import type { CodexThread } from './devwispClient'
 
 export type SidebarThreadSection = '置顶' | '今天' | '最近 7 天' | '15 天内' | '30 天内' | '更早'
 

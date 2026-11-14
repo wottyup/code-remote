@@ -18,7 +18,7 @@ export interface ThemePreferences {
   customBackgroundImage?: string
 }
 
-const themePreferencesStorageKey = 'codex-remote.theme-preferences'
+const themePreferencesStorageKey = 'devwisp.theme-preferences'
 const maxThemeImageDataUrlLength = 1_450_000
 const defaultLetterSpacingPercent = 2
 

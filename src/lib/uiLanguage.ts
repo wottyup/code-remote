@@ -1,11 +1,14 @@
 import { useSyncExternalStore } from 'react'
 import english from './uiEnglish.json'
+import { migrateLegacyBrowserStorage } from './legacyStorageMigration'
 
 export type UiLanguage = 'zh-CN' | 'en'
 
-const storageKey = 'code-remote-ui-language'
+const storageKey = 'devwisp-ui-language'
 const translations: Record<string, string> = english
 const listeners = new Set<() => void>()
+
+migrateLegacyBrowserStorage()
 
 function savedLanguage(): UiLanguage {
   try {

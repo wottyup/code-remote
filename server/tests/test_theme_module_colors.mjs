@@ -11,7 +11,7 @@ const { readThemePreferences, saveThemePreferences, themeRootStyle } = await imp
 
 function withStorage(initial, run) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  const values = new Map([['codex-remote.theme-preferences', JSON.stringify(initial)]])
+  const values = new Map([['devwisp.theme-preferences', JSON.stringify(initial)]])
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: { localStorage: { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) } },

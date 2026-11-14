@@ -22,7 +22,7 @@ export class TerminalRecoveryBoundary extends Component<TerminalRecoveryBoundary
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('[Code Remote] 本机终端界面异常', error, info.componentStack)
+    console.error('[Dev Wisp] 本机终端界面异常', error, info.componentStack)
   }
 
   private retry = () => {

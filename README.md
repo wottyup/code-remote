@@ -1,13 +1,13 @@
-# Code Remote (Remote Development Workbench)
+# DevWisp (Remote Development Workbench)
 
-<p align="center"><img src="public/code-remote-robot.svg" alt="Code Remote robot logo" width="96"></p>
+<p align="center"><img src="public/devwisp-robot.svg" alt="DevWisp robot logo" width="96"></p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.121.5--dev.1-orange?style=flat-square" alt="Web version 0.121.5-dev.1"></a>
-  <a href="https://github.com/wottyup/code-remote/stargazers"><img src="https://img.shields.io/github/stars/wottyup/code-remote?style=flat-square" alt="GitHub stars"></a>
-  <a href="https://github.com/wottyup/code-remote/forks"><img src="https://img.shields.io/github/forks/wottyup/code-remote?style=flat-square" alt="GitHub forks"></a>
-  <a href="https://github.com/wottyup/code-remote/issues"><img src="https://img.shields.io/github/issues/wottyup/code-remote?style=flat-square" alt="Open issues"></a>
-  <a href="https://github.com/wottyup/code-remote/commits/main"><img src="https://img.shields.io/github/last-commit/wottyup/code-remote?style=flat-square" alt="Latest commit"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/web%20version-0.128.0--dev.1-orange?style=flat-square" alt="Web version 0.128.0-dev.1"></a>
+  <a href="https://github.com/wottyup/devwisp/stargazers"><img src="https://img.shields.io/github/stars/wottyup/devwisp?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/wottyup/devwisp/forks"><img src="https://img.shields.io/github/forks/wottyup/devwisp?style=flat-square" alt="GitHub forks"></a>
+  <a href="https://github.com/wottyup/devwisp/issues"><img src="https://img.shields.io/github/issues/wottyup/devwisp?style=flat-square" alt="Open issues"></a>
+  <a href="https://github.com/wottyup/devwisp/commits/main"><img src="https://img.shields.io/github/last-commit/wottyup/devwisp?style=flat-square" alt="Latest commit"></a>
 </p>
 <p align="center">
   <a href="android/app/build.gradle"><img src="https://img.shields.io/badge/Android-8.0%2B%20%28API%2026%29-3DDC84?logo=android&amp;logoColor=white&amp;style=flat-square" alt="Android 8.0 and up"></a>
@@ -31,7 +31,7 @@ Remotely view and control Codex and Claude Code running on your development comp
 Create a Python virtual environment in the project directory and install the server dependencies:
 
 ```bash
-cd /code/code-remote
+cd /code/devwisp
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r server/requirements.txt
@@ -45,22 +45,22 @@ For day-to-day remote use, run the following in a terminal on your computer: it 
 
 ```bash
 cd /code
-pnpm --filter code-remote start
+pnpm --filter devwisp start
 ```
 
-The built assets support compression and caching, which is good for long sessions on a phone. Only use `pnpm --filter code-remote dev` when editing the frontend and you want hot reload; the dev server loads heavier debug assets.
+The built assets support compression and caching, which is good for long sessions on a phone. Only use `pnpm --filter devwisp dev` when editing the frontend and you want hot reload; the dev server loads heavier debug assets.
 
 When startup finishes, the terminal prints a pairing code needed to authorize a new browser. Open `http://<computer's LAN IP>:4173` on the phone. After pairing succeeds, that browser is recorded as a trusted device: you won't need to enter the code again even if the local service restarts; only a new browser, an incognito window, or clearing site data requires re-pairing. You can also visit `http://127.0.0.1:4173` locally on the computer.
 
-The web version connects only to the Code Remote service at the URL currently open. To access another computer, just open that computer's web address and pair separately.
+The web version connects only to the DevWisp service at the URL currently open. To access another computer, just open that computer's web address and pair separately.
 
 To keep it running in the background, install the systemd units from the repo:
 
 ```bash
-sudo install -m 0644 /code/code-remote/deploy/code-remote.service /etc/systemd/system/code-remote.service
-sudo install -m 0644 /code/code-remote/deploy/code-remote-tmux.service /etc/systemd/system/code-remote-tmux.service
+sudo install -m 0644 /code/devwisp/deploy/devwisp.service /etc/systemd/system/devwisp.service
+sudo install -m 0644 /code/devwisp/deploy/devwisp-tmux.service /etc/systemd/system/devwisp-tmux.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now code-remote-tmux.service code-remote.service
+sudo systemctl enable --now devwisp-tmux.service devwisp.service
 ```
 
 These units build the web frontend at startup and serve the built assets. After updating an installed unit, run `systemctl daemon-reload`; an already-running service must be restarted after its chat tasks finish to load the new backend. The service also manages Codex child processes, so restarting interrupts any tasks still in progress.
@@ -68,40 +68,54 @@ These units build the web frontend at startup and serve the built assets. After 
 View the resident service's pairing code and logs with:
 
 ```bash
-journalctl -u code-remote.service -f
+journalctl -u devwisp.service -f
 ```
+
+### Migrating an existing installation
+
+The service unit, environment variables, Python module, and data directory now use the DevWisp names. Finish any active chats before switching units, because stopping the old service also stops its child processes and terminal sessions.
+
+For an existing systemd install, copy the old environment file if present, change each `CODE_REMOTE_` variable to `DEVWISP_`, stop the old units, then install and enable the new units above. If your previous units used the `codex-remote` names, stop those units instead:
+
+```bash
+sudo cp -a /etc/code-remote.env /etc/devwisp.env
+sudo sed -i 's/CODE_REMOTE_/DEVWISP_/g' /etc/devwisp.env
+sudo systemctl disable --now code-remote.service code-remote-tmux.service
+```
+
+If no old environment file exists, skip both environment-file commands. Update custom launch scripts from `python -m code_remote.main` to `python -m devwisp.main`. Browser preferences, cached conversations, and the trusted-device token file migrate automatically when the new storage location is empty.
 
 The web service forwards API and WebSocket requests to `127.0.0.1:18766` on the computer. The Codex App Server is reached only via local stdio; it opens no network port. The web connection between phone and computer uses LAN HTTP; use it only on trusted networks and allow the computer's firewall to accept connections on port 4173.
 
-Both Windows and Linux are supported. On native Windows, create `.venv` in a PowerShell session in the project directory, then run `pnpm --filter code-remote start`, or double-click `start-code-remote.bat`; the launcher automatically uses `.venv\Scripts\python.exe` and supports `codex.cmd`/`codex.exe`. If Codex is not on PATH, set it explicitly:
+Both Windows and Linux are supported. On native Windows, create `.venv` in a PowerShell session in the project directory, then run `pnpm --filter devwisp start`, or double-click `start-devwisp.bat`; the launcher automatically uses `.venv\Scripts\python.exe` and supports `codex.cmd`/`codex.exe`. If Codex is not on PATH, set it explicitly:
 
 ```powershell
-$env:CODE_REMOTE_COMMAND = "C:\Users\<your username>\AppData\Roaming\npm\codex.cmd"
-$env:CODE_REMOTE_WORKSPACE = "C:\path\to\your\project"
-pnpm --filter code-remote start
+$env:DEVWISP_COMMAND = "C:\Users\<your username>\AppData\Roaming\npm\codex.cmd"
+$env:DEVWISP_WORKSPACE = "C:\path\to\your\project"
+pnpm --filter devwisp start
 ```
 
-On Linux/macOS the chat terminal keeps sessions alive with tmux; on Linux run `sudo apt-get install tmux`, on macOS run `brew install tmux`. When using systemd, also install `code-remote-tmux.service` above so the tmux shell can reconnect after the Python service restarts. Sessions are cleaned up after a computer reboot, when the tmux service is stopped manually, when you type `exit`, when a session is idle for 30 minutes, or when there are more than 10 unattached sessions. Native Windows terminals keep temporary-shell behavior.
+On Linux/macOS the chat terminal keeps sessions alive with tmux; on Linux run `sudo apt-get install tmux`, on macOS run `brew install tmux`. When using systemd, also install `devwisp-tmux.service` above so the tmux shell can reconnect after the Python service restarts. Sessions are cleaned up after a computer reboot, when the tmux service is stopped manually, when you type `exit`, when a session is idle for 30 minutes, or when there are more than 10 unattached sessions. Native Windows terminals keep temporary-shell behavior.
 
 ## SSH MCP Remote Servers
 
-In the web UI, go to Settings → SSH MCP Servers and enter the server IP or hostname, port, username, and password; you can add multiple hosts. SSH passwords are stored on the computer running Code Remote, and the settings page never echoes saved passwords. After saving, new or reopened Codex conversations use the latest settings; running conversations are unaffected. SSH MCP currently connects only to Codex; Claude Code's command approval cannot yet be forwarded to the web UI.
+In the web UI, go to Settings → SSH MCP Servers and enter the server IP or hostname, port, username, and password; you can add multiple hosts. SSH passwords are stored on the computer running DevWisp, and the settings page never echoes saved passwords. After saving, new or reopened Codex conversations use the latest settings; running conversations are unaffected. SSH MCP currently connects only to Codex; Claude Code's command approval cannot yet be forwarded to the web UI.
 
 The backend must be installed on the same host as the Codex it drives; a Linux backend cannot directly see a Codex process on a separate Windows host.
 
-Trusted-device token digests are stored in the user data directory; raw tokens and pairing codes are never written to that file. Windows defaults to `%LOCALAPPDATA%\CodexRemote`, keeping app data out of the project or restricted Codex run directories; Linux/macOS default to `~/.codex/codex-remote`. Signing out in the web UI revokes the current device; if a device is lost, stop the service, delete the authorization files in that directory, and start it again to re-pair all devices. Locations can be overridden with `CODE_REMOTE_HOME` or `CODE_REMOTE_AUTH_FILE`.
+Trusted-device token digests are stored in the user data directory; raw tokens and pairing codes are never written to that file. Windows defaults to `%LOCALAPPDATA%\DevWisp`, keeping app data out of the project or restricted Codex run directories; Linux/macOS default to `~/.codex/devwisp`. Signing out in the web UI revokes the current device; if a device is lost, stop the service, delete the authorization files in that directory, and start it again to re-pair all devices. Locations can be overridden with `DEVWISP_HOME` or `DEVWISP_AUTH_FILE`.
 
 ## Working Directory and Session History
 
-New conversations default to the directory above the app repo as the working directory (for example, if the app lives at `/code/code-remote`, the default working directory is `/code`), so newly cloned projects sit alongside `code-remote` rather than inside the app repo. You can override this with an environment variable or a start argument:
+New conversations default to the directory above the app repo as the working directory (for example, if the app lives at `/code/devwisp`, the default working directory is `/code`), so newly cloned projects sit alongside `devwisp` rather than inside the app repo. You can override this with an environment variable or a start argument:
 
 ```bash
-CODE_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter code-remote engine:dev
+DEVWISP_WORKSPACE=/path/to/your/project pnpm --filter devwisp engine:dev
 ```
 
 The history list reads the 100 most recent non-archived Codex sessions on the machine, including ones created in other working directories; after opening a session, its working directory is shown below the title. The backend watches the Codex session files and pushes updates to the sidebar over WebSocket, so no page refresh is needed.
 
-The local Codex App Server uses the user-level `CODEX_HOME` directly by default, so the web UI and desktop Codex read and write the same configuration, models, and session history. Like Hapi, on Windows it prefers the Codex CLI actually resolved from PATH and starts the app-server directly, connecting through a random port that listens only on `127.0.0.1` plus a capability token; it no longer depends on a shared daemon/control socket requiring extra privileges. A code-installed Codex resolves from the `.cmd` shim to the `codex.js` in the same installation and is started by Node. Conversations created or resumed in the web UI are written to the user's existing history by the Codex app-server. You can set `CODE_REMOTE_APP_SERVER_HOME` explicitly to pin a separate data directory.
+The local Codex App Server uses the user-level `CODEX_HOME` directly by default, so the web UI and desktop Codex read and write the same configuration, models, and session history. Like Hapi, on Windows it prefers the Codex CLI actually resolved from PATH and starts the app-server directly, connecting through a random port that listens only on `127.0.0.1` plus a capability token; it no longer depends on a shared daemon/control socket requiring extra privileges. A code-installed Codex resolves from the `.cmd` shim to the `codex.js` in the same installation and is started by Node. Conversations created or resumed in the web UI are written to the user's existing history by the Codex app-server. You can set `DEVWISP_APP_SERVER_HOME` explicitly to pin a separate data directory.
 
 ## Handing Sessions Back and Forth Between the Web UI and Local Codex
 
@@ -113,7 +127,7 @@ To continue in the web UI again, make sure the local Codex has finished the sess
 
 ```bash
 cd /code
-pnpm --filter code-remote build
+pnpm --filter devwisp build
 ```
 
-Build output goes to `code-remote/dist`. `pnpm start` builds automatically and serves the page via Vite preview, with `scripts/dev.mjs --production` starting the Python engine at the same time; under systemd, `code-remote.service` manages it continuously in the background.
+Build output goes to `devwisp/dist`. `pnpm start` builds automatically and serves the page via Vite preview, with `scripts/dev.mjs --production` starting the Python engine at the same time; under systemd, `devwisp.service` manages it continuously in the background.

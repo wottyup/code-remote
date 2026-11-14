@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'CodexRemoteAndroid'
+rootProject.name = 'DevWispAndroid'
 include ':app'
